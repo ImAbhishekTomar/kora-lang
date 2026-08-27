@@ -1,5 +1,7 @@
 # Kora
 
+[![CI](https://github.com/ImAbhishekTomar/kora-lang/actions/workflows/ci.yml/badge.svg)](https://github.com/ImAbhishekTomar/kora-lang/actions/workflows/ci.yml)
+
 An agent-first programming language. Python-like syntax; agents, model calls,
 budgets, and data-flow security as native language constructs — not libraries.
 
