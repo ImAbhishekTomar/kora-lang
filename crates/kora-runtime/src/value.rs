@@ -29,6 +29,11 @@ pub enum Value {
     },
     /// Built-in function (print, len, range, ...).
     Builtin(&'static str),
+    /// Tagged variant: Ok(value), Uncertain(reason), Exhausted(meter), ...
+    Variant {
+        tag: Rc<String>,
+        payload: Vec<Value>,
+    },
 }
 
 impl Value {
@@ -44,6 +49,7 @@ impl Value {
             Value::Func(f) => format!("function {}", f.name),
             Value::Object { type_name, .. } => type_name.as_str().into(),
             Value::Builtin(name) => format!("builtin {name}"),
+            Value::Variant { tag, .. } => tag.as_str().into(),
         }
     }
 
@@ -57,6 +63,7 @@ impl Value {
             Value::List(l) => !l.borrow().is_empty(),
             Value::Dict(d) => !d.borrow().is_empty(),
             Value::Func(_) | Value::Object { .. } | Value::Builtin(_) => true,
+            Value::Variant { .. } => true,
         }
     }
 
@@ -93,6 +100,18 @@ impl Value {
                 }
                 let (f1, f2) = (f1.borrow(), f2.borrow());
                 f1.len() == f2.len() && f1.iter().all(|(k, v)| f2.get(k).is_some_and(|w| v.same(w)))
+            }
+            (
+                Variant {
+                    tag: t1,
+                    payload: p1,
+                },
+                Variant {
+                    tag: t2,
+                    payload: p2,
+                },
+            ) => {
+                t1 == t2 && p1.len() == p2.len() && p1.iter().zip(p2.iter()).all(|(x, y)| x.same(y))
             }
             _ => false,
         }
@@ -145,6 +164,14 @@ impl fmt::Display for Value {
                 write!(f, "{type_name}({})", inner.join(", "))
             }
             Value::Builtin(name) => write!(f, "<builtin {name}>"),
+            Value::Variant { tag, payload } => {
+                if payload.is_empty() {
+                    write!(f, "{tag}")
+                } else {
+                    let inner: Vec<String> = payload.iter().map(|v| v.repr()).collect();
+                    write!(f, "{tag}({})", inner.join(", "))
+                }
+            }
         }
     }
 }

@@ -1,15 +1,26 @@
-# Phase 2 target: typed analyze, nothing exotic.
+# Phase 2: typed analyze. The declared type constrains what the model may
+# return, so the result is ordinary data the rest of the program branches on.
 
 type Expense:
     merchant: str
     amount: float
-    category: str        # "travel" | "meals" | "software" | "other"
+    category: str
     policy_violation: bool
 
 def main():
-    rows = load_csv("expenses.csv")
+    rows = [
+        "AWS invoice, $4200, cloud hosting for production",
+        "Steakhouse dinner for 2, $680, client entertainment",
+        "Notebook and pens, $23, office supplies",
+    ]
 
     for row in rows:
-        e: Expense = analyze(row, "extract expense details, flag policy violations")
-        if e.policy_violation:
-            print(f"FLAG: {e.merchant} ${e.amount} ({e.category})")
+        result: Expense = analyze(row, "extract the expense; policy_violation is True if a single meal is over $200")
+        match result:
+            case Ok(e):
+                if e.policy_violation:
+                    print(f"FLAG  {e.merchant}: ${e.amount} ({e.category})")
+                else:
+                    print(f"ok    {e.merchant}: ${e.amount} ({e.category})")
+            case Uncertain(reason):
+                print(f"skip  could not classify: {reason}")
