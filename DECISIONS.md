@@ -87,10 +87,88 @@ design changes and should be deliberate.
 - Stage 1: tree-walking interpreter. Stage 2: bytecode VM. Stage 3 (maybe
   never): cranelift JIT. Native codegen is NOT on the critical path.
 
+## Ecosystem strategy
+
+An agent program's real imports are HTTP, JSON, CSV/Excel, SQL, dates, regex,
+file IO, and vendor SDKs that are themselves HTTP wrappers. The reasoning
+lives in the model, not in a library. That is ~20 libraries, not 500,000, so
+Kora does not need to replicate PyPI. Three layers, in this order:
+
+**1. Native stdlib, Rust-backed.** Users cannot write `use serde::Deserialize`
+in a `.ko` file, but the interpreter is Rust, so a crate becomes a Kora module
+through a thin binding — the way Python's `json` is C underneath. Planned
+modules and their backing crates:
+
+| module | crate | note |
+|---|---|---|
+| `http` | `reqwest` / `ureq` | equal to `requests` |
+| `json` | `serde_json` | faster |
+| `csv`, `excel` | `csv`, `calamine` | equal |
+| `data` | `polars` | better than pandas |
+| `sql` | `sqlx`, `rusqlite` | equal |
+| `time` | `chrono` / `jiff` | better |
+| `re` | `regex` | no catastrophic backtracking |
+| `s3`, `aws` | `aws-sdk-rust` | official |
+| `pdf` | `lopdf`, `pdf-extract` | weaker than PyPDF |
+| `search` | `tantivy` | Lucene-class |
+
+Known gaps: scipy, sklearn, matplotlib, torch/transformers, and niche SaaS
+SDKs. Only the last matters for agents, and layer 2 covers it.
+
+**2. MCP integration — borrow an existing ecosystem.** MCP is already the
+standard for "tools an agent can call," with hundreds of maintained servers
+(GitHub, Slack, Postgres, Sentry, Linear, filesystem, Stripe...). Kora already
+has `tool` as a first-class construct, and an MCP server is a bag of tools, so
+the mapping is mechanical — one implementation, whole ecosystem inherited:
+
+```python
+use mcp "github" as gh
+r: Report = analyze(issue, "triage this", tools=gh.tools)
+```
+
+MCP servers are separate processes, so each is a labeled sink:
+`declassify x for github` is checkable exactly like a model sink. Highest
+leverage per line of code in the project.
+
+**3. Python via sidecar worker — the long-tail escape hatch.** A separate
+Python process, data in / data out over IPC. No live object handles, no
+Python callbacks into Kora.
+
+```python
+use python "pandas" as pd
+df = pd.read_csv("sales.csv")
+summary = pd.to_dict(pd.describe(df))
+```
+
+Chosen over embedded CPython (PyO3) because embedding would break three of the
+four thesis pillars:
+- **Threading**: embedding reintroduces the GIL into Kora. A sidecar keeps
+  Kora GIL-free, and N workers give real parallelism that embedding cannot.
+- **Durability**: a CPython call stack cannot be checkpointed. As an RPC, a
+  Python call is atomic — checkpoint before and after, never mid-frame.
+- **Labels**: an explicit boundary is a declassification site the compiler
+  sees; embedded objects would be opaque and labels would vanish.
+- **Packaging**: no `use python` means no Python needed; the binary stays a
+  single download.
+
+Cost accepted: per-call serialization, and no live-object interop
+(`df.groupby().apply(lambda ...)`). Negligible next to real work per call.
+
+**Kora's own packages** come later: `kora.toml` dependencies, a lockfile,
+`kora add`. One tool, lockfile by default, no global installs, reproducible.
+A new registry is a ghost town for years, so layers 1 and 2 carry the weight.
+For third-party *native* packages, the destination is WASM components rather
+than dynamic libraries: sandboxed by construction, language-agnostic, and a
+sandboxed package cannot exfiltrate classified data. Immature today.
+
+Sequencing: native stdlib after Phase 5, MCP around Phase 6, Python sidecar
+when something actually demands it (designed, not built speculatively).
+
 ## Parked / non-goals
 
 - Auto-parallelization (explicit `parallel for` only)
-- Python interop (all forms — decided against ecosystems A/B; own stdlib)
+- Embedded CPython (PyO3). Python support ships as a sidecar worker instead
+  — see Ecosystem strategy.
 - GPU tensor compiler (that is Mojo's war, not ours)
 - Native/JIT compilation, semantic-assert judging, label lattice beyond
   binary, `unverified` labels (designed, waiting)
@@ -107,6 +185,13 @@ design changes and should be deliberate.
 5. Durability (checkpoint/resume, `ask_human`)
 6. `test`/`mock`, OTel, LSP (squiggles, hover, go-to-def)
 7. (parked) in-process GPU inference
+
+Ecosystem work, sequenced alongside the phases above:
+- Native stdlib (`http`, `json`, `csv`, `sql`, `fs`, `time`, `re`, `env`) —
+  after Phase 5
+- MCP integration (`use mcp "..."`) — around Phase 6
+- Python sidecar (`use python "..."`) — on demand
+- Kora package manager + WASM components — later
 
 Each phase ends with a runnable demo program. Demo programs live in
 `examples/`.
