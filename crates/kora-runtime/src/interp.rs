@@ -4,12 +4,18 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use kora_models::{AnalyzeOutcome, AnalyzeRequest, FieldType, Schema};
+use kora_models::{
+    AnalyzeOutcome, AnalyzeRequest, FieldType, Schema, Step, ToolExchange, ToolSpec,
+};
 use kora_syntax::ast::*;
 use kora_syntax::token::Span;
 
+use std::sync::{Arc, Mutex};
+
+use crate::budget::Budget;
 use crate::cassette::{self, Cassette, Mode, RecordedOutcome};
 use crate::config::Config;
+use crate::portable::Portable;
 use crate::value::Value;
 
 /// A runtime error, source-anchored like syntax errors.
@@ -74,8 +80,9 @@ pub struct Interpreter {
     pub direct_stdout: bool,
     /// Model configuration from kora.toml.
     pub config: Config,
-    /// Record/replay of model calls.
-    pub cassette: Option<Cassette>,
+    /// Record/replay of model calls. Shared, because `parallel for` workers
+    /// all read from and record into the same cassette.
+    pub cassette: Option<Arc<Mutex<Cassette>>>,
     /// Program path, used for cassette keys and error sites.
     pub program_name: String,
     /// Total tokens consumed this run (budgets enforce these in Phase 3).
@@ -83,11 +90,31 @@ pub struct Interpreter {
     pub tokens_out: u64,
     /// Model calls actually sent to a provider (cassette hits excluded).
     pub model_calls: u64,
+    /// Budget in force at the current point of execution.
+    pub budget: Budget,
+    /// How many worker threads `parallel for` may use at once.
+    pub max_workers: usize,
 }
 
 const BUILTINS: &[&str] = &[
-    "print", "len", "range", "str", "int", "float", "bool", "abs", "min", "max", "sum", "sorted",
-    "append", "keys", "values",
+    "print",
+    "len",
+    "range",
+    "str",
+    "int",
+    "float",
+    "bool",
+    "abs",
+    "min",
+    "max",
+    "sum",
+    "sorted",
+    "append",
+    "keys",
+    "values",
+    "tokens_spent",
+    "tokens_remaining",
+    "calls_spent",
 ];
 
 impl Default for Interpreter {
@@ -109,6 +136,10 @@ impl Interpreter {
             tokens_in: 0,
             tokens_out: 0,
             model_calls: 0,
+            budget: Budget::unlimited(),
+            max_workers: std::thread::available_parallelism()
+                .map(|n| n.get())
+                .unwrap_or(4),
         }
     }
 
@@ -148,7 +179,9 @@ impl Interpreter {
                 // `x: T = analyze(...)` is the one place the declared type is
                 // available, and analyze needs it to build the model schema.
                 let v = match (ty, analyze_args(value)) {
-                    (Some(t), Some(args)) => self.eval_analyze(t, args, value.span, scope)?,
+                    (Some(t), Some((args, kwargs))) => {
+                        self.eval_analyze(t, args, kwargs, value.span, scope)?
+                    }
                     _ => {
                         let v = self.eval(value, scope)?;
                         if let Some(t) = ty {
@@ -222,6 +255,27 @@ impl Interpreter {
                     None => Value::None,
                 };
                 Ok(Flow::Return(v))
+            }
+            StmtKind::WithBudget { budget, body } => {
+                let outer = self.budget.clone();
+                self.budget = outer.nested(budget);
+                let result = self.exec_block(body, scope);
+                self.budget = outer;
+                result
+            }
+            StmtKind::ParallelFor {
+                var,
+                iter,
+                body,
+                collect_into,
+            } => {
+                let iterable = self.eval(iter, scope)?;
+                let items = self.iterate(iterable, iter.span)?;
+                let results = self.run_parallel(var, items, body, scope, stmt.span)?;
+                if let Some(name) = collect_into {
+                    scope.insert(name.clone(), results);
+                }
+                Ok(Flow::Normal)
             }
             StmtKind::Break => Ok(Flow::Break),
             StmtKind::Continue => Ok(Flow::Continue),
@@ -513,7 +567,18 @@ impl Interpreter {
                     )),
                 }
             }
-            ExprKind::Call { callee, args } => {
+            ExprKind::Call {
+                callee,
+                args,
+                kwargs,
+            } => {
+                if let Some((name, arg)) = kwargs.first() {
+                    return Err(RuntimeError::new(
+                        format!("`{name}` is not a keyword argument here"),
+                        arg.span,
+                    )
+                    .with_hint("only analyze() takes keyword arguments today"));
+                }
                 let mut arg_vals = Vec::with_capacity(args.len());
                 for a in args {
                     arg_vals.push(self.eval(a, scope)?);
@@ -648,6 +713,12 @@ impl Interpreter {
                 span,
             ));
         }
+        // An agent's declared budget wraps its whole body.
+        let outer_budget = self.budget.clone();
+        if let Some(spec) = &f.budget {
+            self.budget = outer_budget.nested(spec);
+        }
+
         let mut local: Scope = HashMap::new();
         for (p, v) in f.params.iter().zip(args) {
             if let Some(ty) = &p.ty {
@@ -660,7 +731,9 @@ impl Interpreter {
             }
             local.insert(p.name.clone(), v);
         }
-        match self.exec_block(&f.body, &mut local)? {
+        let flow = self.exec_block(&f.body, &mut local);
+        self.budget = outer_budget;
+        match flow? {
             Flow::Return(v) => Ok(v),
             _ => Ok(Value::None),
         }
@@ -992,6 +1065,14 @@ impl Interpreter {
                 }
                 _ => wrong("a list and a value"),
             },
+            // Budget introspection, so `if tokens_remaining() < 1000:` is
+            // just an ordinary condition in user code.
+            "tokens_spent" => Ok(Value::Int(self.budget.spent_tokens() as i64)),
+            "calls_spent" => Ok(Value::Int(self.budget.spent_calls() as i64)),
+            "tokens_remaining" => Ok(match self.budget.remaining_tokens() {
+                Some(v) => Value::Int(v as i64),
+                Option::None => Value::None,
+            }),
             "keys" => match args.as_slice() {
                 [Value::Dict(d)] => Ok(Value::List(Rc::new(RefCell::new(
                     d.borrow()
@@ -1115,11 +1196,18 @@ fn match_pattern(pattern: &Pattern, value: &Value) -> Option<Vec<(String, Value)
     }
 }
 
-/// If `expr` is a call to `analyze`, return its argument list.
-fn analyze_args(expr: &Expr) -> Option<&Vec<Expr>> {
+/// Positional and keyword arguments of an `analyze` call.
+type AnalyzeArgs<'a> = (&'a [Expr], &'a [(String, Expr)]);
+
+/// If `expr` is a call to `analyze`, return its positional and keyword args.
+fn analyze_args(expr: &Expr) -> Option<AnalyzeArgs<'_>> {
     match &expr.kind {
-        ExprKind::Call { callee, args } => match &callee.kind {
-            ExprKind::Name(name) if name == "analyze" => Some(args),
+        ExprKind::Call {
+            callee,
+            args,
+            kwargs,
+        } => match &callee.kind {
+            ExprKind::Name(name) if name == "analyze" => Some((args.as_slice(), kwargs.as_slice())),
             _ => None,
         },
         _ => None,
@@ -1135,6 +1223,7 @@ impl Interpreter {
         &mut self,
         ty: &TypeExpr,
         args: &[Expr],
+        kwargs: &[(String, Expr)],
         span: Span,
         scope: &mut Scope,
     ) -> Result<Value, RuntimeError> {
@@ -1147,6 +1236,15 @@ impl Interpreter {
                 span,
             )
             .with_hint("example: `result: Insight = analyze(rows, \"find anomalies\")`"));
+        }
+        for (name, arg) in kwargs {
+            if name != "tools" {
+                return Err(RuntimeError::new(
+                    format!("analyze() has no keyword argument `{name}`"),
+                    arg.span,
+                )
+                .with_hint("the only keyword argument is `tools=[...]`"));
+            }
         }
 
         let data = self.eval(&args[0], scope)?;
@@ -1168,6 +1266,17 @@ impl Interpreter {
             TypeExpr::Generic(n, _) => n.clone(),
         };
         let schema = self.schema_for(&type_name, span)?;
+
+        // `tools=[...]`: the tools the model may call.
+        let tool_funcs = match kwargs.iter().find(|(n, _)| n == "tools") {
+            Some((_, arg)) => self.tool_list(arg, scope)?,
+            Option::None => Vec::new(),
+        };
+        let tools: Vec<ToolSpec> = tool_funcs
+            .iter()
+            .map(|f| self.tool_spec(f))
+            .collect::<Result<_, _>>()?;
+
         let data_json = value_to_json(&data);
         let data_text = serde_json::to_string(&data_json).unwrap_or_else(|_| "null".to_string());
 
@@ -1179,12 +1288,31 @@ impl Interpreter {
         let site = format!("{}:{}", self.program_name, span.line);
         let key = cassette::key_for(&site, &model_label, &prompt, &data_text);
 
+        // Budget check before spending: an exhausted budget stops the call
+        // rather than discovering the overrun afterwards. Exhaustion is a
+        // value, so partial work upstream survives.
+        if let Some(meter) = self.budget.check() {
+            return Ok(Value::Variant {
+                tag: Rc::new("Exhausted".to_string()),
+                payload: vec![Value::Str(Rc::new(meter.name().to_string()))],
+            });
+        }
+
         // Replay first: a cassette hit costs nothing and keeps CI deterministic.
-        if let Some(entry) = self.cassette.as_ref().and_then(|c| c.get(&key)) {
-            let outcome = entry.outcome.clone();
+        let recorded = self.cassette.as_ref().and_then(|c| {
+            c.lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .get(&key)
+                .map(|e| e.outcome.clone())
+        });
+        if let Some(outcome) = recorded {
             return self.outcome_to_value(outcome_from_record(outcome), &type_name, &schema, span);
         }
-        if self.cassette.as_ref().map(|c| c.mode) == Some(Mode::Replay) {
+        let mode = self
+            .cassette
+            .as_ref()
+            .map(|c| c.lock().unwrap_or_else(|e| e.into_inner()).mode);
+        if mode == Some(Mode::Replay) {
             return Err(RuntimeError::new(
                 format!("no recorded model call for {site} (replay mode)"),
                 span,
@@ -1192,16 +1320,18 @@ impl Interpreter {
             .with_hint("re-record with `kora run --record <file.ko>`"));
         }
 
-        let request = AnalyzeRequest {
-            prompt: prompt.clone(),
-            data_json: data_text.clone(),
-            schema: schema.clone(),
-        };
-        let outcome = kora_models::analyze(&model, &request)
-            .map_err(|e| RuntimeError::new(e.message, span))?;
-        self.model_calls += 1;
+        let outcome = self.run_tool_loop(
+            &model,
+            &prompt,
+            &data_text,
+            &schema,
+            &tools,
+            &tool_funcs,
+            span,
+        )?;
 
-        if let Some(c) = self.cassette.as_mut() {
+        if let Some(c) = self.cassette.as_ref() {
+            let mut c = c.lock().unwrap_or_else(|e| e.into_inner());
             if c.mode == Mode::Record {
                 c.insert(cassette::Entry {
                     key,
@@ -1288,6 +1418,7 @@ impl Interpreter {
             } => {
                 self.tokens_in += tokens_in;
                 self.tokens_out += tokens_out;
+                self.budget.charge_call(tokens_in, tokens_out);
                 let mut fields = HashMap::new();
                 for (name, _) in &schema.fields {
                     let raw = fields_json.get(name).ok_or_else(|| {
@@ -1310,6 +1441,7 @@ impl Interpreter {
             } => {
                 self.tokens_in += tokens_in;
                 self.tokens_out += tokens_out;
+                self.budget.charge_call(tokens_in, tokens_out);
                 Ok(Value::Variant {
                     tag: Rc::new("Uncertain".to_string()),
                     payload: vec![Value::Str(Rc::new(reason))],
@@ -1429,5 +1561,365 @@ fn json_to_value(json: &serde_json::Value) -> Value {
                 .map(|(k, v)| (k.clone(), json_to_value(v)))
                 .collect(),
         ))),
+    }
+}
+
+impl Interpreter {
+    /// Run a `parallel for` body across worker threads.
+    ///
+    /// Each worker is its own agent: a fresh interpreter with a private heap,
+    /// seeded by copying the values it needs. Nothing is shared except the
+    /// budget (an atomic pot) and the cassette (read-mostly, behind a lock),
+    /// so there is no data race to reason about and no lock in user code.
+    fn run_parallel(
+        &mut self,
+        var: &str,
+        items: Vec<Value>,
+        body: &[Stmt],
+        scope: &Scope,
+        span: Span,
+    ) -> Result<Value, RuntimeError> {
+        if items.is_empty() {
+            return Ok(Value::List(Rc::new(RefCell::new(Vec::new()))));
+        }
+
+        // Snapshot everything a worker may read, as portable copies.
+        let mut seed: Vec<(String, Portable)> = Vec::new();
+        for (name, value) in scope.iter().chain(self.globals.iter()) {
+            if name != var {
+                seed.push((name.clone(), Portable::from_value(value)));
+            }
+        }
+        let types = self.types.clone();
+        let config = self.config.clone();
+        let program_name = self.program_name.clone();
+        let body: Vec<Stmt> = body.to_vec();
+        let budget = self.budget.clone();
+
+        // Workers share one cassette handle: replay works inside parallel
+        // bodies, and recordings from every worker land in the same file.
+        let cassette = self.cassette.clone();
+
+        let portable_items: Vec<Portable> = items.iter().map(Portable::from_value).collect();
+        let next = std::sync::atomic::AtomicUsize::new(0);
+        let total = portable_items.len();
+        let slots: Vec<std::sync::Mutex<Option<WorkerResult>>> =
+            (0..total).map(|_| std::sync::Mutex::new(None)).collect();
+
+        let worker_count = self.max_workers.min(total).max(1);
+        std::thread::scope(|s| {
+            for _ in 0..worker_count {
+                s.spawn(|| loop {
+                    let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                    if index >= total {
+                        break;
+                    }
+                    let outcome = run_one(
+                        index,
+                        &portable_items[index],
+                        var,
+                        &body,
+                        &seed,
+                        &types,
+                        &config,
+                        &program_name,
+                        &budget,
+                        cassette.as_ref(),
+                    );
+                    *slots[index].lock().unwrap() = Some(outcome);
+                });
+            }
+        });
+
+        // Fold worker results back in deterministic input order, so a parallel
+        // run reads exactly like a sequential one.
+        let mut collected = Vec::with_capacity(total);
+        let mut first_error: Option<RuntimeError> = None;
+        for slot in slots {
+            let Some(result) = slot.into_inner().unwrap_or_else(|e| e.into_inner()) else {
+                continue;
+            };
+            self.tokens_in += result.tokens_in;
+            self.tokens_out += result.tokens_out;
+            self.model_calls += result.model_calls;
+            self.output.extend(result.output);
+            match result.value {
+                Ok(v) => collected.push(v.into_value()),
+                Err(e) => {
+                    if first_error.is_none() {
+                        first_error = Some(e);
+                    }
+                }
+            }
+        }
+
+        if let Some(mut e) = first_error {
+            // Point at the loop, since the body ran on another thread.
+            if e.span.line == 0 {
+                e.span = span;
+            }
+            return Err(e);
+        }
+        Ok(Value::List(Rc::new(RefCell::new(collected))))
+    }
+}
+
+/// What one worker produced.
+struct WorkerResult {
+    value: Result<Portable, RuntimeError>,
+    output: Vec<String>,
+    tokens_in: u64,
+    tokens_out: u64,
+    model_calls: u64,
+}
+
+/// Execute one iteration of a `parallel for` body in a private interpreter.
+#[allow(clippy::too_many_arguments)]
+fn run_one(
+    index: usize,
+    item: &Portable,
+    var: &str,
+    body: &[Stmt],
+    seed: &[(String, Portable)],
+    types: &HashMap<String, Vec<FieldDef>>,
+    config: &Config,
+    program_name: &str,
+    budget: &Budget,
+    cassette: Option<&Arc<Mutex<Cassette>>>,
+) -> WorkerResult {
+    let mut interp = Interpreter::new();
+    interp.types = types.clone();
+    interp.config = config.clone();
+    interp.program_name = program_name.to_string();
+    interp.budget = budget.clone();
+    for (name, value) in seed {
+        interp
+            .globals
+            .insert(name.clone(), value.clone().into_value());
+    }
+    interp.cassette = cassette.cloned();
+
+    let mut scope: Scope = HashMap::new();
+    scope.insert(var.to_string(), item.clone().into_value());
+    // The loop index is useful for diagnostics and is cheap to expose.
+    scope.insert("__index__".to_string(), Value::Int(index as i64));
+
+    let flow = interp.exec_block(body, &mut scope);
+
+    let value = match flow {
+        // `return` inside the body yields that value; otherwise the body's
+        // last bound value for `var` is not meaningful, so yield None.
+        Ok(Flow::Return(v)) => Ok(Portable::from_value(&v)),
+        Ok(_) => Ok(Portable::None),
+        Err(e) => Err(e),
+    };
+
+    WorkerResult {
+        value,
+        output: interp.output,
+        tokens_in: interp.tokens_in,
+        tokens_out: interp.tokens_out,
+        model_calls: interp.model_calls,
+    }
+}
+
+impl Interpreter {
+    /// Evaluate the `tools=[...]` argument into the functions it names.
+    fn tool_list(
+        &mut self,
+        arg: &Expr,
+        scope: &mut Scope,
+    ) -> Result<Vec<Rc<FuncDef>>, RuntimeError> {
+        let value = self.eval(arg, scope)?;
+        let items = match value {
+            Value::List(items) => items.borrow().clone(),
+            other => {
+                return Err(RuntimeError::new(
+                    format!("analyze() tools must be a list, got {}", other.type_name()),
+                    arg.span,
+                )
+                .with_hint("write `tools=[lookup_customer]`"))
+            }
+        };
+        let mut out = Vec::new();
+        for item in items {
+            match item {
+                Value::Func(f) if f.kind == FuncKind::Tool => out.push(f),
+                Value::Func(f) => {
+                    return Err(
+                        RuntimeError::new(format!("`{}` is not a tool", f.name), arg.span)
+                            .with_hint(format!(
+                                "declare it with `tool {}(...)` so the model may call it",
+                                f.name
+                            )),
+                    )
+                }
+                other => {
+                    return Err(RuntimeError::new(
+                        format!("expected a tool, got {}", other.type_name()),
+                        arg.span,
+                    ))
+                }
+            }
+        }
+        Ok(out)
+    }
+
+    /// Describe a `tool` declaration for the model: parameters from the
+    /// signature, description from the docstring. No boilerplate to write.
+    fn tool_spec(&self, f: &FuncDef) -> Result<ToolSpec, RuntimeError> {
+        let mut params = Vec::new();
+        for p in &f.params {
+            let ty = p.ty.as_ref().ok_or_else(|| {
+                RuntimeError::new(
+                    format!("tool `{}` needs a type on parameter `{}`", f.name, p.name),
+                    p.span,
+                )
+                .with_hint("models need types to know what to pass, e.g. `email: str`")
+            })?;
+            params.push((p.name.clone(), field_type_of(ty, &p.name, p.span)?));
+        }
+        Ok(ToolSpec {
+            name: f.name.clone(),
+            description: f
+                .doc
+                .clone()
+                .unwrap_or_else(|| format!("The {} tool.", f.name)),
+            params,
+        })
+    }
+
+    /// Drive the model until it produces a final answer, running any tools it
+    /// asks for along the way. Every turn is charged against the budget, so a
+    /// runaway loop stops rather than spending forever.
+    #[allow(clippy::too_many_arguments)]
+    fn run_tool_loop(
+        &mut self,
+        model: &kora_models::ModelConfig,
+        prompt: &str,
+        data_text: &str,
+        schema: &Schema,
+        tools: &[ToolSpec],
+        tool_funcs: &[Rc<FuncDef>],
+        span: Span,
+    ) -> Result<AnalyzeOutcome, RuntimeError> {
+        // A hard ceiling so a model that keeps asking for tools cannot spin
+        // forever when no `max_steps` budget was declared.
+        const MAX_TURNS: usize = 12;
+        let mut history: Vec<ToolExchange> = Vec::new();
+
+        for _ in 0..MAX_TURNS {
+            if let Some(meter) = self.budget.check() {
+                return Err(RuntimeError::new(
+                    format!("budget exhausted ({}) during tool loop", meter.name()),
+                    span,
+                ));
+            }
+            let request = AnalyzeRequest {
+                prompt: prompt.to_string(),
+                data_json: data_text.to_string(),
+                schema: schema.clone(),
+                tools: tools.to_vec(),
+                tool_history: history.clone(),
+            };
+            let step = kora_models::step(model, &request)
+                .map_err(|e| RuntimeError::new(e.message, span))?;
+            self.model_calls += 1;
+
+            match step {
+                Step::Done(outcome) => return Ok(outcome),
+                Step::CallTool {
+                    name,
+                    arguments_json,
+                    tokens_in,
+                    tokens_out,
+                } => {
+                    self.tokens_in += tokens_in;
+                    self.tokens_out += tokens_out;
+                    self.budget.charge_call(tokens_in, tokens_out);
+                    if let Some(meter) = self.budget.charge_step() {
+                        return Err(RuntimeError::new(
+                            format!("budget exhausted ({}) during tool loop", meter.name()),
+                            span,
+                        ));
+                    }
+                    let result_json = self.run_tool(&name, &arguments_json, tool_funcs, span)?;
+                    history.push(ToolExchange {
+                        name,
+                        arguments_json,
+                        result_json,
+                    });
+                }
+            }
+        }
+        Err(RuntimeError::new(
+            format!("model kept asking for tools after {MAX_TURNS} turns"),
+            span,
+        )
+        .with_hint("add a `budget: max_steps = N` line, or simplify the prompt"))
+    }
+
+    /// Execute one model-requested tool call and return its JSON result.
+    fn run_tool(
+        &mut self,
+        name: &str,
+        arguments_json: &str,
+        tool_funcs: &[Rc<FuncDef>],
+        span: Span,
+    ) -> Result<String, RuntimeError> {
+        let func = tool_funcs
+            .iter()
+            .find(|f| f.name == name)
+            .ok_or_else(|| {
+                RuntimeError::new(format!("model asked for unknown tool `{name}`"), span)
+            })?
+            .clone();
+
+        let parsed: serde_json::Value =
+            serde_json::from_str(arguments_json).unwrap_or(serde_json::Value::Null);
+        let mut args = Vec::new();
+        for p in &func.params {
+            let raw = parsed.get(&p.name).ok_or_else(|| {
+                RuntimeError::new(
+                    format!("model called `{name}` without argument `{}`", p.name),
+                    span,
+                )
+            })?;
+            args.push(json_to_value(raw));
+        }
+
+        let result = self.call_function(&func, args, span)?;
+        Ok(serde_json::to_string(&value_to_json(&result)).unwrap_or_else(|_| "null".to_string()))
+    }
+}
+
+/// Map a Kora type annotation onto a model-visible field type.
+fn field_type_of(ty: &TypeExpr, what: &str, span: Span) -> Result<FieldType, RuntimeError> {
+    match ty {
+        TypeExpr::Name(n) => match n.as_str() {
+            "str" => Ok(FieldType::Str),
+            "int" => Ok(FieldType::Int),
+            "float" => Ok(FieldType::Float),
+            "bool" => Ok(FieldType::Bool),
+            other => Err(RuntimeError::new(
+                format!("`{what}` has type `{other}`, which models cannot be given yet"),
+                span,
+            )
+            .with_hint("supported types: str, int, float, bool, list[str]")),
+        },
+        TypeExpr::Generic(n, args) if n == "list" => match args.first() {
+            Some(TypeExpr::Name(inner)) if inner == "str" => Ok(FieldType::ListOfStr),
+            _ => Err(RuntimeError::new(
+                format!("`{what}` must be `list[str]`"),
+                span,
+            )),
+        },
+        other => Err(RuntimeError::new(
+            format!(
+                "`{what}` has type `{}`, which models cannot be given yet",
+                other.display()
+            ),
+            span,
+        )),
     }
 }

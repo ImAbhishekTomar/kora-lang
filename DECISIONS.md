@@ -102,7 +102,7 @@ design changes and should be deliberate.
 1. Core Python-like language + types + good errors + VS Code basics
    (highlighting, icon, run command) — **done**
 2. `analyze` (OpenAI + Ollama), typed results, cassettes — **done**
-3. `agent`, `tool`, `parallel for`, budgets
+3. `agent`, `tool`, `parallel for`, budgets — **done**
 4. `classified` / `declassify` + `kora audit`
 5. Durability (checkpoint/resume, `ask_human`)
 6. `test`/`mock`, OTel, LSP (squiggles, hover, go-to-def)

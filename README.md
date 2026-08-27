@@ -53,6 +53,30 @@ kora run --record --report examples/01_expense_check.ko   # call the model, save
 kora run --replay --report examples/01_expense_check.ko   # re-run free and deterministic
 ```
 
+## Agents, tools, and budgets
+
+```python
+tool priority_for(severity: str) -> int:
+    "Map a severity label to the on-call priority number."
+    if severity == "high":
+        return 1
+    return 3
+
+agent triage(raw: str) -> str:
+    budget: max_tokens = 4000, max_steps = 4
+    t: Ticket = analyze(raw, "classify this ticket", tools=[priority_for])
+    ...
+
+def main():
+    with budget(max_tokens = 20000):
+        results = parallel for t in tickets:
+            return triage(t)
+```
+
+Each branch of `parallel for` runs on its own thread with its own heap, so
+there is no shared mutable state to guard. All branches draw from one token
+budget, and results come back in input order.
+
 ## Status
 
 Early development, pre-alpha. Built for personal use first. See

@@ -1,0 +1,47 @@
+{
+  "entries": [
+    {
+      "key": "c407c8773ac2098c",
+      "site": "examples/02_triage.ko:23",
+      "model": "ollama:llama3.2:latest",
+      "prompt": "classify this support ticket into severity (low/medium/high), product, and a one-line summary",
+      "data": "\"the checkout page returns a 500 for every card payment, nobody can buy anything\"",
+      "outcome": {
+        "kind": "ok",
+        "fields": {
+          "product": "e-commerce",
+          "severity": "high",
+          "summary": "Checkout page returns 500 for every card payment"
+        },
+        "tokens_in": 237,
+        "tokens_out": 35
+      }
+    },
+    {
+      "key": "6ed849cb7ddbd79a",
+      "site": "examples/02_triage.ko:23",
+      "model": "ollama:llama3.2:latest",
+      "prompt": "classify this support ticket into severity (low/medium/high), product, and a one-line summary",
+      "data": "\"could you add a dark mode to the dashboard someday?\"",
+      "outcome": {
+        "kind": "uncertain",
+        "reason": "Insufficient data",
+        "tokens_in": 231,
+        "tokens_out": 36
+      }
+    },
+    {
+      "key": "ebc5de1c4447bc0c",
+      "site": "examples/02_triage.ko:23",
+      "model": "ollama:llama3.2:latest",
+      "prompt": "classify this support ticket into severity (low/medium/high), product, and a one-line summary",
+      "data": "\"CSV export drops the last row when there are more than 1000 records\"",
+      "outcome": {
+        "kind": "uncertain",
+        "reason": "incomplete information",
+        "tokens_in": 236,
+        "tokens_out": 42
+      }
+    }
+  ]
+}

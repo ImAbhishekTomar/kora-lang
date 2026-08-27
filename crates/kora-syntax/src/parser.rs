@@ -35,9 +35,14 @@ impl Parser {
     fn statement(&mut self) -> Result<Stmt, SyntaxError> {
         let span = self.peek_span();
         match self.peek_kind().clone() {
-            TokenKind::Def => self.func_def(),
+            TokenKind::Def | TokenKind::Agent | TokenKind::Tool => self.func_def(),
             TokenKind::Type => self.type_def(),
             TokenKind::Match => self.match_stmt(),
+            TokenKind::Budget => self.budget_line(),
+            TokenKind::Parallel => self.parallel_for(None),
+            TokenKind::Ident(name) if name == "with" && self.peek_next_is(&TokenKind::Budget) => {
+                self.with_stmt()
+            }
             TokenKind::If => self.if_stmt(),
             TokenKind::While => self.while_stmt(),
             TokenKind::For => self.for_stmt(),
@@ -114,6 +119,19 @@ impl Parser {
         if self.check(&TokenKind::Eq) {
             self.validate_assign_target(&expr)?;
             self.advance();
+            // `results = parallel for x in xs:` binds the collected results.
+            if self.check(&TokenKind::Parallel) {
+                let name = match &expr.kind {
+                    ExprKind::Name(n) => n.clone(),
+                    _ => {
+                        return Err(SyntaxError::new(
+                            "results of `parallel for` must be assigned to a plain variable",
+                            expr.span,
+                        ))
+                    }
+                };
+                return self.parallel_for(Some(name));
+            }
             let value = self.expression()?;
             self.expect_newline("assignment")?;
             return Ok(Stmt {
@@ -167,10 +185,23 @@ impl Parser {
         }
     }
 
+    /// `def` / `agent` / `tool` share one shape; only their powers differ.
     fn func_def(&mut self) -> Result<Stmt, SyntaxError> {
         let span = self.peek_span();
-        self.advance(); // def
-        let name = self.expect_ident("function name after `def`")?;
+        let kind = match self.peek_kind() {
+            TokenKind::Def => FuncKind::Def,
+            TokenKind::Agent => FuncKind::Agent,
+            TokenKind::Tool => FuncKind::Tool,
+            other => {
+                return Err(SyntaxError::new(
+                    format!("expected `def`, `agent`, or `tool`, found `{other}`"),
+                    span,
+                ))
+            }
+        };
+        let keyword = self.peek_kind().to_string();
+        self.advance();
+        let name = self.expect_ident(&format!("a name after `{keyword}`"))?;
         self.expect(&TokenKind::LParen, "expected `(` after function name")?;
         let mut params = Vec::new();
         while !self.check(&TokenKind::RParen) {
@@ -198,14 +229,172 @@ impl Parser {
         } else {
             None
         };
-        let body = self.block("function body")?;
+        let mut body = self.block("function body")?;
+        // A leading string statement is the docstring; tools send it to models
+        // as their description, so it is pulled out rather than executed.
+        let doc = match body.first().map(|s| &s.kind) {
+            Some(StmtKind::Expr(Expr {
+                kind: ExprKind::Str(text),
+                ..
+            })) => {
+                let text = text.clone();
+                body.remove(0);
+                Some(text)
+            }
+            _ => None,
+        };
+        // A leading `budget:` line applies to the whole body.
+        let budget = match body.first().map(|s| &s.kind) {
+            Some(StmtKind::WithBudget { budget, body: b }) if b.is_empty() => {
+                let budget = budget.clone();
+                body.remove(0);
+                Some(budget)
+            }
+            _ => None,
+        };
         Ok(Stmt {
             kind: StmtKind::FuncDef(FuncDef {
                 name,
                 params,
                 return_ty,
                 body,
+                kind,
+                budget,
+                doc,
             }),
+            span,
+        })
+    }
+
+    /// Two forms:
+    ///   `budget: max_tokens = 20_000, max_calls = 5`   (declaration line)
+    ///   `with budget(max_tokens = 500):`               (scoped fence)
+    fn budget_line(&mut self) -> Result<Stmt, SyntaxError> {
+        let span = self.peek_span();
+        self.advance(); // budget
+        self.expect(&TokenKind::Colon, "expected `:` after `budget`")?;
+        let budget = self.budget_fields(span.line, &[TokenKind::Newline])?;
+        self.expect_newline("budget")?;
+        Ok(Stmt {
+            kind: StmtKind::WithBudget {
+                budget,
+                body: Vec::new(),
+            },
+            span,
+        })
+    }
+
+    /// `name = value, name = value` until one of `terminators` is reached.
+    fn budget_fields(
+        &mut self,
+        line: u32,
+        terminators: &[TokenKind],
+    ) -> Result<BudgetSpec, SyntaxError> {
+        let mut spec = BudgetSpec {
+            span_line: line,
+            ..Default::default()
+        };
+        let mut seen_any = false;
+        loop {
+            if terminators.iter().any(|t| self.check(t)) {
+                break;
+            }
+            let field_span = self.peek_span();
+            let field = self.expect_ident("a budget field name")?;
+            self.expect(&TokenKind::Eq, "expected `=` after budget field")?;
+            let value_span = self.peek_span();
+            let value = match self.peek_kind().clone() {
+                TokenKind::Int(v) if v >= 0 => {
+                    self.advance();
+                    v as u64
+                }
+                other => {
+                    return Err(SyntaxError::new(
+                        format!("budget values must be whole numbers, found `{other}`"),
+                        value_span,
+                    )
+                    .with_hint("budgets are counted in tokens, calls, or steps"));
+                }
+            };
+            match field.as_str() {
+                "max_tokens" => spec.max_tokens = Some(value),
+                "max_calls" => spec.max_calls = Some(value),
+                "max_steps" => spec.max_steps = Some(value),
+                other => {
+                    return Err(SyntaxError::new(
+                        format!("unknown budget field `{other}`"),
+                        field_span,
+                    )
+                    .with_hint("known fields: max_tokens, max_calls, max_steps"));
+                }
+            }
+            seen_any = true;
+            if self.check(&TokenKind::Comma) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        if !seen_any {
+            return Err(
+                SyntaxError::new("budget needs at least one limit", self.peek_span())
+                    .with_hint("for example: `budget: max_tokens = 20_000`"),
+            );
+        }
+        Ok(spec)
+    }
+
+    /// `with budget(max_tokens = N):` block.
+    fn with_stmt(&mut self) -> Result<Stmt, SyntaxError> {
+        let span = self.peek_span();
+        self.advance(); // `with` (an identifier, not a keyword)
+        if !self.check(&TokenKind::Budget) {
+            return Err(SyntaxError::new(
+                format!(
+                    "expected `budget` after `with`, found `{}`",
+                    self.peek_kind()
+                ),
+                self.peek_span(),
+            )
+            .with_hint("the only `with` form today is `with budget(...):`"));
+        }
+        self.advance(); // budget
+        self.expect(&TokenKind::LParen, "expected `(` after `budget`")?;
+        let budget = self.budget_fields(span.line, &[TokenKind::RParen])?;
+        self.expect(&TokenKind::RParen, "expected `)` to close budget")?;
+        let body = self.block("budget block")?;
+        Ok(Stmt {
+            kind: StmtKind::WithBudget { budget, body },
+            span,
+        })
+    }
+
+    /// `parallel for x in xs:` — optionally bound as `results = parallel for ...`
+    fn parallel_for(&mut self, collect_into: Option<String>) -> Result<Stmt, SyntaxError> {
+        let span = self.peek_span();
+        self.advance(); // parallel
+        if !self.check(&TokenKind::For) {
+            return Err(SyntaxError::new(
+                format!(
+                    "expected `for` after `parallel`, found `{}`",
+                    self.peek_kind()
+                ),
+                self.peek_span(),
+            )
+            .with_hint("write `parallel for item in items:`"));
+        }
+        self.advance(); // for
+        let var = self.expect_ident("loop variable after `for`")?;
+        self.expect(&TokenKind::In, "expected `in` after loop variable")?;
+        let iter = self.expression()?;
+        let body = self.block("parallel for body")?;
+        Ok(Stmt {
+            kind: StmtKind::ParallelFor {
+                var,
+                iter,
+                body,
+                collect_into,
+            },
             span,
         })
     }
@@ -572,9 +761,26 @@ impl Parser {
                     let span = self.peek_span();
                     self.advance();
                     let mut args = Vec::new();
+                    let mut kwargs = Vec::new();
                     self.skip_newlines_in_brackets();
                     while !self.check(&TokenKind::RParen) {
-                        args.push(self.expression()?);
+                        // `name = value` is a keyword argument; anything else
+                        // is positional.
+                        let is_kwarg = matches!(self.peek_kind(), TokenKind::Ident(_))
+                            && self.peek_next_is(&TokenKind::Eq);
+                        if is_kwarg {
+                            let name = self.expect_ident("a keyword argument name")?;
+                            self.advance(); // =
+                            kwargs.push((name, self.expression()?));
+                        } else {
+                            if !kwargs.is_empty() {
+                                return Err(SyntaxError::new(
+                                    "positional arguments cannot follow keyword arguments",
+                                    self.peek_span(),
+                                ));
+                            }
+                            args.push(self.expression()?);
+                        }
                         self.skip_newlines_in_brackets();
                         if !self.check(&TokenKind::RParen) {
                             self.expect(&TokenKind::Comma, "expected `,` between arguments")?;
@@ -586,6 +792,7 @@ impl Parser {
                         kind: ExprKind::Call {
                             callee: Box::new(expr),
                             args,
+                            kwargs,
                         },
                         span,
                     };

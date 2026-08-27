@@ -49,6 +49,20 @@ pub enum StmtKind {
         fields: Vec<FieldDef>,
     },
     Return(Option<Expr>),
+    /// `parallel for x in xs:` — fan out across threads, collect results.
+    ParallelFor {
+        var: String,
+        iter: Expr,
+        body: Vec<Stmt>,
+        /// Name bound to the result list, when written as
+        /// `results = parallel for ...`.
+        collect_into: Option<String>,
+    },
+    /// `with budget(max_tokens = N):` — a nested spending fence.
+    WithBudget {
+        budget: BudgetSpec,
+        body: Vec<Stmt>,
+    },
     Break,
     Continue,
     Pass,
@@ -87,6 +101,34 @@ pub struct FuncDef {
     pub params: Vec<Param>,
     pub return_ty: Option<TypeExpr>,
     pub body: Vec<Stmt>,
+    /// What kind of callable this is.
+    pub kind: FuncKind,
+    /// `budget:` line declared at the top of an agent or function body.
+    pub budget: Option<BudgetSpec>,
+    /// Leading docstring, used as the tool description sent to models.
+    pub doc: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FuncKind {
+    /// `def` — ordinary deterministic function.
+    Def,
+    /// `agent` — may call models and suspend; carries a budget.
+    Agent,
+    /// `tool` — exposed to models; signature becomes a schema.
+    Tool,
+}
+
+/// `budget: max_tokens = 20_000, max_calls = 5`
+///
+/// Token-denominated by decision (DECISIONS.md): tokens are what the runtime
+/// can measure directly, money is a display layer only.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct BudgetSpec {
+    pub max_tokens: Option<u64>,
+    pub max_calls: Option<u64>,
+    pub max_steps: Option<u64>,
+    pub span_line: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -158,6 +200,8 @@ pub enum ExprKind {
     Call {
         callee: Box<Expr>,
         args: Vec<Expr>,
+        /// Keyword arguments, e.g. `analyze(data, prompt, tools=[t])`.
+        kwargs: Vec<(String, Expr)>,
     },
     /// `obj.attr`
     Attr {
