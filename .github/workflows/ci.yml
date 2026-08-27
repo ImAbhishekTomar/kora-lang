@@ -18,7 +18,7 @@ jobs:
     name: Format and lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain
         run: rustup update stable && rustup default stable && rustup component add rustfmt clippy
       - uses: Swatinem/rust-cache@v2
@@ -35,7 +35,7 @@ jobs:
         os: [ubuntu-latest, macos-latest]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain
         run: rustup update stable && rustup default stable
       - uses: Swatinem/rust-cache@v2
