@@ -11,3 +11,4 @@ path = "src/main.rs"
 [dependencies]
 kora-syntax.workspace = true
 kora-runtime.workspace = true
+serde_json = { workspace = true }

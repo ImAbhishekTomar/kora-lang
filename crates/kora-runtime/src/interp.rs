@@ -15,16 +15,32 @@ use std::sync::{Arc, Mutex};
 use crate::budget::Budget;
 use crate::cassette::{self, Cassette, Mode, RecordedOutcome};
 use crate::config::Config;
+use crate::journal::{self, Effect, Journal, Lookup, PendingQuestion};
 use crate::label::{DeclassifySite, Label, SinkPolicy};
 use crate::portable::Portable;
 use crate::value::Value;
 
+/// Why execution stopped.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum StopKind {
+    /// A real error: the program is wrong or the world misbehaved.
+    Error,
+    /// The program asked a person a question and is waiting. Not a failure —
+    /// the run is parked and resumes when the answer arrives.
+    Suspended,
+}
+
 /// A runtime error, source-anchored like syntax errors.
+///
+/// Suspension rides the same channel: the language has no exception handling,
+/// so nothing catches it on the way out, and the top level can tell the two
+/// apart by `kind`.
 #[derive(Debug, Clone)]
 pub struct RuntimeError {
     pub message: String,
     pub hint: Option<String>,
     pub span: Span,
+    pub kind: StopKind,
 }
 
 impl RuntimeError {
@@ -33,7 +49,22 @@ impl RuntimeError {
             message: message.into(),
             hint: None,
             span,
+            kind: StopKind::Error,
         }
+    }
+
+    /// The signal raised by `ask_human` when no answer is recorded yet.
+    fn suspended(span: Span) -> Self {
+        RuntimeError {
+            message: "waiting for a human answer".into(),
+            hint: None,
+            span,
+            kind: StopKind::Suspended,
+        }
+    }
+
+    pub fn is_suspension(&self) -> bool {
+        self.kind == StopKind::Suspended
     }
 
     fn with_hint(mut self, hint: impl Into<String>) -> Self {
@@ -101,6 +132,12 @@ pub struct Interpreter {
     declassified_for: Vec<String>,
     /// Every declassification reached during this run, for `kora audit`.
     pub declassify_sites: Vec<DeclassifySite>,
+    /// Durable execution journal. Disabled unless the run is durable.
+    pub journal: Arc<Mutex<Journal>>,
+    /// This agent's position in the execution tree, for journal ordering.
+    pub scope: journal::Scope,
+    /// Journal slot claimed for an in-flight model call.
+    pending_slot: Option<(journal::Scope, usize)>,
 }
 
 const BUILTINS: &[&str] = &[
@@ -123,6 +160,7 @@ const BUILTINS: &[&str] = &[
     "tokens_remaining",
     "calls_spent",
     "redact",
+    "ask_human",
 ];
 
 impl Default for Interpreter {
@@ -151,6 +189,9 @@ impl Interpreter {
             sinks: SinkPolicy::default(),
             declassified_for: Vec::new(),
             declassify_sites: Vec::new(),
+            journal: Arc::new(Mutex::new(Journal::disabled())),
+            scope: journal::Scope::root(),
+            pending_slot: None,
         }
     }
 
@@ -1082,6 +1123,9 @@ impl Interpreter {
                 )),
             };
         }
+        if name == "ask_human" {
+            return self.ask_human(args, span);
+        }
         let label = args
             .iter()
             .fold(Label::Public, |acc, v| acc.join(v.label()));
@@ -1110,6 +1154,11 @@ impl Interpreter {
                     .map(|v| v.to_string())
                     .collect::<Vec<_>>()
                     .join(" ");
+                // In a durable run, output is an effect: already-shown lines
+                // replay silently, so resuming continues rather than repeats.
+                if !self.record_output(&line, span)? {
+                    return Ok(Value::None);
+                }
                 if self.direct_stdout {
                     println!("{line}");
                 } else {
@@ -1508,7 +1557,14 @@ impl Interpreter {
             });
         }
 
-        // Replay first: a cassette hit costs nothing and keeps CI deterministic.
+        // A durable run replays its own journal first: resuming must return
+        // exactly what the earlier attempt returned.
+        let journal_site = format!("{site}#model");
+        if let Some(outcome) = self.journal_model_call(&journal_site, span)? {
+            return self.outcome_to_value(outcome, &type_name, &schema, span);
+        }
+
+        // Replay next: a cassette hit costs nothing and keeps CI deterministic.
         let recorded = self.cassette.as_ref().and_then(|c| {
             c.lock()
                 .unwrap_or_else(|e| e.into_inner())
@@ -1539,6 +1595,9 @@ impl Interpreter {
             &tool_funcs,
             span,
         )?;
+        // Journal before anything else: a crash after this point must resume
+        // without paying for the call again.
+        self.journal_record_model(&journal_site, &outcome, span)?;
 
         if let Some(c) = self.cassette.as_ref() {
             let mut c = c.lock().unwrap_or_else(|e| e.into_inner());
@@ -1806,6 +1865,8 @@ impl Interpreter {
         let types = self.types.clone();
         let config = self.config.clone();
         let sinks = self.sinks.clone();
+        let journal = self.journal.clone();
+        let parent_scope = self.scope.clone();
         let program_name = self.program_name.clone();
         let body: Vec<Stmt> = body.to_vec();
         let budget = self.budget.clone();
@@ -1840,6 +1901,8 @@ impl Interpreter {
                         &program_name,
                         &budget,
                         cassette.as_ref(),
+                        &journal,
+                        &parent_scope,
                     );
                     *slots[index].lock().unwrap() = Some(outcome);
                 });
@@ -1904,6 +1967,8 @@ fn run_one(
     program_name: &str,
     budget: &Budget,
     cassette: Option<&Arc<Mutex<Cassette>>>,
+    journal: &Arc<Mutex<Journal>>,
+    parent_scope: &journal::Scope,
 ) -> WorkerResult {
     let mut interp = Interpreter::new();
     interp.types = types.clone();
@@ -1917,6 +1982,10 @@ fn run_one(
             .insert(name.clone(), value.clone().into_value());
     }
     interp.cassette = cassette.cloned();
+    interp.journal = journal.clone();
+    // Each branch counts its own journal steps, so a resumed run replays
+    // correctly no matter how the threads interleaved.
+    interp.scope = parent_scope.child(index);
 
     let mut scope: Scope = HashMap::new();
     scope.insert(var.to_string(), item.clone().into_value());
@@ -2236,5 +2305,149 @@ fn tag_for(value: &Value) -> &'static str {
         Value::Int(_) | Value::Float(_) => "NUM",
         Value::Bool(_) => "BOOL",
         _ => "VALUE",
+    }
+}
+
+impl Interpreter {
+    /// `ask_human(question, context)` — the suspension primitive.
+    ///
+    /// On the first pass this parks the run and unwinds; the process may then
+    /// exit for minutes or days. When an answer arrives the program runs again
+    /// from the top, every prior effect replays from the journal, and this
+    /// call returns the answer as if it had simply blocked. That is why it
+    /// reads like an ordinary function call in the middle of a function.
+    fn ask_human(&mut self, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
+        let question = match args.first() {
+            Some(v) => v.unlabeled().to_string(),
+            None => {
+                return Err(RuntimeError::new("ask_human() needs a question", span)
+                    .with_hint("example: `ask_human(\"approve this?\", details)`"))
+            }
+        };
+        // Asking a person is not a model sink, but shipping secrets into a
+        // prompt shown elsewhere still deserves an explicit release.
+        if args.iter().any(|v| v.label().is_classified()) {
+            return Err(
+                RuntimeError::new("ask_human() was given classified data", span)
+                    .with_hint("declassify it first, or pass a redact(...) version"),
+            );
+        }
+        let context = args
+            .get(1)
+            .map(|v| v.unlabeled().to_string())
+            .unwrap_or_default();
+
+        let site = format!("{}:{}#human", self.program_name, span.line);
+        let mut journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
+
+        let lookup = journal
+            .next(&self.scope, &site)
+            .map_err(|e| RuntimeError::new(e.to_string(), span))?;
+
+        match lookup {
+            // The answer arrived on an earlier resume: hand it back.
+            Lookup::Replayed(Effect::Human { answer, .. }) => Ok(Value::Str(Rc::new(answer))),
+            Lookup::Replayed(other) => Err(RuntimeError::new(
+                format!("journal step is {other:?}, but the program reached ask_human()"),
+                span,
+            )),
+            Lookup::Fresh { scope, seq } => {
+                if !journal.is_durable() {
+                    return Err(RuntimeError::new("ask_human() needs a durable run", span)
+                        .with_hint("start it with `kora run --durable <file.ko>`"));
+                }
+                journal
+                    .suspend(PendingQuestion {
+                        scope,
+                        seq,
+                        site,
+                        question,
+                        context,
+                    })
+                    .map_err(|e| RuntimeError::new(e.to_string(), span))?;
+                Err(RuntimeError::suspended(span))
+            }
+        }
+    }
+
+    /// Route a model call through the journal so a resumed run does not pay
+    /// for work already done.
+    fn journal_model_call(
+        &mut self,
+        site: &str,
+        span: Span,
+    ) -> Result<Option<AnalyzeOutcome>, RuntimeError> {
+        let mut journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
+        if !journal.is_durable() {
+            return Ok(None);
+        }
+        match journal
+            .next(&self.scope, site)
+            .map_err(|e| RuntimeError::new(e.to_string(), span))?
+        {
+            Lookup::Replayed(Effect::Model { outcome }) => Ok(Some(outcome_from_record(outcome))),
+            Lookup::Replayed(other) => Err(RuntimeError::new(
+                format!("journal step is {other:?}, but the program reached a model call"),
+                span,
+            )),
+            Lookup::Fresh { scope, seq } => {
+                self.pending_slot = Some((scope, seq));
+                Ok(None)
+            }
+        }
+    }
+
+    /// Record the result of a model call that was just performed.
+    fn journal_record_model(
+        &mut self,
+        site: &str,
+        outcome: &AnalyzeOutcome,
+        span: Span,
+    ) -> Result<(), RuntimeError> {
+        let Some((scope, seq)) = self.pending_slot.take() else {
+            return Ok(());
+        };
+        let mut journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
+        journal
+            .record(
+                scope,
+                seq,
+                site,
+                Effect::Model {
+                    outcome: record_from_outcome(outcome),
+                },
+            )
+            .map_err(|e| RuntimeError::new(e.to_string(), span))
+    }
+}
+
+impl Interpreter {
+    /// Journal one line of output. Returns false when the line was already
+    /// shown on an earlier attempt and must not be shown again.
+    fn record_output(&mut self, line: &str, span: Span) -> Result<bool, RuntimeError> {
+        let mut journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
+        if !journal.is_durable() {
+            return Ok(true);
+        }
+        let site = format!("{}:{}#output", self.program_name, span.line);
+        match journal
+            .next(&self.scope, &site)
+            .map_err(|e| RuntimeError::new(e.to_string(), span))?
+        {
+            Lookup::Replayed(_) => Ok(false),
+            Lookup::Fresh { scope, seq } => {
+                journal
+                    .record(
+                        scope,
+                        seq,
+                        &site,
+                        Effect::Output {
+                            text: line.to_string(),
+                        },
+                    )
+                    .map_err(|e| RuntimeError::new(e.to_string(), span))?;
+                Ok(true)
+            }
+        }
     }
 }

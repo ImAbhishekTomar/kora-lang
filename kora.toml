@@ -2,7 +2,7 @@
 # Everything here is optional; sensible defaults apply.
 
 [models]
-default = "local:llama3.2:latest"
+default = "local:qwen3:8b"
 smart   = "openai:gpt-4o"
 
 [models.openai]

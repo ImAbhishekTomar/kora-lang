@@ -224,6 +224,7 @@ version = "0.0.1"
 dependencies = [
  "kora-runtime",
  "kora-syntax",
+ "serde_json",
 ]
 
 [[package]]

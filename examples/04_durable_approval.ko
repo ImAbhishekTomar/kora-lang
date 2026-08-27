@@ -1,0 +1,46 @@
+# Phase 5: durable execution.
+#
+# This program calls a model, then stops and waits for a person. The process
+# exits. Hours or days later the answer arrives and the program continues on
+# the very next line, with everything it already computed intact -- no state
+# machine, no workflow YAML, no re-paying for the model calls.
+#
+#   kora run --durable examples/04_durable_approval.ko
+#   kora runs examples/04_durable_approval.ko
+#   kora answer examples/04_durable_approval.ko <run-id> yes
+
+type Assessment:
+    risk: str
+    reason: str
+
+def main():
+    request = "refund $4,200 to customer 8812, claims duplicate charge on invoice 55-A"
+
+    print("assessing the request...")
+
+    a: Assessment = analyze(request, "assess refund risk as low, medium, or high with a one-line reason")
+
+    match a:
+        case Ok(assessment):
+            print(f"risk: {assessment.risk} ({assessment.reason})")
+
+            if assessment.risk == "low":
+                print("auto-approved")
+            else:
+                # The program sleeps here. The process may exit entirely.
+                decision = ask_human(
+                    f"approve this {assessment.risk}-risk refund?",
+                    assessment.reason
+                )
+
+                if decision == "yes":
+                    print("approved by a human, submitting")
+                else:
+                    print(f"declined: {decision}")
+
+        case Uncertain(reason):
+            print(f"could not assess: {reason}")
+        case Exhausted(meter):
+            print(f"budget out of {meter}")
+
+    print("done")
