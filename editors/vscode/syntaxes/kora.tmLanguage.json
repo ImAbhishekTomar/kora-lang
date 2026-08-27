@@ -1,0 +1,81 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Kora",
+  "scopeName": "source.kora",
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#fstrings" },
+    { "include": "#strings" },
+    { "include": "#keywords" },
+    { "include": "#kora-keywords" },
+    { "include": "#types" },
+    { "include": "#constants" },
+    { "include": "#numbers" },
+    { "include": "#function-def" },
+    { "include": "#function-call" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "comments": {
+      "match": "#.*$",
+      "name": "comment.line.number-sign.kora"
+    },
+    "fstrings": {
+      "begin": "f(\"|')",
+      "end": "\\1",
+      "name": "string.interpolated.kora",
+      "patterns": [
+        {
+          "begin": "\\{",
+          "end": "\\}",
+          "name": "meta.embedded.expression.kora",
+          "patterns": [
+            { "include": "#keywords" },
+            { "include": "#constants" },
+            { "include": "#numbers" },
+            { "include": "#operators" }
+          ]
+        },
+        { "match": "\\\\.", "name": "constant.character.escape.kora" }
+      ]
+    },
+    "strings": {
+      "begin": "(\"|')",
+      "end": "\\1",
+      "name": "string.quoted.kora",
+      "patterns": [{ "match": "\\\\.", "name": "constant.character.escape.kora" }]
+    },
+    "keywords": {
+      "match": "\\b(def|if|elif|else|while|for|in|return|break|continue|pass|and|or|not|match|case|type)\\b",
+      "name": "keyword.control.kora"
+    },
+    "kora-keywords": {
+      "match": "\\b(analyze|agent|tool|budget|parallel|classified|declassify|ask_human|test|mock)\\b",
+      "name": "keyword.other.agent.kora"
+    },
+    "types": {
+      "match": "\\b(int|float|str|bool|list|dict|None)\\b",
+      "name": "support.type.kora"
+    },
+    "constants": {
+      "match": "\\b(True|False|None)\\b",
+      "name": "constant.language.kora"
+    },
+    "numbers": {
+      "match": "\\b\\d[\\d_]*(\\.\\d+)?\\b",
+      "name": "constant.numeric.kora"
+    },
+    "function-def": {
+      "match": "(?<=\\bdef\\s|\\bagent\\s|\\btool\\s)([A-Za-z_][A-Za-z0-9_]*)",
+      "name": "entity.name.function.kora"
+    },
+    "function-call": {
+      "match": "\\b([A-Za-z_][A-Za-z0-9_]*)(?=\\()",
+      "name": "entity.name.function.call.kora"
+    },
+    "operators": {
+      "match": "(\\*\\*|//|==|!=|<=|>=|->|\\+=|-=|\\*=|/=|[+\\-*/%<>=])",
+      "name": "keyword.operator.kora"
+    }
+  }
+}
