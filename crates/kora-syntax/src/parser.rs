@@ -39,7 +39,9 @@ impl Parser {
             TokenKind::Type => self.type_def(),
             TokenKind::Match => self.match_stmt(),
             TokenKind::Budget => self.budget_line(),
+            TokenKind::Declassify => self.declassify_stmt(),
             TokenKind::Parallel => self.parallel_for(None),
+            TokenKind::Classified => self.classified_assign(),
             TokenKind::Ident(name) if name == "with" && self.peek_next_is(&TokenKind::Budget) => {
                 self.with_stmt()
             }
@@ -110,6 +112,7 @@ impl Parser {
                     target: expr,
                     ty: Some(ty),
                     value,
+                    classified: false,
                 },
                 span,
             });
@@ -139,6 +142,7 @@ impl Parser {
                     target: expr,
                     ty: None,
                     value,
+                    classified: false,
                 },
                 span,
             });
@@ -344,6 +348,88 @@ impl Parser {
         Ok(spec)
     }
 
+    /// `classified name = value` / `classified name: Type = value`
+    fn classified_assign(&mut self) -> Result<Stmt, SyntaxError> {
+        let span = self.peek_span();
+        self.advance(); // classified
+        let name_span = self.peek_span();
+        let name = self.expect_ident("a variable name after `classified`")?;
+        let ty = if self.check(&TokenKind::Colon) {
+            self.advance();
+            Some(self.type_expr()?)
+        } else {
+            None
+        };
+        self.expect(&TokenKind::Eq, "expected `=` in a classified declaration")?;
+        let value = self.expression()?;
+        self.expect_newline("declaration")?;
+        Ok(Stmt {
+            kind: StmtKind::Assign {
+                target: Expr {
+                    kind: ExprKind::Name(name),
+                    span: name_span,
+                },
+                ty,
+                value,
+                classified: true,
+            },
+            span,
+        })
+    }
+
+    /// `declassify <expr> for <sink>:` block, optionally `as <name>`.
+    fn declassify_stmt(&mut self) -> Result<Stmt, SyntaxError> {
+        let span = self.peek_span();
+        self.advance(); // declassify
+        let value = self.expression()?;
+
+        // `as name` gives the block-local binding an explicit name.
+        let explicit_binding = match self.peek_kind() {
+            TokenKind::Ident(name) if name == "as" => {
+                self.advance();
+                Some(self.expect_ident("a name after `as`")?)
+            }
+            _ => None,
+        };
+
+        if !self.check(&TokenKind::For) {
+            return Err(SyntaxError::new(
+                format!(
+                    "expected `for <sink>` after the declassified value, found `{}`",
+                    self.peek_kind()
+                ),
+                self.peek_span(),
+            )
+            .with_hint("declassification always names where the data may go, e.g. `declassify ssn for local_model:`"));
+        }
+        self.advance(); // for
+        let sink = self.expect_ident("a sink name after `for`")?;
+
+        // Default binding: the variable name when the value is a plain name,
+        // so `declassify salary for local_model:` rebinds `salary` in-block.
+        let binding = match (explicit_binding, &value.kind) {
+            (Some(name), _) => name,
+            (None, ExprKind::Name(n)) => n.clone(),
+            (None, _) => {
+                return Err(
+                    SyntaxError::new("this declassified value needs a name", value.span)
+                        .with_hint("write `declassify <expr> as <name> for <sink>:`"),
+                );
+            }
+        };
+
+        let body = self.block("declassify block")?;
+        Ok(Stmt {
+            kind: StmtKind::Declassify {
+                value,
+                binding,
+                sink,
+                body,
+            },
+            span,
+        })
+    }
+
     /// `with budget(max_tokens = N):` block.
     fn with_stmt(&mut self) -> Result<Stmt, SyntaxError> {
         let span = self.peek_span();
@@ -413,6 +499,14 @@ impl Parser {
                 break;
             }
             let fspan = self.peek_span();
+            // `classified email: str` marks the field as sensitive; every
+            // value read from it carries the label.
+            let classified = if self.check(&TokenKind::Classified) {
+                self.advance();
+                true
+            } else {
+                false
+            };
             let fname = self.expect_ident("field name")?;
             self.expect(&TokenKind::Colon, "expected `:` after field name")?;
             let ty = self.type_expr()?;
@@ -420,6 +514,7 @@ impl Parser {
                 name: fname,
                 ty,
                 span: fspan,
+                classified,
             });
             self.expect_newline("field")?;
         }

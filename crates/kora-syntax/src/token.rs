@@ -60,6 +60,8 @@ pub enum TokenKind {
     Case,
     Agent,
     Tool,
+    Classified,
+    Declassify,
     Budget,
     Parallel,
 
@@ -133,6 +135,8 @@ impl fmt::Display for TokenKind {
             Case => write!(f, "case"),
             Agent => write!(f, "agent"),
             Tool => write!(f, "tool"),
+            Classified => write!(f, "classified"),
+            Declassify => write!(f, "declassify"),
             Budget => write!(f, "budget"),
             Parallel => write!(f, "parallel"),
             Plus => write!(f, "+"),

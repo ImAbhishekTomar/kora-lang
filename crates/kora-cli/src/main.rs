@@ -14,6 +14,7 @@ const USAGE: &str = "\
 usage:
   kora run <file.ko>           run a program
   kora <file.ko>               same as `kora run`
+  kora audit <file.ko>         list every declassification site
   kora --version               print version
 
 flags for `run`:
@@ -29,6 +30,13 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("run") => run_args(&args[1..]),
+        Some("audit") => match args.get(1) {
+            Some(path) => audit_file(path),
+            None => {
+                eprintln!("usage: kora audit <file.ko>");
+                ExitCode::from(2)
+            }
+        },
         Some(first) if first.ends_with(".ko") => run_args(&args),
         Some(other) => {
             eprintln!("kora: unknown command `{other}`");
@@ -69,6 +77,30 @@ fn run_args(args: &[String]) -> ExitCode {
     run_file(path, mode, report)
 }
 
+/// `kora audit` — the complete inventory of declassification sites.
+///
+/// Complete because every release goes through a `declassify` block, so the
+/// parser can enumerate them all. No Python framework can promise this list.
+fn audit_file(path: &str) -> ExitCode {
+    let source = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: cannot read `{path}`: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let program = match kora_syntax::parse(&source) {
+        Ok(p) => p,
+        Err(e) => {
+            eprint!("{}", e.render(&source, path));
+            return ExitCode::from(1);
+        }
+    };
+    let sites = kora_runtime::audit::audit(&program, path);
+    print!("{}", kora_runtime::audit::render(&sites));
+    ExitCode::SUCCESS
+}
+
 fn run_file(path: &str, mode: Mode, report: bool) -> ExitCode {
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
@@ -91,6 +123,7 @@ fn run_file(path: &str, mode: Mode, report: bool) -> ExitCode {
     interp.direct_stdout = true;
     interp.program_name = path.to_string();
     interp.config = Config::discover(program_path);
+    interp.sinks = interp.config.sinks.clone();
     interp.cassette = Some(std::sync::Arc::new(std::sync::Mutex::new(Cassette::open(
         mode,
         program_path,

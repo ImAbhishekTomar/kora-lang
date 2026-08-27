@@ -1,0 +1,36 @@
+{
+  "entries": [
+    {
+      "key": "51d0eb9a02f56eed",
+      "site": "examples/03_salary_review.ko:29",
+      "model": "ollama:llama3.2:latest",
+      "prompt": "assess whether pay is below, at, or above market; band must be one of below/at/above",
+      "data": "{\"market\":210,\"pay\":165,\"role\":\"staff engineer\"}",
+      "outcome": {
+        "kind": "ok",
+        "fields": {
+          "band": "below",
+          "rationale": ""
+        },
+        "tokens_in": 232,
+        "tokens_out": 20
+      }
+    },
+    {
+      "key": "feeb8834710e1fa8",
+      "site": "examples/03_salary_review.ko:29",
+      "model": "ollama:llama3.2:latest",
+      "prompt": "assess whether pay is below, at, or above market; band must be one of below/at/above",
+      "data": "{\"market\":175,\"pay\":180,\"role\":\"senior engineer\"}",
+      "outcome": {
+        "kind": "ok",
+        "fields": {
+          "band": "below",
+          "rationale": "pay is $5 below market"
+        },
+        "tokens_in": 233,
+        "tokens_out": 26
+      }
+    }
+  ]
+}
