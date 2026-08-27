@@ -1,0 +1,29 @@
+# Phase 3 target: agents, tools, parallel fan-out, budgets, failure handling.
+
+type Ticket:
+    severity: str        # "low" | "medium" | "high"
+    product: str
+    summary: str
+
+tool lookup_customer(email: str) -> Customer:
+    "Fetch customer record from billing DB."
+    return db.query("select * from customers where email = ?", email)
+
+agent triage(raw: str) -> Ticket:
+    budget: max_tokens = 20_000, max_steps = 5
+
+    t = analyze(raw, "classify this support ticket", tools=[lookup_customer])
+    match t:
+        case Ok(ticket):
+            return ticket
+        case Uncertain(reason):
+            return escalate(raw, reason)
+
+def main():
+    tickets = inbox.fetch_all()
+
+    results = parallel for t in tickets:
+        triage(t)
+
+    for r in results.failed():
+        log.warn(f"triage failed: {r.error}")

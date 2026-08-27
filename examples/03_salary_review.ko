@@ -1,0 +1,36 @@
+# Phases 4-5 target: classified data, scoped declassify, durable ask_human.
+
+type Assessment:
+    band: str            # "below" | "at" | "above"
+    rationale: str
+
+def main():
+    employees = db.load("hr.employees")     # schema marks salary, ssn classified
+
+    reviews = parallel for emp in employees:
+        review(emp)
+
+    report.save(reviews)
+
+agent review(emp: Employee) -> Assessment:
+
+    # salary is classified: allowed into the local model, never a vendor API
+    declassify emp.salary for local_model:
+        a: Assessment = analyze(
+            {role: emp.role, salary: emp.salary, market: market_data(emp.role)},
+            "assess pay against market"
+        )
+
+    if a.band == "below":
+        # program sleeps here -- hours or days. survives restarts.
+        decision = ask_human(f"raise for {emp.name}?", a.rationale)
+        if decision.approved:
+            hr.queue_adjustment(emp, decision.amount)
+
+    return a
+
+# These two lines must NOT compile (the thirty-second demo):
+#   analyze(emp.ssn, "anything")
+#     -> error: `emp.ssn` is classified, no declassify in scope [E0731]
+#   declassify emp.ssn for openai:
+#     -> error: policy forbids `classified` data to sink `openai`

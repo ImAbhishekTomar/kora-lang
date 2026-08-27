@@ -1,0 +1,15 @@
+# Phase 2 target: typed analyze, nothing exotic.
+
+type Expense:
+    merchant: str
+    amount: float
+    category: str        # "travel" | "meals" | "software" | "other"
+    policy_violation: bool
+
+def main():
+    rows = load_csv("expenses.csv")
+
+    for row in rows:
+        e: Expense = analyze(row, "extract expense details, flag policy violations")
+        if e.policy_violation:
+            print(f"FLAG: {e.merchant} ${e.amount} ({e.category})")

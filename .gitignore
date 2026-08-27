@@ -1,0 +1,14 @@
+# Rust build artifacts
+/target/
+
+# Local OS and editor files
+.DS_Store
+.idea/
+
+# VS Code extension dependencies and packages
+/editors/vscode/node_modules/
+/editors/vscode/*.vsix
+
+# Runtime-generated artifacts
+/cassettes/
+*.trace

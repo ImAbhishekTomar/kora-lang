@@ -1,0 +1,28 @@
+# Kora project configuration — reference example.
+# Everything here is optional; sensible defaults apply.
+
+[models]
+default = "local:llama3.1-8b"      # Ollama, localhost
+smart   = "openai:gpt-4o"
+
+[models.openai]
+max_output_tokens = 4096            # bounds worst-case budget reservation
+
+[models.local]
+endpoint = "http://localhost:11434"
+
+[budget]
+program_max_tokens = 2_000_000      # hard wall for any run of this project
+warn_at = "80%"
+
+[budget.pricing]                    # optional: display-only cost estimates
+"openai:gpt-4o" = { per_1k_in = 0.0025, per_1k_out = 0.01, currency = "USD" }
+
+[sinks]                             # classified/declassify policy
+local_model = { allow = ["classified", "internal"] }
+openai      = { allow = ["internal"], deny = ["classified"] }
+
+[telemetry]
+exporter = "file"                   # "file" | "otlp"
+level = "calls"                     # off | agents | calls | full
+redact = true                       # classified values never exported
