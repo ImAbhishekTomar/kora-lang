@@ -1,0 +1,53 @@
+{
+  "name": "kora-lang",
+  "displayName": "Kora Language",
+  "description": "Syntax highlighting and run support for the Kora programming language (.ko)",
+  "version": "0.0.1",
+  "publisher": "kora-lang",
+  "license": "MIT",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Programming Languages"],
+  "main": "./src/extension.js",
+  "activationEvents": ["onLanguage:kora"],
+  "contributes": {
+    "languages": [
+      {
+        "id": "kora",
+        "aliases": ["Kora", "kora"],
+        "extensions": [".ko"],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "kora",
+        "scopeName": "source.kora",
+        "path": "./syntaxes/kora.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "kora.runFile",
+        "title": "Kora: Run Current File",
+        "icon": "$(play)"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "kora.runFile",
+          "when": "resourceLangId == kora",
+          "group": "navigation"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "kora.runFile",
+        "key": "ctrl+shift+r",
+        "mac": "cmd+shift+r",
+        "when": "resourceLangId == kora && editorTextFocus"
+      }
+    ]
+  }
+}

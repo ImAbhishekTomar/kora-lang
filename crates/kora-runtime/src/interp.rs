@@ -1,0 +1,1017 @@
+//! Tree-walking interpreter (execution Stage 1 per DECISIONS.md).
+
+use std::cell::RefCell;
+use std::collections::HashMap;
+use std::rc::Rc;
+
+use kora_syntax::ast::*;
+use kora_syntax::token::Span;
+
+use crate::value::Value;
+
+/// A runtime error, source-anchored like syntax errors.
+#[derive(Debug, Clone)]
+pub struct RuntimeError {
+    pub message: String,
+    pub hint: Option<String>,
+    pub span: Span,
+}
+
+impl RuntimeError {
+    fn new(message: impl Into<String>, span: Span) -> Self {
+        RuntimeError {
+            message: message.into(),
+            hint: None,
+            span,
+        }
+    }
+
+    fn with_hint(mut self, hint: impl Into<String>) -> Self {
+        self.hint = Some(hint.into());
+        self
+    }
+
+    pub fn render(&self, source: &str, filename: &str) -> String {
+        let line_no = self.span.line as usize;
+        let col = self.span.col as usize;
+        let src_line = source.lines().nth(line_no.saturating_sub(1)).unwrap_or("");
+        let gutter = format!("{line_no}");
+        let pad = " ".repeat(gutter.len());
+        let caret_pad = " ".repeat(col.saturating_sub(1));
+        let mut out = format!(
+            "error: {msg}\n {pad}--> {filename}:{line_no}:{col}\n {pad} |\n {gutter} | {src_line}\n {pad} | {caret_pad}^\n",
+            msg = self.message,
+        );
+        if let Some(hint) = &self.hint {
+            out.push_str(&format!(" {pad} = hint: {hint}\n"));
+        }
+        out
+    }
+}
+
+/// Non-error control flow escaping a block.
+enum Flow {
+    Normal,
+    Break,
+    Continue,
+    Return(Value),
+}
+
+/// One lexical scope frame.
+type Scope = HashMap<String, Value>;
+
+pub struct Interpreter {
+    /// Global scope, then a stack of function-call scopes.
+    globals: Scope,
+    /// User `type` declarations: name -> field list.
+    types: HashMap<String, Vec<FieldDef>>,
+    /// Where `print` writes (swappable for tests).
+    pub output: Vec<String>,
+    /// Print directly to stdout (true for `kora run`), or capture (tests).
+    pub direct_stdout: bool,
+}
+
+const BUILTINS: &[&str] = &[
+    "print", "len", "range", "str", "int", "float", "bool", "abs", "min", "max", "sum", "sorted",
+    "append", "keys", "values",
+];
+
+impl Default for Interpreter {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Interpreter {
+    pub fn new() -> Self {
+        Interpreter {
+            globals: HashMap::new(),
+            types: HashMap::new(),
+            output: Vec::new(),
+            direct_stdout: false,
+        }
+    }
+
+    /// Run a whole program: execute top-level statements, then call `main()`
+    /// if it was defined.
+    pub fn run(&mut self, program: &Program) -> Result<(), RuntimeError> {
+        let mut scope = HashMap::new();
+        for stmt in &program.items {
+            if let Flow::Return(_) = self.exec(stmt, &mut scope)? {
+                break;
+            }
+        }
+        // Promote top-level bindings into globals.
+        self.globals.extend(scope);
+
+        if let Some(Value::Func(main_fn)) = self.globals.get("main").cloned() {
+            if !main_fn.params.is_empty() {
+                return Err(RuntimeError::new(
+                    "main() must take no parameters",
+                    Span::new(0, 0, 1, 1),
+                ));
+            }
+            self.call_function(&main_fn, vec![], Span::new(0, 0, 1, 1))?;
+        }
+        Ok(())
+    }
+
+    // --- statements ---
+
+    fn exec(&mut self, stmt: &Stmt, scope: &mut Scope) -> Result<Flow, RuntimeError> {
+        match &stmt.kind {
+            StmtKind::Expr(e) => {
+                self.eval(e, scope)?;
+                Ok(Flow::Normal)
+            }
+            StmtKind::Assign { target, ty, value } => {
+                let v = self.eval(value, scope)?;
+                if let Some(t) = ty {
+                    self.check_annotation(&v, t, value.span)?;
+                }
+                self.assign(target, v, scope)?;
+                Ok(Flow::Normal)
+            }
+            StmtKind::AugAssign { target, op, value } => {
+                let current = self.eval(target, scope)?;
+                let rhs = self.eval(value, scope)?;
+                let result = self.binop(*op, current, rhs, stmt.span)?;
+                self.assign(target, result, scope)?;
+                Ok(Flow::Normal)
+            }
+            StmtKind::If {
+                branches,
+                else_body,
+            } => {
+                for (cond, body) in branches {
+                    if self.eval(cond, scope)?.truthy() {
+                        return self.exec_block(body, scope);
+                    }
+                }
+                if let Some(body) = else_body {
+                    return self.exec_block(body, scope);
+                }
+                Ok(Flow::Normal)
+            }
+            StmtKind::While { cond, body } => {
+                while self.eval(cond, scope)?.truthy() {
+                    match self.exec_block(body, scope)? {
+                        Flow::Break => break,
+                        Flow::Continue | Flow::Normal => {}
+                        ret @ Flow::Return(_) => return Ok(ret),
+                    }
+                }
+                Ok(Flow::Normal)
+            }
+            StmtKind::For { var, iter, body } => {
+                let iterable = self.eval(iter, scope)?;
+                let items = self.iterate(iterable, iter.span)?;
+                for item in items {
+                    scope.insert(var.clone(), item);
+                    match self.exec_block(body, scope)? {
+                        Flow::Break => break,
+                        Flow::Continue | Flow::Normal => {}
+                        ret @ Flow::Return(_) => return Ok(ret),
+                    }
+                }
+                Ok(Flow::Normal)
+            }
+            StmtKind::FuncDef(f) => {
+                let func = Value::Func(Rc::new(f.clone()));
+                scope.insert(f.name.clone(), func.clone());
+                // Register globally right away so recursion and forward calls
+                // from other functions resolve.
+                self.globals.insert(f.name.clone(), func);
+                Ok(Flow::Normal)
+            }
+            StmtKind::TypeDef { name, fields } => {
+                self.types.insert(name.clone(), fields.clone());
+                Ok(Flow::Normal)
+            }
+            StmtKind::Return(value) => {
+                let v = match value {
+                    Some(e) => self.eval(e, scope)?,
+                    None => Value::None,
+                };
+                Ok(Flow::Return(v))
+            }
+            StmtKind::Break => Ok(Flow::Break),
+            StmtKind::Continue => Ok(Flow::Continue),
+            StmtKind::Pass => Ok(Flow::Normal),
+        }
+    }
+
+    fn exec_block(&mut self, body: &[Stmt], scope: &mut Scope) -> Result<Flow, RuntimeError> {
+        for stmt in body {
+            match self.exec(stmt, scope)? {
+                Flow::Normal => {}
+                other => return Ok(other),
+            }
+        }
+        Ok(Flow::Normal)
+    }
+
+    fn assign(
+        &mut self,
+        target: &Expr,
+        value: Value,
+        scope: &mut Scope,
+    ) -> Result<(), RuntimeError> {
+        match &target.kind {
+            ExprKind::Name(name) => {
+                scope.insert(name.clone(), value);
+                Ok(())
+            }
+            ExprKind::Attr { object, name } => {
+                let obj = self.eval(object, scope)?;
+                match obj {
+                    Value::Object { fields, .. } => {
+                        fields.borrow_mut().insert(name.clone(), value);
+                        Ok(())
+                    }
+                    other => Err(RuntimeError::new(
+                        format!("cannot set attribute on {}", other.type_name()),
+                        target.span,
+                    )),
+                }
+            }
+            ExprKind::Index { object, index } => {
+                let obj = self.eval(object, scope)?;
+                let idx = self.eval(index, scope)?;
+                match (obj, idx) {
+                    (Value::List(items), Value::Int(i)) => {
+                        let mut items = items.borrow_mut();
+                        let len = items.len();
+                        let real = normalize_index(i, len).ok_or_else(|| {
+                            RuntimeError::new(
+                                format!("list index {i} out of range (length {len})"),
+                                target.span,
+                            )
+                        })?;
+                        items[real] = value;
+                        Ok(())
+                    }
+                    (Value::Dict(map), Value::Str(key)) => {
+                        map.borrow_mut().insert(key.to_string(), value);
+                        Ok(())
+                    }
+                    (obj, idx) => Err(RuntimeError::new(
+                        format!("cannot index {} with {}", obj.type_name(), idx.type_name()),
+                        target.span,
+                    )),
+                }
+            }
+            _ => Err(RuntimeError::new("invalid assignment target", target.span)),
+        }
+    }
+
+    /// Phase 1 annotation check: verify the value's runtime type matches the
+    /// annotation. The static checker (kora-types) will subsume this later.
+    fn check_annotation(&self, v: &Value, ty: &TypeExpr, span: Span) -> Result<(), RuntimeError> {
+        let expected = match ty {
+            TypeExpr::Name(n) => n.clone(),
+            TypeExpr::Generic(n, _) => n.clone(),
+        };
+        let actual = v.type_name();
+        let ok = match expected.as_str() {
+            "int" => matches!(v, Value::Int(_)),
+            "float" => matches!(v, Value::Float(_) | Value::Int(_)),
+            "str" => matches!(v, Value::Str(_)),
+            "bool" => matches!(v, Value::Bool(_)),
+            "list" => matches!(v, Value::List(_)),
+            "dict" => matches!(v, Value::Dict(_)),
+            name => match v {
+                Value::Object { type_name, .. } => type_name.as_str() == name,
+                _ => {
+                    // Unknown annotation on a non-object: only fail when we
+                    // know the type exists (declared via `type`).
+                    !self.types.contains_key(name)
+                }
+            },
+        };
+        if ok {
+            Ok(())
+        } else {
+            Err(RuntimeError::new(
+                format!("expected `{}`, got `{}`", ty.display(), actual),
+                span,
+            ))
+        }
+    }
+
+    // --- expressions ---
+
+    fn eval(&mut self, expr: &Expr, scope: &mut Scope) -> Result<Value, RuntimeError> {
+        match &expr.kind {
+            ExprKind::Int(v) => Ok(Value::Int(*v)),
+            ExprKind::Float(v) => Ok(Value::Float(*v)),
+            ExprKind::Str(s) => Ok(Value::Str(Rc::new(s.clone()))),
+            ExprKind::Bool(b) => Ok(Value::Bool(*b)),
+            ExprKind::None => Ok(Value::None),
+            ExprKind::Name(name) => self.lookup(name, scope, expr.span),
+            ExprKind::FString { parts, exprs } => {
+                let mut out = String::new();
+                for (i, part) in parts.iter().enumerate() {
+                    out.push_str(part);
+                    if i < exprs.len() {
+                        let v = self.eval(&exprs[i], scope)?;
+                        out.push_str(&v.to_string());
+                    }
+                }
+                Ok(Value::Str(Rc::new(out)))
+            }
+            ExprKind::List(items) => {
+                let mut vals = Vec::with_capacity(items.len());
+                for item in items {
+                    vals.push(self.eval(item, scope)?);
+                }
+                Ok(Value::List(Rc::new(RefCell::new(vals))))
+            }
+            ExprKind::Dict(pairs) => {
+                let mut map = HashMap::new();
+                for (k, v) in pairs {
+                    let key = match self.eval(k, scope)? {
+                        Value::Str(s) => s.to_string(),
+                        other => {
+                            return Err(RuntimeError::new(
+                                format!("dict keys must be strings, got {}", other.type_name()),
+                                k.span,
+                            ));
+                        }
+                    };
+                    map.insert(key, self.eval(v, scope)?);
+                }
+                Ok(Value::Dict(Rc::new(RefCell::new(map))))
+            }
+            ExprKind::Unary { op, operand } => {
+                let v = self.eval(operand, scope)?;
+                match op {
+                    UnaryOp::Not => Ok(Value::Bool(!v.truthy())),
+                    UnaryOp::Neg => match v {
+                        Value::Int(i) => Ok(Value::Int(-i)),
+                        Value::Float(f) => Ok(Value::Float(-f)),
+                        other => Err(RuntimeError::new(
+                            format!("cannot negate {}", other.type_name()),
+                            expr.span,
+                        )),
+                    },
+                }
+            }
+            ExprKind::Binary { op, left, right } => {
+                // Short-circuit logic first.
+                match op {
+                    BinOp::And => {
+                        let l = self.eval(left, scope)?;
+                        if !l.truthy() {
+                            return Ok(l);
+                        }
+                        return self.eval(right, scope);
+                    }
+                    BinOp::Or => {
+                        let l = self.eval(left, scope)?;
+                        if l.truthy() {
+                            return Ok(l);
+                        }
+                        return self.eval(right, scope);
+                    }
+                    _ => {}
+                }
+                let l = self.eval(left, scope)?;
+                let r = self.eval(right, scope)?;
+                self.binop(*op, l, r, expr.span)
+            }
+            ExprKind::Attr { object, name } => {
+                let obj = self.eval(object, scope)?;
+                match &obj {
+                    Value::Object { fields, type_name } => {
+                        fields.borrow().get(name).cloned().ok_or_else(|| {
+                            let available: Vec<String> = fields.borrow().keys().cloned().collect();
+                            RuntimeError::new(
+                                format!("`{type_name}` has no field `{name}`"),
+                                expr.span,
+                            )
+                            .with_hint(format!("available fields: {}", available.join(", ")))
+                        })
+                    }
+                    // Method-style builtins on lists/dicts resolve at call time;
+                    // represent as a bound marker the Call arm understands.
+                    Value::List(_) | Value::Dict(_) | Value::Str(_) => Err(RuntimeError::new(
+                        format!("`{}` has no attribute `{name}`", obj.type_name()),
+                        expr.span,
+                    )
+                    .with_hint("method calls like xs.append(v) are written append(xs, v) for now")),
+                    other => Err(RuntimeError::new(
+                        format!("`{}` has no attribute `{name}`", other.type_name()),
+                        expr.span,
+                    )),
+                }
+            }
+            ExprKind::Index { object, index } => {
+                let obj = self.eval(object, scope)?;
+                let idx = self.eval(index, scope)?;
+                match (&obj, &idx) {
+                    (Value::List(items), Value::Int(i)) => {
+                        let items = items.borrow();
+                        let real = normalize_index(*i, items.len()).ok_or_else(|| {
+                            RuntimeError::new(
+                                format!("list index {i} out of range (length {})", items.len()),
+                                expr.span,
+                            )
+                        })?;
+                        Ok(items[real].clone())
+                    }
+                    (Value::Dict(map), Value::Str(key)) => {
+                        map.borrow().get(key.as_str()).cloned().ok_or_else(|| {
+                            RuntimeError::new(format!("key \"{key}\" not found"), expr.span)
+                        })
+                    }
+                    (Value::Str(s), Value::Int(i)) => {
+                        let chars: Vec<char> = s.chars().collect();
+                        let real = normalize_index(*i, chars.len()).ok_or_else(|| {
+                            RuntimeError::new(format!("string index {i} out of range"), expr.span)
+                        })?;
+                        Ok(Value::Str(Rc::new(chars[real].to_string())))
+                    }
+                    _ => Err(RuntimeError::new(
+                        format!("cannot index {} with {}", obj.type_name(), idx.type_name()),
+                        expr.span,
+                    )),
+                }
+            }
+            ExprKind::Slice {
+                object,
+                start,
+                stop,
+            } => {
+                let obj = self.eval(object, scope)?;
+                let start_v = match start {
+                    Some(e) => Some(self.expect_int(e, scope)?),
+                    None => None,
+                };
+                let stop_v = match stop {
+                    Some(e) => Some(self.expect_int(e, scope)?),
+                    None => None,
+                };
+                match obj {
+                    Value::List(items) => {
+                        let items = items.borrow();
+                        let (a, b) = slice_bounds(start_v, stop_v, items.len());
+                        Ok(Value::List(Rc::new(RefCell::new(items[a..b].to_vec()))))
+                    }
+                    Value::Str(s) => {
+                        let chars: Vec<char> = s.chars().collect();
+                        let (a, b) = slice_bounds(start_v, stop_v, chars.len());
+                        Ok(Value::Str(Rc::new(chars[a..b].iter().collect())))
+                    }
+                    other => Err(RuntimeError::new(
+                        format!("cannot slice {}", other.type_name()),
+                        expr.span,
+                    )),
+                }
+            }
+            ExprKind::Call { callee, args } => {
+                let mut arg_vals = Vec::with_capacity(args.len());
+                for a in args {
+                    arg_vals.push(self.eval(a, scope)?);
+                }
+                // Type constructor? `Expense(...)` — not yet; Phase 1 uses
+                // named-field dict later. Function or builtin:
+                match &callee.kind {
+                    ExprKind::Name(name) => {
+                        if let Some(fields) = self.types.get(name).cloned() {
+                            return self.construct(name, &fields, arg_vals, expr.span);
+                        }
+                        match self.lookup(name, scope, callee.span)? {
+                            Value::Func(f) => self.call_function(&f, arg_vals, expr.span),
+                            Value::Builtin(b) => self.call_builtin(b, arg_vals, expr.span),
+                            other => Err(RuntimeError::new(
+                                format!("{} is not callable", other.type_name()),
+                                expr.span,
+                            )),
+                        }
+                    }
+                    _ => {
+                        let target = self.eval(callee, scope)?;
+                        match target {
+                            Value::Func(f) => self.call_function(&f, arg_vals, expr.span),
+                            Value::Builtin(b) => self.call_builtin(b, arg_vals, expr.span),
+                            other => Err(RuntimeError::new(
+                                format!("{} is not callable", other.type_name()),
+                                expr.span,
+                            )),
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    fn expect_int(&mut self, e: &Expr, scope: &mut Scope) -> Result<i64, RuntimeError> {
+        match self.eval(e, scope)? {
+            Value::Int(i) => Ok(i),
+            other => Err(RuntimeError::new(
+                format!("expected an integer, got {}", other.type_name()),
+                e.span,
+            )),
+        }
+    }
+
+    fn lookup(&self, name: &str, scope: &Scope, span: Span) -> Result<Value, RuntimeError> {
+        if let Some(v) = scope.get(name) {
+            return Ok(v.clone());
+        }
+        if let Some(v) = self.globals.get(name) {
+            return Ok(v.clone());
+        }
+        if BUILTINS.contains(&name) {
+            return Ok(Value::Builtin(
+                BUILTINS.iter().find(|b| **b == name).unwrap(),
+            ));
+        }
+        let mut err = RuntimeError::new(format!("name `{name}` is not defined"), span);
+        // Suggest close matches (simple case-insensitive + edit-distance-1).
+        let candidates: Vec<&String> = scope
+            .keys()
+            .chain(self.globals.keys())
+            .filter(|k| close_enough(k, name))
+            .collect();
+        if let Some(c) = candidates.first() {
+            err = err.with_hint(format!("did you mean `{c}`?"));
+        }
+        Err(err)
+    }
+
+    fn construct(
+        &mut self,
+        type_name: &str,
+        fields: &[FieldDef],
+        args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, RuntimeError> {
+        if args.len() != fields.len() {
+            return Err(RuntimeError::new(
+                format!(
+                    "`{type_name}` takes {} field(s), got {} argument(s)",
+                    fields.len(),
+                    args.len()
+                ),
+                span,
+            )
+            .with_hint(format!(
+                "fields in order: {}",
+                fields
+                    .iter()
+                    .map(|f| f.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )));
+        }
+        let mut map = HashMap::new();
+        for (fd, v) in fields.iter().zip(args) {
+            map.insert(fd.name.clone(), v);
+        }
+        Ok(Value::Object {
+            type_name: Rc::new(type_name.to_string()),
+            fields: Rc::new(RefCell::new(map)),
+        })
+    }
+
+    fn call_function(
+        &mut self,
+        f: &FuncDef,
+        args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, RuntimeError> {
+        if args.len() != f.params.len() {
+            return Err(RuntimeError::new(
+                format!(
+                    "{}() takes {} argument(s), got {}",
+                    f.name,
+                    f.params.len(),
+                    args.len()
+                ),
+                span,
+            ));
+        }
+        let mut local: Scope = HashMap::new();
+        for (p, v) in f.params.iter().zip(args) {
+            if let Some(ty) = &p.ty {
+                self.check_annotation(&v, ty, p.span).map_err(|e| {
+                    RuntimeError::new(
+                        format!("argument `{}` of {}(): {}", p.name, f.name, e.message),
+                        span,
+                    )
+                })?;
+            }
+            local.insert(p.name.clone(), v);
+        }
+        match self.exec_block(&f.body, &mut local)? {
+            Flow::Return(v) => Ok(v),
+            _ => Ok(Value::None),
+        }
+    }
+
+    // --- operators ---
+
+    fn binop(&self, op: BinOp, l: Value, r: Value, span: Span) -> Result<Value, RuntimeError> {
+        use BinOp::*;
+        use Value::*;
+        match op {
+            Add => match (l, r) {
+                (Int(a), Int(b)) => Ok(Int(a + b)),
+                (Float(a), Float(b)) => Ok(Float(a + b)),
+                (Int(a), Float(b)) => Ok(Float(a as f64 + b)),
+                (Float(a), Int(b)) => Ok(Float(a + b as f64)),
+                (Str(a), Str(b)) => Ok(Str(Rc::new(format!("{a}{b}")))),
+                (List(a), List(b)) => {
+                    let mut out = a.borrow().clone();
+                    out.extend(b.borrow().iter().cloned());
+                    Ok(List(Rc::new(RefCell::new(out))))
+                }
+                (Str(a), other) => Err(RuntimeError::new(
+                    format!("cannot add str and {}", other.type_name()),
+                    span,
+                )
+                .with_hint(format!(
+                    "convert first: \"{a}\" + str(value), or use an f-string"
+                ))),
+                (l, r) => Err(RuntimeError::new(
+                    format!("cannot add {} and {}", l.type_name(), r.type_name()),
+                    span,
+                )),
+            },
+            Sub | Mul | Div | FloorDiv | Mod | Pow => self.arith(op, l, r, span),
+            Eq => Ok(Bool(l.same(&r))),
+            NotEq => Ok(Bool(!l.same(&r))),
+            Lt | Gt | LtEq | GtEq => self.compare(op, l, r, span),
+            In | NotIn => {
+                let found = match &r {
+                    List(items) => items.borrow().iter().any(|v| v.same(&l)),
+                    Dict(map) => match &l {
+                        Str(s) => map.borrow().contains_key(s.as_str()),
+                        _ => false,
+                    },
+                    Str(hay) => match &l {
+                        Str(needle) => hay.contains(needle.as_str()),
+                        _ => {
+                            return Err(RuntimeError::new(
+                                "`in` on a string needs a string on the left",
+                                span,
+                            ));
+                        }
+                    },
+                    other => {
+                        return Err(RuntimeError::new(
+                            format!("`in` needs a list, dict, or str, got {}", other.type_name()),
+                            span,
+                        ));
+                    }
+                };
+                Ok(Bool(if op == In { found } else { !found }))
+            }
+            And | Or => unreachable!("short-circuited earlier"),
+        }
+    }
+
+    fn arith(&self, op: BinOp, l: Value, r: Value, span: Span) -> Result<Value, RuntimeError> {
+        use Value::*;
+        // Special case: str * int repetition.
+        if let (BinOp::Mul, Str(s), Int(n)) = (op, &l, &r) {
+            return Ok(Str(Rc::new(s.repeat((*n).max(0) as usize))));
+        }
+        let as_pair = match (&l, &r) {
+            (Int(a), Int(b)) => Some((*a as f64, *b as f64, true)),
+            (Float(a), Float(b)) => Some((*a, *b, false)),
+            (Int(a), Float(b)) => Some((*a as f64, *b, false)),
+            (Float(a), Int(b)) => Some((*a, *b as f64, false)),
+            _ => Option::None,
+        };
+        let (a, b, both_int) = as_pair.ok_or_else(|| {
+            RuntimeError::new(
+                format!(
+                    "cannot apply `{}` to {} and {}",
+                    op.symbol(),
+                    l.type_name(),
+                    r.type_name()
+                ),
+                span,
+            )
+        })?;
+        if matches!(op, BinOp::Div | BinOp::FloorDiv | BinOp::Mod) && b == 0.0 {
+            return Err(RuntimeError::new("division by zero", span));
+        }
+        Ok(match op {
+            BinOp::Sub => {
+                if both_int {
+                    Int((a - b) as i64)
+                } else {
+                    Float(a - b)
+                }
+            }
+            BinOp::Mul => {
+                if both_int {
+                    Int((a * b) as i64)
+                } else {
+                    Float(a * b)
+                }
+            }
+            BinOp::Div => Float(a / b),
+            BinOp::FloorDiv => {
+                if both_int {
+                    Int((a / b).floor() as i64)
+                } else {
+                    Float((a / b).floor())
+                }
+            }
+            BinOp::Mod => {
+                if both_int {
+                    Int((a.rem_euclid(b)) as i64)
+                } else {
+                    Float(a.rem_euclid(b))
+                }
+            }
+            BinOp::Pow => {
+                if both_int && b >= 0.0 {
+                    Int(a.powf(b) as i64)
+                } else {
+                    Float(a.powf(b))
+                }
+            }
+            _ => unreachable!(),
+        })
+    }
+
+    fn compare(&self, op: BinOp, l: Value, r: Value, span: Span) -> Result<Value, RuntimeError> {
+        use Value::*;
+        let ord = match (&l, &r) {
+            (Int(a), Int(b)) => (*a as f64).partial_cmp(&(*b as f64)),
+            (Float(a), Float(b)) => a.partial_cmp(b),
+            (Int(a), Float(b)) => (*a as f64).partial_cmp(b),
+            (Float(a), Int(b)) => a.partial_cmp(&(*b as f64)),
+            (Str(a), Str(b)) => Some(a.cmp(b)),
+            _ => Option::None,
+        };
+        let ord = ord.ok_or_else(|| {
+            RuntimeError::new(
+                format!(
+                    "cannot compare {} and {} with `{}`",
+                    l.type_name(),
+                    r.type_name(),
+                    op.symbol()
+                ),
+                span,
+            )
+        })?;
+        use std::cmp::Ordering::*;
+        Ok(Bool(match op {
+            BinOp::Lt => ord == Less,
+            BinOp::Gt => ord == Greater,
+            BinOp::LtEq => ord != Greater,
+            BinOp::GtEq => ord != Less,
+            _ => unreachable!(),
+        }))
+    }
+
+    // --- iteration & builtins ---
+
+    fn iterate(&self, v: Value, span: Span) -> Result<Vec<Value>, RuntimeError> {
+        match v {
+            Value::List(items) => Ok(items.borrow().clone()),
+            Value::Str(s) => Ok(s
+                .chars()
+                .map(|c| Value::Str(Rc::new(c.to_string())))
+                .collect()),
+            Value::Dict(map) => Ok(map
+                .borrow()
+                .keys()
+                .map(|k| Value::Str(Rc::new(k.clone())))
+                .collect()),
+            other => Err(RuntimeError::new(
+                format!("cannot loop over {}", other.type_name()),
+                span,
+            )
+            .with_hint("loop over a list, string, dict, or range(...)")),
+        }
+    }
+
+    fn call_builtin(
+        &mut self,
+        name: &str,
+        args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, RuntimeError> {
+        let argc = args.len();
+        let wrong = |want: &str| {
+            Err(RuntimeError::new(
+                format!("{name}() expects {want}, got {argc} argument(s)"),
+                span,
+            ))
+        };
+        match name {
+            "print" => {
+                let line = args
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if self.direct_stdout {
+                    println!("{line}");
+                } else {
+                    self.output.push(line);
+                }
+                Ok(Value::None)
+            }
+            "len" => match args.as_slice() {
+                [Value::List(l)] => Ok(Value::Int(l.borrow().len() as i64)),
+                [Value::Str(s)] => Ok(Value::Int(s.chars().count() as i64)),
+                [Value::Dict(d)] => Ok(Value::Int(d.borrow().len() as i64)),
+                [other] => Err(RuntimeError::new(
+                    format!("len() does not work on {}", other.type_name()),
+                    span,
+                )),
+                _ => wrong("1 argument"),
+            },
+            "range" => {
+                let (start, stop) = match args.as_slice() {
+                    [Value::Int(stop)] => (0, *stop),
+                    [Value::Int(start), Value::Int(stop)] => (*start, *stop),
+                    _ => return wrong("1 or 2 integers"),
+                };
+                Ok(Value::List(Rc::new(RefCell::new(
+                    (start..stop).map(Value::Int).collect(),
+                ))))
+            }
+            "str" => match args.as_slice() {
+                [v] => Ok(Value::Str(Rc::new(v.to_string()))),
+                _ => wrong("1 argument"),
+            },
+            "int" => {
+                match args.as_slice() {
+                    [Value::Int(v)] => Ok(Value::Int(*v)),
+                    [Value::Float(v)] => Ok(Value::Int(*v as i64)),
+                    [Value::Str(s)] => s.trim().parse::<i64>().map(Value::Int).map_err(|_| {
+                        RuntimeError::new(format!("cannot convert \"{s}\" to int"), span)
+                    }),
+                    [Value::Bool(b)] => Ok(Value::Int(*b as i64)),
+                    _ => wrong("1 argument"),
+                }
+            }
+            "float" => match args.as_slice() {
+                [Value::Int(v)] => Ok(Value::Float(*v as f64)),
+                [Value::Float(v)] => Ok(Value::Float(*v)),
+                [Value::Str(s)] => s.trim().parse::<f64>().map(Value::Float).map_err(|_| {
+                    RuntimeError::new(format!("cannot convert \"{s}\" to float"), span)
+                }),
+                _ => wrong("1 argument"),
+            },
+            "bool" => match args.as_slice() {
+                [v] => Ok(Value::Bool(v.truthy())),
+                _ => wrong("1 argument"),
+            },
+            "abs" => match args.as_slice() {
+                [Value::Int(v)] => Ok(Value::Int(v.abs())),
+                [Value::Float(v)] => Ok(Value::Float(v.abs())),
+                _ => wrong("1 number"),
+            },
+            "min" | "max" => {
+                let items: Vec<Value> = match args.as_slice() {
+                    [Value::List(l)] => l.borrow().clone(),
+                    _ if argc >= 2 => args,
+                    _ => return wrong("a list or 2+ arguments"),
+                };
+                if items.is_empty() {
+                    return Err(RuntimeError::new(format!("{name}() of empty list"), span));
+                }
+                let mut best = items[0].clone();
+                for item in &items[1..] {
+                    let take = match self.compare(
+                        if name == "min" { BinOp::Lt } else { BinOp::Gt },
+                        item.clone(),
+                        best.clone(),
+                        span,
+                    )? {
+                        Value::Bool(b) => b,
+                        _ => unreachable!(),
+                    };
+                    if take {
+                        best = item.clone();
+                    }
+                }
+                Ok(best)
+            }
+            "sum" => match args.as_slice() {
+                [Value::List(l)] => {
+                    let mut acc = Value::Int(0);
+                    for item in l.borrow().iter() {
+                        acc = self.binop(BinOp::Add, acc, item.clone(), span)?;
+                    }
+                    Ok(acc)
+                }
+                _ => wrong("a list"),
+            },
+            "sorted" => match args.as_slice() {
+                [Value::List(l)] => {
+                    let mut items = l.borrow().clone();
+                    let mut err = None;
+                    items.sort_by(|a, b| {
+                        match self.compare(BinOp::Lt, a.clone(), b.clone(), span) {
+                            Ok(Value::Bool(true)) => std::cmp::Ordering::Less,
+                            Ok(_) => std::cmp::Ordering::Greater,
+                            Err(e) => {
+                                err.get_or_insert(e);
+                                std::cmp::Ordering::Equal
+                            }
+                        }
+                    });
+                    if let Some(e) = err {
+                        return Err(e);
+                    }
+                    Ok(Value::List(Rc::new(RefCell::new(items))))
+                }
+                _ => wrong("a list"),
+            },
+            "append" => match args.as_slice() {
+                [Value::List(l), v] => {
+                    l.borrow_mut().push(v.clone());
+                    Ok(Value::None)
+                }
+                _ => wrong("a list and a value"),
+            },
+            "keys" => match args.as_slice() {
+                [Value::Dict(d)] => Ok(Value::List(Rc::new(RefCell::new(
+                    d.borrow()
+                        .keys()
+                        .map(|k| Value::Str(Rc::new(k.clone())))
+                        .collect(),
+                )))),
+                _ => wrong("a dict"),
+            },
+            "values" => match args.as_slice() {
+                [Value::Dict(d)] => Ok(Value::List(Rc::new(RefCell::new(
+                    d.borrow().values().cloned().collect(),
+                )))),
+                _ => wrong("a dict"),
+            },
+            other => Err(RuntimeError::new(
+                format!("unknown builtin `{other}`"),
+                span,
+            )),
+        }
+    }
+}
+
+fn normalize_index(i: i64, len: usize) -> Option<usize> {
+    let len = len as i64;
+    let real = if i < 0 { len + i } else { i };
+    if real >= 0 && real < len {
+        Some(real as usize)
+    } else {
+        None
+    }
+}
+
+fn slice_bounds(start: Option<i64>, stop: Option<i64>, len: usize) -> (usize, usize) {
+    let len_i = len as i64;
+    let clamp = |v: i64| -> usize {
+        let v = if v < 0 { len_i + v } else { v };
+        v.clamp(0, len_i) as usize
+    };
+    let a = start.map(clamp).unwrap_or(0);
+    let b = stop.map(clamp).unwrap_or(len);
+    (a, b.max(a))
+}
+
+fn close_enough(a: &str, b: &str) -> bool {
+    if a.eq_ignore_ascii_case(b) {
+        return true;
+    }
+    let (al, bl) = (a.len(), b.len());
+    if al.abs_diff(bl) > 1 || al < 3 {
+        return false;
+    }
+    // Cheap edit-distance <= 1 check.
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    let mut i = 0;
+    let mut j = 0;
+    let mut edits = 0;
+    while i < a.len() && j < b.len() {
+        if a[i] == b[j] {
+            i += 1;
+            j += 1;
+        } else {
+            edits += 1;
+            if edits > 1 {
+                return false;
+            }
+            if a.len() > b.len() {
+                i += 1;
+            } else if b.len() > a.len() {
+                j += 1;
+            } else {
+                i += 1;
+                j += 1;
+            }
+        }
+    }
+    edits + (a.len() - i) + (b.len() - j) <= 1
+}

@@ -1,0 +1,34 @@
+# Phase 1 demo: the deterministic core. Runs today with `kora run`.
+
+type Employee:
+    name: str
+    salary: int
+    team: str
+
+def average(xs: list) -> float:
+    return sum(xs) / len(xs)
+
+def main():
+    team = [
+        Employee("Ada", 120, "compilers"),
+        Employee("Grace", 130, "compilers"),
+        Employee("Alan", 110, "runtime"),
+    ]
+
+    salaries = []
+    for e in team:
+        append(salaries, e.salary)
+        if e.salary > 115:
+            print(f"{e.name} is above 115 ({e.salary})")
+
+    print(f"average: {average(salaries)}")
+    print(f"max: {max(salaries)}")
+    print(f"sorted: {sorted(salaries)}")
+
+    counts = {}
+    for e in team:
+        if e.team in counts:
+            counts[e.team] += 1
+        else:
+            counts[e.team] = 1
+    print(f"teams: {counts}")

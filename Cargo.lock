@@ -5,6 +5,10 @@ version = 4
 [[package]]
 name = "kora-cli"
 version = "0.0.1"
+dependencies = [
+ "kora-runtime",
+ "kora-syntax",
+]
 
 [[package]]
 name = "kora-lsp"
@@ -17,6 +21,9 @@ version = "0.0.1"
 [[package]]
 name = "kora-runtime"
 version = "0.0.1"
+dependencies = [
+ "kora-syntax",
+]
 
 [[package]]
 name = "kora-syntax"
