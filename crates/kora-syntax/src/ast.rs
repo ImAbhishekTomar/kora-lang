@@ -52,6 +52,33 @@ pub enum StmtKind {
     Break,
     Continue,
     Pass,
+    /// `match expr:` with `case Pattern:` arms
+    Match {
+        subject: Expr,
+        arms: Vec<MatchArm>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchArm {
+    pub pattern: Pattern,
+    pub body: Vec<Stmt>,
+    pub span: Span,
+}
+
+/// Patterns for `case` arms. Deliberately small for now.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Pattern {
+    /// `case _:`
+    Wildcard,
+    /// `case name:` -- binds the whole subject
+    Bind(String),
+    /// `case Ok(x)` / `case Uncertain(reason)` -- variant with binders
+    Ctor(String, Vec<String>),
+    /// `case 3:` / `case "high":` / `case True:`
+    LiteralInt(i64),
+    LiteralStr(String),
+    LiteralBool(bool),
 }
 
 #[derive(Debug, Clone, PartialEq)]

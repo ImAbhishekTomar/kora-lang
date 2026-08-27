@@ -37,6 +37,22 @@ def main():
 - **Record/replay + OpenTelemetry built into the runtime** — deterministic
   CI with zero tokens; every agent and call is a span.
 
+## Try it
+
+```bash
+cargo build
+./target/debug/kora run examples/00_basics.ko          # deterministic core
+./target/debug/kora run --replay examples/01_expense_check.ko   # model call, from cassette
+```
+
+Model calls need either an `OPENAI_API_KEY` or a running [Ollama](https://ollama.com).
+Point `[models] default` in `kora.toml` at whichever you have, then:
+
+```bash
+kora run --record --report examples/01_expense_check.ko   # call the model, save a cassette
+kora run --replay --report examples/01_expense_check.ko   # re-run free and deterministic
+```
+
 ## Status
 
 Early development, pre-alpha. Built for personal use first. See

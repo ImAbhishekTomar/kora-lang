@@ -4,9 +4,12 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
+use kora_models::{AnalyzeOutcome, AnalyzeRequest, FieldType, Schema};
 use kora_syntax::ast::*;
 use kora_syntax::token::Span;
 
+use crate::cassette::{self, Cassette, Mode, RecordedOutcome};
+use crate::config::Config;
 use crate::value::Value;
 
 /// A runtime error, source-anchored like syntax errors.
@@ -69,6 +72,17 @@ pub struct Interpreter {
     pub output: Vec<String>,
     /// Print directly to stdout (true for `kora run`), or capture (tests).
     pub direct_stdout: bool,
+    /// Model configuration from kora.toml.
+    pub config: Config,
+    /// Record/replay of model calls.
+    pub cassette: Option<Cassette>,
+    /// Program path, used for cassette keys and error sites.
+    pub program_name: String,
+    /// Total tokens consumed this run (budgets enforce these in Phase 3).
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+    /// Model calls actually sent to a provider (cassette hits excluded).
+    pub model_calls: u64,
 }
 
 const BUILTINS: &[&str] = &[
@@ -89,6 +103,12 @@ impl Interpreter {
             types: HashMap::new(),
             output: Vec::new(),
             direct_stdout: false,
+            config: Config::default(),
+            cassette: None,
+            program_name: "<input>".to_string(),
+            tokens_in: 0,
+            tokens_out: 0,
+            model_calls: 0,
         }
     }
 
@@ -125,10 +145,18 @@ impl Interpreter {
                 Ok(Flow::Normal)
             }
             StmtKind::Assign { target, ty, value } => {
-                let v = self.eval(value, scope)?;
-                if let Some(t) = ty {
-                    self.check_annotation(&v, t, value.span)?;
-                }
+                // `x: T = analyze(...)` is the one place the declared type is
+                // available, and analyze needs it to build the model schema.
+                let v = match (ty, analyze_args(value)) {
+                    (Some(t), Some(args)) => self.eval_analyze(t, args, value.span, scope)?,
+                    _ => {
+                        let v = self.eval(value, scope)?;
+                        if let Some(t) = ty {
+                            self.check_annotation(&v, t, value.span)?;
+                        }
+                        v
+                    }
+                };
                 self.assign(target, v, scope)?;
                 Ok(Flow::Normal)
             }
@@ -198,6 +226,22 @@ impl Interpreter {
             StmtKind::Break => Ok(Flow::Break),
             StmtKind::Continue => Ok(Flow::Continue),
             StmtKind::Pass => Ok(Flow::Normal),
+            StmtKind::Match { subject, arms } => {
+                let value = self.eval(subject, scope)?;
+                for arm in arms {
+                    if let Some(bindings) = match_pattern(&arm.pattern, &value) {
+                        for (name, v) in bindings {
+                            scope.insert(name, v);
+                        }
+                        return self.exec_block(&arm.body, scope);
+                    }
+                }
+                Err(RuntimeError::new(
+                    format!("no `case` arm matched {}", value.type_name()),
+                    stmt.span,
+                )
+                .with_hint("add a catch-all arm: `case _:`"))
+            }
         }
     }
 
@@ -478,6 +522,17 @@ impl Interpreter {
                 // named-field dict later. Function or builtin:
                 match &callee.kind {
                     ExprKind::Name(name) => {
+                        if name == "analyze" {
+                            // Untyped call site: we have no schema to constrain
+                            // the model with, so refuse rather than guess.
+                            return Err(RuntimeError::new(
+                                "analyze() needs a declared result type",
+                                expr.span,
+                            )
+                            .with_hint(
+                                "annotate the assignment, e.g. `result: Insight = analyze(data, \"...\")`",
+                            ));
+                        }
                         if let Some(fields) = self.types.get(name).cloned() {
                             return self.construct(name, &fields, arg_vals, expr.span);
                         }
@@ -1014,4 +1069,365 @@ fn close_enough(a: &str, b: &str) -> bool {
         }
     }
     edits + (a.len() - i) + (b.len() - j) <= 1
+}
+
+/// Try to match a pattern against a value. Returns the bindings it introduces,
+/// or None when the arm does not apply.
+fn match_pattern(pattern: &Pattern, value: &Value) -> Option<Vec<(String, Value)>> {
+    match pattern {
+        Pattern::Wildcard => Some(vec![]),
+        Pattern::Bind(name) => Some(vec![(name.clone(), value.clone())]),
+        Pattern::Ctor(tag, binders) => match value {
+            Value::Variant {
+                tag: value_tag,
+                payload,
+            } if value_tag.as_str() == tag => {
+                if binders.len() != payload.len() {
+                    return None;
+                }
+                Some(
+                    binders
+                        .iter()
+                        .cloned()
+                        .zip(payload.iter().cloned())
+                        .collect(),
+                )
+            }
+            // Allow `case TypeName(...)` to match an object of that type,
+            // binding fields positionally is not supported; bare name only.
+            Value::Object { type_name, .. } if type_name.as_str() == tag && binders.is_empty() => {
+                Some(vec![])
+            }
+            _ => None,
+        },
+        Pattern::LiteralInt(want) => match value {
+            Value::Int(got) if got == want => Some(vec![]),
+            _ => None,
+        },
+        Pattern::LiteralStr(want) => match value {
+            Value::Str(got) if got.as_str() == want => Some(vec![]),
+            _ => None,
+        },
+        Pattern::LiteralBool(want) => match value {
+            Value::Bool(got) if got == want => Some(vec![]),
+            _ => None,
+        },
+    }
+}
+
+/// If `expr` is a call to `analyze`, return its argument list.
+fn analyze_args(expr: &Expr) -> Option<&Vec<Expr>> {
+    match &expr.kind {
+        ExprKind::Call { callee, args } => match &callee.kind {
+            ExprKind::Name(name) if name == "analyze" => Some(args),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+impl Interpreter {
+    /// The `analyze(data, "prompt")` primitive.
+    ///
+    /// The declared type becomes a JSON schema the model must satisfy, so the
+    /// result is ordinary typed data the rest of the program can branch on.
+    fn eval_analyze(
+        &mut self,
+        ty: &TypeExpr,
+        args: &[Expr],
+        span: Span,
+        scope: &mut Scope,
+    ) -> Result<Value, RuntimeError> {
+        if args.len() != 2 {
+            return Err(RuntimeError::new(
+                format!(
+                    "analyze() takes 2 arguments (data, prompt), got {}",
+                    args.len()
+                ),
+                span,
+            )
+            .with_hint("example: `result: Insight = analyze(rows, \"find anomalies\")`"));
+        }
+
+        let data = self.eval(&args[0], scope)?;
+        let prompt = match self.eval(&args[1], scope)? {
+            Value::Str(s) => s.to_string(),
+            other => {
+                return Err(RuntimeError::new(
+                    format!(
+                        "analyze() prompt must be a string, got {}",
+                        other.type_name()
+                    ),
+                    args[1].span,
+                ))
+            }
+        };
+
+        let type_name = match ty {
+            TypeExpr::Name(n) => n.clone(),
+            TypeExpr::Generic(n, _) => n.clone(),
+        };
+        let schema = self.schema_for(&type_name, span)?;
+        let data_json = value_to_json(&data);
+        let data_text = serde_json::to_string(&data_json).unwrap_or_else(|_| "null".to_string());
+
+        let model = self
+            .config
+            .default_model()
+            .map_err(|e| RuntimeError::new(e.message, span))?;
+        let model_label = format!("{:?}:{}", model.provider, model.model).to_lowercase();
+        let site = format!("{}:{}", self.program_name, span.line);
+        let key = cassette::key_for(&site, &model_label, &prompt, &data_text);
+
+        // Replay first: a cassette hit costs nothing and keeps CI deterministic.
+        if let Some(entry) = self.cassette.as_ref().and_then(|c| c.get(&key)) {
+            let outcome = entry.outcome.clone();
+            return self.outcome_to_value(outcome_from_record(outcome), &type_name, &schema, span);
+        }
+        if self.cassette.as_ref().map(|c| c.mode) == Some(Mode::Replay) {
+            return Err(RuntimeError::new(
+                format!("no recorded model call for {site} (replay mode)"),
+                span,
+            )
+            .with_hint("re-record with `kora run --record <file.ko>`"));
+        }
+
+        let request = AnalyzeRequest {
+            prompt: prompt.clone(),
+            data_json: data_text.clone(),
+            schema: schema.clone(),
+        };
+        let outcome = kora_models::analyze(&model, &request)
+            .map_err(|e| RuntimeError::new(e.message, span))?;
+        self.model_calls += 1;
+
+        if let Some(c) = self.cassette.as_mut() {
+            if c.mode == Mode::Record {
+                c.insert(cassette::Entry {
+                    key,
+                    site,
+                    model: model_label,
+                    prompt,
+                    data: data_text,
+                    outcome: record_from_outcome(&outcome),
+                });
+            }
+        }
+
+        self.outcome_to_value(outcome, &type_name, &schema, span)
+    }
+
+    /// Build the model schema from a Kora `type` declaration.
+    fn schema_for(&self, type_name: &str, span: Span) -> Result<Schema, RuntimeError> {
+        let fields = self.types.get(type_name).ok_or_else(|| {
+            RuntimeError::new(format!("`{type_name}` is not a declared type"), span)
+                .with_hint("declare it first, e.g. `type Insight:` with typed fields below")
+        })?;
+        let mut out = Vec::new();
+        for field in fields {
+            let ft = match &field.ty {
+                TypeExpr::Name(n) => match n.as_str() {
+                    "str" => FieldType::Str,
+                    "int" => FieldType::Int,
+                    "float" => FieldType::Float,
+                    "bool" => FieldType::Bool,
+                    other => {
+                        return Err(RuntimeError::new(
+                            format!(
+                                "field `{}` has type `{other}`, which analyze() cannot request yet",
+                                field.name
+                            ),
+                            field.span,
+                        )
+                        .with_hint(
+                            "analyze result fields must be str, int, float, bool, or list[str]",
+                        ));
+                    }
+                },
+                TypeExpr::Generic(n, args) if n == "list" => match args.first() {
+                    Some(TypeExpr::Name(inner)) if inner == "str" => FieldType::ListOfStr,
+                    _ => {
+                        return Err(RuntimeError::new(
+                            format!("field `{}` must be `list[str]`", field.name),
+                            field.span,
+                        ));
+                    }
+                },
+                other => {
+                    return Err(RuntimeError::new(
+                        format!(
+                            "field `{}` has type `{}`, which analyze() cannot request yet",
+                            field.name,
+                            other.display()
+                        ),
+                        field.span,
+                    ));
+                }
+            };
+            out.push((field.name.clone(), ft));
+        }
+        Ok(Schema {
+            type_name: type_name.to_string(),
+            fields: out,
+        })
+    }
+
+    /// Wrap a provider outcome as `Ok(Object)` or `Uncertain(reason)`.
+    fn outcome_to_value(
+        &mut self,
+        outcome: AnalyzeOutcome,
+        type_name: &str,
+        schema: &Schema,
+        span: Span,
+    ) -> Result<Value, RuntimeError> {
+        match outcome {
+            AnalyzeOutcome::Ok {
+                fields_json,
+                tokens_in,
+                tokens_out,
+            } => {
+                self.tokens_in += tokens_in;
+                self.tokens_out += tokens_out;
+                let mut fields = HashMap::new();
+                for (name, _) in &schema.fields {
+                    let raw = fields_json.get(name).ok_or_else(|| {
+                        RuntimeError::new(format!("model result is missing field `{name}`"), span)
+                    })?;
+                    fields.insert(name.clone(), json_to_value(raw));
+                }
+                Ok(Value::Variant {
+                    tag: Rc::new("Ok".to_string()),
+                    payload: vec![Value::Object {
+                        type_name: Rc::new(type_name.to_string()),
+                        fields: Rc::new(RefCell::new(fields)),
+                    }],
+                })
+            }
+            AnalyzeOutcome::Uncertain {
+                reason,
+                tokens_in,
+                tokens_out,
+            } => {
+                self.tokens_in += tokens_in;
+                self.tokens_out += tokens_out;
+                Ok(Value::Variant {
+                    tag: Rc::new("Uncertain".to_string()),
+                    payload: vec![Value::Str(Rc::new(reason))],
+                })
+            }
+        }
+    }
+}
+
+fn record_from_outcome(outcome: &AnalyzeOutcome) -> RecordedOutcome {
+    match outcome {
+        AnalyzeOutcome::Ok {
+            fields_json,
+            tokens_in,
+            tokens_out,
+        } => RecordedOutcome::Ok {
+            fields: fields_json.clone(),
+            tokens_in: *tokens_in,
+            tokens_out: *tokens_out,
+        },
+        AnalyzeOutcome::Uncertain {
+            reason,
+            tokens_in,
+            tokens_out,
+        } => RecordedOutcome::Uncertain {
+            reason: reason.clone(),
+            tokens_in: *tokens_in,
+            tokens_out: *tokens_out,
+        },
+    }
+}
+
+fn outcome_from_record(record: RecordedOutcome) -> AnalyzeOutcome {
+    match record {
+        RecordedOutcome::Ok {
+            fields,
+            tokens_in,
+            tokens_out,
+        } => AnalyzeOutcome::Ok {
+            fields_json: fields,
+            tokens_in,
+            tokens_out,
+        },
+        RecordedOutcome::Uncertain {
+            reason,
+            tokens_in,
+            tokens_out,
+        } => AnalyzeOutcome::Uncertain {
+            reason,
+            tokens_in,
+            tokens_out,
+        },
+    }
+}
+
+/// Kora value -> JSON, for sending data to a model.
+fn value_to_json(value: &Value) -> serde_json::Value {
+    use serde_json::Value as J;
+    match value {
+        Value::Int(v) => J::from(*v),
+        Value::Float(v) => serde_json::Number::from_f64(*v)
+            .map(J::Number)
+            .unwrap_or(J::Null),
+        Value::Str(s) => J::String(s.to_string()),
+        Value::Bool(b) => J::Bool(*b),
+        Value::None => J::Null,
+        Value::List(items) => J::Array(items.borrow().iter().map(value_to_json).collect()),
+        Value::Dict(map) => J::Object(
+            map.borrow()
+                .iter()
+                .map(|(k, v)| (k.clone(), value_to_json(v)))
+                .collect(),
+        ),
+        Value::Object { fields, .. } => J::Object(
+            fields
+                .borrow()
+                .iter()
+                .map(|(k, v)| (k.clone(), value_to_json(v)))
+                .collect(),
+        ),
+        Value::Variant { tag, payload } => {
+            if payload.is_empty() {
+                J::String(tag.to_string())
+            } else {
+                let mut obj = serde_json::Map::new();
+                obj.insert(
+                    tag.to_string(),
+                    J::Array(payload.iter().map(value_to_json).collect()),
+                );
+                J::Object(obj)
+            }
+        }
+        Value::Func(f) => J::String(format!("<function {}>", f.name)),
+        Value::Builtin(name) => J::String(format!("<builtin {name}>")),
+    }
+}
+
+/// JSON -> Kora value, for reading a model result back.
+fn json_to_value(json: &serde_json::Value) -> Value {
+    use serde_json::Value as J;
+    match json {
+        J::Null => Value::None,
+        J::Bool(b) => Value::Bool(*b),
+        J::Number(n) => {
+            if let Some(i) = n.as_i64() {
+                Value::Int(i)
+            } else {
+                Value::Float(n.as_f64().unwrap_or(0.0))
+            }
+        }
+        J::String(s) => Value::Str(Rc::new(s.clone())),
+        J::Array(items) => Value::List(Rc::new(RefCell::new(
+            items.iter().map(json_to_value).collect(),
+        ))),
+        J::Object(map) => Value::Dict(Rc::new(RefCell::new(
+            map.iter()
+                .map(|(k, v)| (k.clone(), json_to_value(v)))
+                .collect(),
+        ))),
+    }
 }

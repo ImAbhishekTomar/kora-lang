@@ -1,13 +1,25 @@
 //! The `kora` command-line tool.
 //!
-//! Phase 1: `kora run <file.ko>` and `--version`. More subcommands
-//! (`test`, `audit`, `trace`) arrive with their phases — see DECISIONS.md.
+//! Phase 2: `kora run <file.ko>` with record/replay of model calls.
+//! `test`, `audit`, and `trace` arrive with their phases — see DECISIONS.md.
 
+use std::path::Path;
 use std::process::ExitCode;
 
-use kora_runtime::Interpreter;
+use kora_runtime::{Cassette, Config, Interpreter, Mode};
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+const USAGE: &str = "\
+usage:
+  kora run <file.ko>           run a program
+  kora <file.ko>               same as `kora run`
+  kora --version               print version
+
+flags for `run`:
+  --record                     call models, then save the calls to a cassette
+  --replay                     use only recorded calls; never reach a provider
+  --report                     print token usage after the run";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -16,14 +28,8 @@ fn main() -> ExitCode {
             println!("kora {VERSION}");
             ExitCode::SUCCESS
         }
-        Some("run") => match args.get(1) {
-            Some(path) => run_file(path),
-            None => {
-                eprintln!("usage: kora run <file.ko>");
-                ExitCode::from(2)
-            }
-        },
-        Some(path) if path.ends_with(".ko") => run_file(path),
+        Some("run") => run_args(&args[1..]),
+        Some(first) if first.ends_with(".ko") => run_args(&args),
         Some(other) => {
             eprintln!("kora: unknown command `{other}`");
             eprintln!("{USAGE}");
@@ -37,13 +43,33 @@ fn main() -> ExitCode {
     }
 }
 
-const USAGE: &str = "\
-usage:
-  kora run <file.ko>    run a program
-  kora <file.ko>        same as `kora run`
-  kora --version        print version";
+fn run_args(args: &[String]) -> ExitCode {
+    let mut path: Option<&str> = None;
+    let mut mode = Mode::Live;
+    let mut report = false;
 
-fn run_file(path: &str) -> ExitCode {
+    for arg in args {
+        match arg.as_str() {
+            "--record" => mode = Mode::Record,
+            "--replay" => mode = Mode::Replay,
+            "--report" => report = true,
+            other if other.starts_with("--") => {
+                eprintln!("kora: unknown flag `{other}`");
+                eprintln!("{USAGE}");
+                return ExitCode::from(2);
+            }
+            other => path = Some(other),
+        }
+    }
+
+    let Some(path) = path else {
+        eprintln!("usage: kora run <file.ko>");
+        return ExitCode::from(2);
+    };
+    run_file(path, mode, report)
+}
+
+fn run_file(path: &str, mode: Mode, report: bool) -> ExitCode {
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
@@ -60,9 +86,29 @@ fn run_file(path: &str) -> ExitCode {
         }
     };
 
+    let program_path = Path::new(path);
     let mut interp = Interpreter::new();
     interp.direct_stdout = true;
-    match interp.run(&program) {
+    interp.program_name = path.to_string();
+    interp.config = Config::discover(program_path);
+    interp.cassette = Some(Cassette::open(mode, program_path));
+
+    let result = interp.run(&program);
+
+    if let Some(cassette) = &interp.cassette {
+        if let Err(e) = cassette.save() {
+            eprintln!("warning: could not write cassette: {e}");
+        }
+    }
+
+    if report {
+        eprintln!(
+            "\n  tokens: {} in / {} out    model calls: {}",
+            interp.tokens_in, interp.tokens_out, interp.model_calls
+        );
+    }
+
+    match result {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {
             eprint!("{}", e.render(&source, path));

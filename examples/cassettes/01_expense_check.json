@@ -1,0 +1,53 @@
+{
+  "entries": [
+    {
+      "key": "b12c980de7369f2f",
+      "site": "examples/01_expense_check.ko:18",
+      "model": "ollama:llama3.2:latest",
+      "prompt": "extract the expense; policy_violation is True if a single meal is over $200",
+      "data": "\"AWS invoice, $4200, cloud hosting for production\"",
+      "outcome": {
+        "kind": "uncertain",
+        "reason": "Policy_violation",
+        "tokens_in": 239,
+        "tokens_out": 43
+      }
+    },
+    {
+      "key": "e987c90c2ced2812",
+      "site": "examples/01_expense_check.ko:18",
+      "model": "ollama:llama3.2:latest",
+      "prompt": "extract the expense; policy_violation is True if a single meal is over $200",
+      "data": "\"Steakhouse dinner for 2, $680, client entertainment\"",
+      "outcome": {
+        "kind": "ok",
+        "fields": {
+          "amount": 680,
+          "category": "client entertainment",
+          "merchant": "Steakhouse dinner for 2",
+          "policy_violation": true
+        },
+        "tokens_in": 241,
+        "tokens_out": 41
+      }
+    },
+    {
+      "key": "4eaf37e6b9a2ba1c",
+      "site": "examples/01_expense_check.ko:18",
+      "model": "ollama:llama3.2:latest",
+      "prompt": "extract the expense; policy_violation is True if a single meal is over $200",
+      "data": "\"Notebook and pens, $23, office supplies\"",
+      "outcome": {
+        "kind": "ok",
+        "fields": {
+          "amount": 23.0,
+          "category": "office supplies",
+          "merchant": "Notebook and pens",
+          "policy_violation": false
+        },
+        "tokens_in": 238,
+        "tokens_out": 40
+      }
+    }
+  ]
+}

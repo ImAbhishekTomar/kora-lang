@@ -37,6 +37,7 @@ impl Parser {
         match self.peek_kind().clone() {
             TokenKind::Def => self.func_def(),
             TokenKind::Type => self.type_def(),
+            TokenKind::Match => self.match_stmt(),
             TokenKind::If => self.if_stmt(),
             TokenKind::While => self.while_stmt(),
             TokenKind::For => self.for_stmt(),
@@ -244,6 +245,103 @@ impl Parser {
             kind: StmtKind::TypeDef { name, fields },
             span,
         })
+    }
+
+    /// `match expr:` NEWLINE INDENT (`case pattern:` block)+ DEDENT
+    fn match_stmt(&mut self) -> Result<Stmt, SyntaxError> {
+        let span = self.peek_span();
+        self.advance(); // match
+        let subject = self.expression()?;
+        self.expect(&TokenKind::Colon, "expected `:` after match subject")?;
+        self.expect(&TokenKind::Newline, "expected newline after `:`")?;
+        self.expect(
+            &TokenKind::Indent,
+            "expected an indented block of `case` arms",
+        )?;
+        let mut arms = Vec::new();
+        self.skip_newlines();
+        while self.check(&TokenKind::Case) {
+            let arm_span = self.peek_span();
+            self.advance(); // case
+            let pattern = self.pattern()?;
+            let body = self.block("case body")?;
+            arms.push(MatchArm {
+                pattern,
+                body,
+                span: arm_span,
+            });
+            self.skip_newlines();
+        }
+        if arms.is_empty() {
+            return Err(SyntaxError::new("match block has no `case` arms", span)
+                .with_hint("add at least one arm, e.g. `case Ok(value):`"));
+        }
+        if !self.check(&TokenKind::Dedent) && !self.check(&TokenKind::Eof) {
+            return Err(SyntaxError::new(
+                format!(
+                    "expected `case` or end of match, found `{}`",
+                    self.peek_kind()
+                ),
+                self.peek_span(),
+            ));
+        }
+        if self.check(&TokenKind::Dedent) {
+            self.advance();
+        }
+        Ok(Stmt {
+            kind: StmtKind::Match { subject, arms },
+            span,
+        })
+    }
+
+    fn pattern(&mut self) -> Result<Pattern, SyntaxError> {
+        let span = self.peek_span();
+        match self.peek_kind().clone() {
+            TokenKind::Ident(name) => {
+                self.advance();
+                if name == "_" {
+                    return Ok(Pattern::Wildcard);
+                }
+                if self.check(&TokenKind::LParen) {
+                    self.advance();
+                    let mut binders = Vec::new();
+                    while !self.check(&TokenKind::RParen) {
+                        binders.push(self.expect_ident("a binder name in pattern")?);
+                        if !self.check(&TokenKind::RParen) {
+                            self.expect(&TokenKind::Comma, "expected `,` between binders")?;
+                        }
+                    }
+                    self.advance(); // )
+                    return Ok(Pattern::Ctor(name, binders));
+                }
+                // Capitalized bare name = variant with no payload; else a binding.
+                if name.chars().next().is_some_and(|c| c.is_ascii_uppercase()) {
+                    Ok(Pattern::Ctor(name, vec![]))
+                } else {
+                    Ok(Pattern::Bind(name))
+                }
+            }
+            TokenKind::Int(v) => {
+                self.advance();
+                Ok(Pattern::LiteralInt(v))
+            }
+            TokenKind::Str(s) => {
+                self.advance();
+                Ok(Pattern::LiteralStr(s))
+            }
+            TokenKind::True => {
+                self.advance();
+                Ok(Pattern::LiteralBool(true))
+            }
+            TokenKind::False => {
+                self.advance();
+                Ok(Pattern::LiteralBool(false))
+            }
+            other => Err(
+                SyntaxError::new(format!("expected a pattern, found `{other}`"), span)
+                    .with_hint("patterns: `Ok(x)`, `Uncertain(reason)`, a literal, a name, or `_`"),
+            ),
+        }
     }
 
     fn if_stmt(&mut self) -> Result<Stmt, SyntaxError> {
