@@ -40,6 +40,11 @@ pub enum Value {
     Module {
         name: Rc<String>,
     },
+    /// A reference to a declared `type`, so it can be handed to a parser:
+    /// `csv.parse(text, Expense)`.
+    TypeRef {
+        name: Rc<String>,
+    },
     /// A value carrying a confidentiality label.
     ///
     /// Wrapping rather than tagging every variant keeps the label out of the
@@ -66,6 +71,7 @@ impl Value {
             Value::Builtin(name) => format!("builtin {name}"),
             Value::Variant { tag, .. } => tag.as_str().into(),
             Value::Module { name } => format!("module {name}"),
+            Value::TypeRef { name } => format!("type {name}"),
             Value::Labeled { inner, .. } => inner.type_name(),
         }
     }
@@ -117,7 +123,7 @@ impl Value {
             Value::List(l) => !l.borrow().is_empty(),
             Value::Dict(d) => !d.borrow().is_empty(),
             Value::Func(_) | Value::Object { .. } | Value::Builtin(_) => true,
-            Value::Variant { .. } | Value::Module { .. } => true,
+            Value::Variant { .. } | Value::Module { .. } | Value::TypeRef { .. } => true,
             Value::Labeled { inner, .. } => inner.truthy(),
         }
     }
@@ -232,6 +238,7 @@ impl fmt::Display for Value {
                 }
             }
             Value::Module { name } => write!(f, "<module {name}>"),
+            Value::TypeRef { name } => write!(f, "<type {name}>"),
             // Printing is a local action, not an export, so the value shows
             // normally. Telemetry export is a labeled sink and redacts.
             Value::Labeled { inner, .. } => write!(f, "{inner}"),

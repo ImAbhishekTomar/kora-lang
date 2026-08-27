@@ -236,8 +236,8 @@ when something actually demands it (designed, not built speculatively).
 7. (parked) in-process GPU inference
 
 Ecosystem work, sequenced alongside the phases above:
-- Native stdlib: `json`, `fs`, `time`, `re` — **done**;
-  `http`, `csv`, `sql`, `env` next
+- Native stdlib: `json`, `fs`, `time`, `re`, `http`, `csv`, `sql`, `env` —
+  **done**
 - MCP integration (`use mcp "..."`) — around Phase 6
 - Python sidecar (`use python "..."`) — on demand
 - Kora package manager + WASM components — later

@@ -138,6 +138,10 @@ pub struct Interpreter {
     pub scope: journal::Scope,
     /// Journal slot claimed for an in-flight model call.
     pending_slot: Option<(journal::Scope, usize)>,
+    /// Whether `http` may reach loopback and private address ranges.
+    pub allow_private_hosts: bool,
+    /// Timeout applied to every outbound request.
+    pub http_timeout_secs: u64,
 }
 
 const BUILTINS: &[&str] = &[
@@ -192,6 +196,8 @@ impl Interpreter {
             journal: Arc::new(Mutex::new(Journal::disabled())),
             scope: journal::Scope::root(),
             pending_slot: None,
+            allow_private_hosts: false,
+            http_timeout_secs: 30,
         }
     }
 
@@ -857,6 +863,12 @@ impl Interpreter {
         }
         if let Some(v) = self.globals.get(name) {
             return Ok(v.clone());
+        }
+        // A declared type used as a value: `csv.parse(text, Expense)`.
+        if self.types.contains_key(name) {
+            return Ok(Value::TypeRef {
+                name: Rc::new(name.to_string()),
+            });
         }
         if BUILTINS.contains(&name) {
             return Ok(Value::Builtin(
@@ -1856,6 +1868,7 @@ fn value_to_json(value: &Value) -> serde_json::Value {
         Value::Func(f) => J::String(format!("<function {}>", f.name)),
         Value::Builtin(name) => J::String(format!("<builtin {name}>")),
         Value::Module { name } => J::String(format!("<module {name}>")),
+        Value::TypeRef { name } => J::String(format!("<type {name}>")),
         // Serialization is only reached after a label check has passed, so
         // the wrapper is transparent here.
         Value::Labeled { inner, .. } => value_to_json(inner),
@@ -2024,6 +2037,8 @@ fn run_one(
     let mut interp = Interpreter::new();
     interp.types = types.clone();
     interp.config = config.clone();
+    interp.allow_private_hosts = config.http_allow_private;
+    interp.http_timeout_secs = config.http_timeout_secs;
     interp.sinks = sinks.clone();
     interp.program_name = program_name.to_string();
     interp.budget = budget.clone();
@@ -2621,5 +2636,76 @@ impl Interpreter {
             _ => {}
         }
         label
+    }
+}
+
+/// Support the stdlib needs from the interpreter.
+impl Interpreter {
+    /// Field names and types of a declared `type`, in declaration order.
+    pub fn declared_fields(&self, type_name: &str) -> Option<Vec<(String, TypeExpr)>> {
+        self.types.get(type_name).map(|fields| {
+            fields
+                .iter()
+                .map(|f| (f.name.clone(), f.ty.clone()))
+                .collect()
+        })
+    }
+
+    /// Whether an enclosing `declassify ... for <sink>:` block released data
+    /// to this sink.
+    pub fn declassified_for_sink(&self, sink: &str) -> bool {
+        self.declassified_for.iter().any(|s| s == sink)
+    }
+
+    /// Replay a recorded effect for a stdlib call, if a durable run already
+    /// performed it. Network calls and clocks must not happen twice.
+    pub fn journal_lookup(
+        &mut self,
+        site: &str,
+        span: Span,
+    ) -> Result<Option<String>, RuntimeError> {
+        let mut journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
+        if !journal.is_durable() {
+            return Ok(None);
+        }
+        match journal
+            .next(&self.scope, site)
+            .map_err(|e| RuntimeError::new(e.to_string(), span))?
+        {
+            Lookup::Replayed(Effect::Tool { result_json, .. }) => Ok(Some(result_json)),
+            Lookup::Replayed(other) => Err(RuntimeError::new(
+                format!("journal step is {other:?}, but the program reached {site}"),
+                span,
+            )),
+            Lookup::Fresh { scope, seq } => {
+                self.pending_slot = Some((scope, seq));
+                Ok(None)
+            }
+        }
+    }
+
+    /// Record what a stdlib effect produced.
+    pub fn journal_record(
+        &mut self,
+        site: &str,
+        name: &str,
+        result_json: &str,
+        span: Span,
+    ) -> Result<(), RuntimeError> {
+        let Some((scope, seq)) = self.pending_slot.take() else {
+            return Ok(());
+        };
+        let mut journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
+        journal
+            .record(
+                scope,
+                seq,
+                site,
+                Effect::Tool {
+                    name: name.to_string(),
+                    result_json: result_json.to_string(),
+                },
+            )
+            .map_err(|e| RuntimeError::new(e.to_string(), span))
     }
 }
