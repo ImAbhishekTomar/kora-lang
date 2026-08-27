@@ -88,6 +88,14 @@ design changes and should be deliberate.
   conventions verbatim), budgets = metrics, declassify = events.
   Zero-config: local file + `kora trace last`.
 - One internal event stream feeds cassettes, OTel, and `--report` cost output.
+- LLM eval (DeepEval-style metrics: answer relevancy, faithfulness,
+  hallucination, G-Eval judge) ships as **native stdlib primitives**, not a
+  Python bridge to the real DeepEval lib. Full DeepEval too big to
+  reimplement; a subset of core metrics as Rust-backed builtins fits Kora's
+  no-Python-required packaging story and avoids the sidecar's per-call
+  serialization cost for what is likely a hot path in `test`. Same rationale
+  as native stdlib layer in Ecosystem strategy below. Sequencing: alongside
+  `test`/`mock` work, Phase 6.
 
 ## Execution strategy
 
@@ -100,6 +108,40 @@ An agent program's real imports are HTTP, JSON, CSV/Excel, SQL, dates, regex,
 file IO, and vendor SDKs that are themselves HTTP wrappers. The reasoning
 lives in the model, not in a library. That is ~20 libraries, not 500,000, so
 Kora does not need to replicate PyPI. Three layers, in this order:
+
+### What the stdlib fixes
+
+Rewriting these libraries is only worth it if the rewrite fixes what everyone
+already knows is broken. Existing ecosystems cannot fix these because too much
+code depends on the current behaviour; a new language has exactly one chance.
+
+Cross-cutting, enforced by the language rather than by discipline:
+
+- **Every value that enters the program from outside is `unverified`.** HTTP
+  bodies, file contents, model output, tool results. An unverified value
+  cannot reach a dangerous sink (SQL, shell, file path, HTTP URL) until it is
+  narrowed by a parse or an allowlist. This is the integrity direction of the
+  label system, and it makes SQL injection, SSRF, and path traversal *type
+  errors* rather than review findings.
+- **Nondeterminism goes through the journal.** `time.now()` and `random()` are
+  effects. Otherwise a durable replay silently produces different answers —
+  a correctness requirement, not a nicety.
+- **Failure is a value.** No silent `None`, no exception that a caller forgets
+  to catch. Same `Ok` / `Err` shape as `analyze`.
+- **Timeouts and retries are mandatory with defaults**, never optional extras.
+- **Classified data never reaches logs or telemetry.**
+
+Per module, the specific defect being fixed:
+
+| module | what everyone gets wrong | what Kora does |
+|---|---|---|
+| `http` | no default timeout (hangs forever); non-2xx looks like success until you call `raise_for_status()`; retries are a separate library | timeout always set; non-2xx is `Err`, not a success object; retry with backoff built in; response body is `unverified` |
+| `json` | parses to untyped `Any`; errors say "line 1 col 4318" | parses into a declared type; errors name the path: `$.users[2].email: expected str, got int` |
+| `csv` | everything is a string, or types are guessed and zip codes lose leading zeros; ragged rows pass silently | declared schema, no guessing; ragged or mistyped rows are errors naming row and column; BOM handled |
+| `sql` | string interpolation, therefore injection | parameters only; an `unverified` value cannot become query text at all |
+| `fs` | path traversal from untrusted input; silent overwrite; partial writes on crash | paths from unverified data are refused; writes are atomic (temp + rename); overwrite is explicit |
+| `time` | naive datetimes with no zone, then DST arithmetic bugs | every instant is zone-aware; there is no naive type; `now()` is journaled |
+| `re` | catastrophic backtracking (ReDoS) | linear-time engine, no backtracking to exploit |
 
 **1. Native stdlib, Rust-backed.** Users cannot write `use serde::Deserialize`
 in a `.ko` file, but the interpreter is Rust, so a crate becomes a Kora module
@@ -194,8 +236,8 @@ when something actually demands it (designed, not built speculatively).
 7. (parked) in-process GPU inference
 
 Ecosystem work, sequenced alongside the phases above:
-- Native stdlib (`http`, `json`, `csv`, `sql`, `fs`, `time`, `re`, `env`) —
-  after Phase 5
+- Native stdlib: `json`, `fs`, `time`, `re` — **done**;
+  `http`, `csv`, `sql`, `env` next
 - MCP integration (`use mcp "..."`) — around Phase 6
 - Python sidecar (`use python "..."`) — on demand
 - Kora package manager + WASM components — later

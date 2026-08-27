@@ -60,6 +60,11 @@ pub enum StmtKind {
         /// `results = parallel for ...`.
         collect_into: Option<String>,
     },
+    /// `use json` / `use json as j` — bring a stdlib module into scope.
+    Use {
+        module: String,
+        alias: String,
+    },
     /// `declassify <expr> for <sink>:` — a bounded region in which a
     /// classified value may reach one named sink. Scoped on purpose: the
     /// exposure is the block, not the rest of the program.

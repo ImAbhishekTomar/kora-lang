@@ -147,6 +147,42 @@ Durability is replay-based: every effect is journaled, and a resumed run
 re-executes with those effects served from the journal. The contract is that
 code between effects is deterministic — the same one Temporal makes.
 
+## Standard library
+
+```python
+use json
+use fs
+use time
+use re
+```
+
+Each module is native (Rust-backed) and fixes a specific, known defect:
+
+- **`json`** — errors quote the offending text and name the path
+  (`$.users.0.email: not found`), instead of a byte offset on one-line JSON
+- **`fs`** — writes are atomic (temp + rename), missing files name the path,
+  and `..` in a path is refused
+- **`re`** — linear-time engine, so `(a+)+$` against hostile input answers
+  instead of hanging
+- **`time`** — instants are absolute; there is no naive type to misuse, and
+  `now()` is journaled so durable replay stays correct
+
+Two rules hold across all of them. Data that enters from outside is
+`unverified` and cannot reach a dangerous sink until it is narrowed:
+
+```python
+contents = fs.read("config.txt")   # unverified: it came from outside
+fs.read(contents)                  # error: a path that came from outside
+```
+
+And failure is a value, never a silent `None` or a forgotten exception:
+
+```python
+match fs.read(path):
+    case Ok(text):  ...
+    case Err(why):  print(why)
+```
+
 ## Status
 
 Early development, pre-alpha. Built for personal use first. See

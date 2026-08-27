@@ -44,7 +44,7 @@ pub struct RuntimeError {
 }
 
 impl RuntimeError {
-    fn new(message: impl Into<String>, span: Span) -> Self {
+    pub fn new(message: impl Into<String>, span: Span) -> Self {
         RuntimeError {
             message: message.into(),
             hint: None,
@@ -67,7 +67,7 @@ impl RuntimeError {
         self.kind == StopKind::Suspended
     }
 
-    fn with_hint(mut self, hint: impl Into<String>) -> Self {
+    pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
         self.hint = Some(hint.into());
         self
     }
@@ -248,7 +248,7 @@ impl Interpreter {
                     }
                 };
                 let v = if *classified {
-                    v.with_label(Label::Classified)
+                    v.with_label(Label::CLASSIFIED)
                 } else {
                     v
                 };
@@ -317,6 +317,32 @@ impl Interpreter {
                     None => Value::None,
                 };
                 Ok(Flow::Return(v))
+            }
+            StmtKind::Use { module, alias } => {
+                if crate::stdlib::module(module).is_none() {
+                    let mut e = RuntimeError::new(
+                        format!("there is no module named `{module}`"),
+                        stmt.span,
+                    );
+                    if let Some(close) = crate::stdlib::MODULE_NAMES
+                        .iter()
+                        .find(|m| close_enough(m, module))
+                    {
+                        e = e.with_hint(format!("did you mean `{close}`?"));
+                    } else {
+                        e = e.with_hint(format!(
+                            "available modules: {}",
+                            crate::stdlib::MODULE_NAMES.join(", ")
+                        ));
+                    }
+                    return Err(e);
+                }
+                let value = Value::Module {
+                    name: Rc::new(module.clone()),
+                };
+                scope.insert(alias.clone(), value.clone());
+                self.globals.insert(alias.clone(), value);
+                Ok(Flow::Normal)
             }
             StmtKind::Declassify {
                 value,
@@ -542,7 +568,7 @@ impl Interpreter {
             ExprKind::Name(name) => self.lookup(name, scope, expr.span),
             ExprKind::FString { parts, exprs } => {
                 let mut out = String::new();
-                let mut label = Label::Public;
+                let mut label = Label::PUBLIC;
                 for (i, part) in parts.iter().enumerate() {
                     out.push_str(part);
                     if i < exprs.len() {
@@ -631,9 +657,9 @@ impl Interpreter {
                         .get(type_name.as_str())
                         .and_then(|fields| fields.iter().find(|f| &f.name == name))
                         .filter(|f| f.classified)
-                        .map(|_| Label::Classified)
+                        .map(|_| Label::CLASSIFIED)
                         .unwrap_or_default(),
-                    _ => Label::Public,
+                    _ => Label::PUBLIC,
                 };
                 let label = outer_label.join(field_label);
                 let obj = obj.unlabeled().clone();
@@ -767,6 +793,30 @@ impl Interpreter {
                             return self.construct(name, &fields, arg_vals, expr.span);
                         }
                         match self.lookup(name, scope, callee.span)? {
+                            Value::Func(f) => self.call_function(&f, arg_vals, expr.span),
+                            Value::Builtin(b) => self.call_builtin(b, arg_vals, expr.span),
+                            other => Err(RuntimeError::new(
+                                format!("{} is not callable", other.type_name()),
+                                expr.span,
+                            )),
+                        }
+                    }
+                    // `json.parse(...)` and friends: a module member call.
+                    ExprKind::Attr { object, name } => {
+                        if let ExprKind::Name(module_alias) = &object.kind {
+                            if let Ok(Value::Module { name: module_name }) =
+                                self.lookup(module_alias, scope, object.span)
+                            {
+                                return self.call_module_fn(
+                                    &module_name,
+                                    name,
+                                    arg_vals,
+                                    expr.span,
+                                );
+                            }
+                        }
+                        let target = self.eval(callee, scope)?;
+                        match target {
                             Value::Func(f) => self.call_function(&f, arg_vals, expr.span),
                             Value::Builtin(b) => self.call_builtin(b, arg_vals, expr.span),
                             other => Err(RuntimeError::new(
@@ -1128,7 +1178,7 @@ impl Interpreter {
         }
         let label = args
             .iter()
-            .fold(Label::Public, |acc, v| acc.join(v.label()));
+            .fold(Label::PUBLIC, |acc, v| acc.join(v.label()));
         let args: Vec<Value> = args.iter().map(|v| v.unlabeled().clone()).collect();
         self.call_builtin_inner(name, args, span)
             .map(|v| v.with_label(label))
@@ -1805,6 +1855,7 @@ fn value_to_json(value: &Value) -> serde_json::Value {
         }
         Value::Func(f) => J::String(format!("<function {}>", f.name)),
         Value::Builtin(name) => J::String(format!("<builtin {name}>")),
+        Value::Module { name } => J::String(format!("<module {name}>")),
         // Serialization is only reached after a label check has passed, so
         // the wrapper is transparent here.
         Value::Labeled { inner, .. } => value_to_json(inner),
@@ -2449,5 +2500,126 @@ impl Interpreter {
                 Ok(true)
             }
         }
+    }
+}
+
+impl Interpreter {
+    /// Call a stdlib function, e.g. `json.parse(text)`.
+    fn call_module_fn(
+        &mut self,
+        module_name: &str,
+        function: &str,
+        args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, RuntimeError> {
+        let Some(module) = crate::stdlib::module(module_name) else {
+            return Err(RuntimeError::new(
+                format!("there is no module named `{module_name}`"),
+                span,
+            ));
+        };
+        let Some(native) = module.functions.get(function).copied() else {
+            let mut available: Vec<&str> = module.functions.keys().copied().collect();
+            available.sort();
+            return Err(RuntimeError::new(
+                format!("`{module_name}` has no function `{function}`"),
+                span,
+            )
+            .with_hint(format!("{module_name} provides: {}", available.join(", "))));
+        };
+        native(self, args, span)
+    }
+
+    /// Read a value that is nondeterministic, journaling it in a durable run.
+    ///
+    /// A clock or a random number read live during a replay would send the
+    /// program down a different branch than the run it is meant to be
+    /// continuing, so the first attempt's answer is the one every replay sees.
+    pub fn journal_scalar(
+        &mut self,
+        what: &str,
+        span: Span,
+        live: impl Fn() -> i64,
+    ) -> Result<i64, RuntimeError> {
+        let mut journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
+        if !journal.is_durable() {
+            return Ok(live());
+        }
+        let site = format!("{}:{}#{what}", self.program_name, span.line);
+        match journal
+            .next(&self.scope, &site)
+            .map_err(|e| RuntimeError::new(e.to_string(), span))?
+        {
+            Lookup::Replayed(Effect::Tool { result_json, .. }) => {
+                Ok(result_json.parse::<i64>().unwrap_or_else(|_| live()))
+            }
+            Lookup::Replayed(other) => Err(RuntimeError::new(
+                format!("journal step is {other:?}, but the program reached {what}"),
+                span,
+            )),
+            Lookup::Fresh { scope, seq } => {
+                let value = live();
+                journal
+                    .record(
+                        scope,
+                        seq,
+                        &site,
+                        Effect::Tool {
+                            name: what.to_string(),
+                            result_json: value.to_string(),
+                        },
+                    )
+                    .map_err(|e| RuntimeError::new(e.to_string(), span))?;
+                Ok(value)
+            }
+        }
+    }
+}
+
+impl Interpreter {
+    /// The strictest label anywhere inside a value.
+    ///
+    /// A `classified` field marker lives on the *type declaration*, so an
+    /// object holding a secret looks public until the field is read. Any sink
+    /// that consumes a whole value — serializing it, writing it, sending it —
+    /// must look inside, or the marker is trivially bypassed by passing the
+    /// container instead of the field.
+    pub fn deep_label(&self, value: &Value) -> Label {
+        self.deep_label_inner(value, false)
+    }
+
+    fn deep_label_inner(&self, value: &Value, inherited: bool) -> Label {
+        let mut label = value.label();
+        if inherited {
+            label = label.join(Label::CLASSIFIED);
+        }
+        match value.unlabeled() {
+            Value::List(items) => {
+                for item in items.borrow().iter() {
+                    label = label.join(self.deep_label_inner(item, inherited));
+                }
+            }
+            Value::Dict(map) => {
+                for item in map.borrow().values() {
+                    label = label.join(self.deep_label_inner(item, inherited));
+                }
+            }
+            Value::Object { type_name, fields } => {
+                let declared = self.types.get(type_name.as_str());
+                for (name, item) in fields.borrow().iter() {
+                    let sensitive = inherited
+                        || declared
+                            .is_some_and(|fs| fs.iter().any(|f| &f.name == name && f.classified));
+                    label = label.join(self.deep_label_inner(item, sensitive));
+                }
+            }
+            Value::Variant { payload, .. } => {
+                for item in payload {
+                    label = label.join(self.deep_label_inner(item, inherited));
+                }
+            }
+            _ => {}
+        }
+        label
     }
 }

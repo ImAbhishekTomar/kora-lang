@@ -62,6 +62,7 @@ pub enum TokenKind {
     Tool,
     Classified,
     Declassify,
+    Use,
     Budget,
     Parallel,
 
@@ -137,6 +138,7 @@ impl fmt::Display for TokenKind {
             Tool => write!(f, "tool"),
             Classified => write!(f, "classified"),
             Declassify => write!(f, "declassify"),
+            Use => write!(f, "use"),
             Budget => write!(f, "budget"),
             Parallel => write!(f, "parallel"),
             Plus => write!(f, "+"),

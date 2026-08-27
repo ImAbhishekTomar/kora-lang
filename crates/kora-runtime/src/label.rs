@@ -11,35 +11,106 @@
 
 use std::collections::{HashMap, HashSet};
 
-/// Confidentiality label on a value.
-///
-/// Binary for now (DECISIONS.md): `Public` or `Classified`. A small lattice
-/// can be layered on later without changing call sites.
+/// How secret a value is: may it be *sent out*?
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum Label {
+pub enum Secrecy {
     #[default]
     Public,
     Classified,
 }
 
+/// How trustworthy a value is: may it be *acted on*?
+///
+/// Anything that entered the program from outside is `Unverified`: HTTP
+/// bodies, file contents, model output, tool results. It becomes `Trusted`
+/// only by being narrowed — parsed into a type, or matched against a finite
+/// set. Never by assertion, which is the mistake that made Perl's taint mode
+/// useless.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Trust {
+    #[default]
+    Trusted,
+    Unverified,
+}
+
+/// The two independent axes a value carries.
+///
+/// Confidentiality runs outward (secrets must not leave), integrity runs
+/// inward (untrusted data must not reach a dangerous sink). Same machinery,
+/// opposite directions.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct Label {
+    pub secrecy: Secrecy,
+    pub trust: Trust,
+}
+
 impl Label {
-    /// Combining two values yields the stricter label. This single rule is
-    /// what makes propagation transitive across every operator.
+    pub const PUBLIC: Label = Label {
+        secrecy: Secrecy::Public,
+        trust: Trust::Trusted,
+    };
+
+    pub const CLASSIFIED: Label = Label {
+        secrecy: Secrecy::Classified,
+        trust: Trust::Trusted,
+    };
+
+    /// Data that came from outside the program.
+    pub const UNVERIFIED: Label = Label {
+        secrecy: Secrecy::Public,
+        trust: Trust::Unverified,
+    };
+
+    /// Combining two values yields the stricter label on both axes. This one
+    /// rule is what makes propagation transitive across every operator.
     pub fn join(self, other: Label) -> Label {
-        match (self, other) {
-            (Label::Public, Label::Public) => Label::Public,
-            _ => Label::Classified,
+        Label {
+            secrecy: match (self.secrecy, other.secrecy) {
+                (Secrecy::Public, Secrecy::Public) => Secrecy::Public,
+                _ => Secrecy::Classified,
+            },
+            trust: match (self.trust, other.trust) {
+                (Trust::Trusted, Trust::Trusted) => Trust::Trusted,
+                _ => Trust::Unverified,
+            },
         }
     }
 
     pub fn is_classified(self) -> bool {
-        matches!(self, Label::Classified)
+        self.secrecy == Secrecy::Classified
+    }
+
+    pub fn is_unverified(self) -> bool {
+        self.trust == Trust::Unverified
+    }
+
+    /// Whether the value carries any restriction at all.
+    pub fn is_plain(self) -> bool {
+        self == Label::PUBLIC
+    }
+
+    /// Mark as having come from outside, keeping any secrecy already present.
+    pub fn untrusted(self) -> Label {
+        Label {
+            trust: Trust::Unverified,
+            ..self
+        }
+    }
+
+    /// Narrowing succeeded: the value is now safe to act on.
+    pub fn verified(self) -> Label {
+        Label {
+            trust: Trust::Trusted,
+            ..self
+        }
     }
 
     pub fn name(self) -> &'static str {
-        match self {
-            Label::Public => "public",
-            Label::Classified => "classified",
+        match (self.secrecy, self.trust) {
+            (Secrecy::Classified, Trust::Unverified) => "classified and unverified",
+            (Secrecy::Classified, Trust::Trusted) => "classified",
+            (Secrecy::Public, Trust::Unverified) => "unverified",
+            (Secrecy::Public, Trust::Trusted) => "public",
         }
     }
 }
@@ -90,13 +161,12 @@ impl SinkPolicy {
     /// Unknown sinks are refused rather than allowed: a typo in a sink name
     /// must not silently open a hole.
     pub fn permits(&self, sink: &str, label: Label) -> bool {
-        match label {
-            Label::Public => true,
-            Label::Classified => self
-                .allowed
-                .get(sink)
-                .is_some_and(|labels| labels.contains("classified")),
+        if !label.is_classified() {
+            return true;
         }
+        self.allowed
+            .get(sink)
+            .is_some_and(|labels| labels.contains("classified"))
     }
 
     pub fn is_known_sink(&self, sink: &str) -> bool {
@@ -143,11 +213,30 @@ mod tests {
     }
 
     #[test]
-    fn join_takes_the_stricter_label() {
-        assert_eq!(Label::Public.join(Label::Public), Label::Public);
-        assert_eq!(Label::Public.join(Label::Classified), Label::Classified);
-        assert_eq!(Label::Classified.join(Label::Public), Label::Classified);
-        assert_eq!(Label::Classified.join(Label::Classified), Label::Classified);
+    fn join_takes_the_stricter_label_on_both_axes() {
+        assert_eq!(Label::PUBLIC.join(Label::PUBLIC), Label::PUBLIC);
+        assert!(Label::PUBLIC.join(Label::CLASSIFIED).is_classified());
+        assert!(Label::PUBLIC.join(Label::UNVERIFIED).is_unverified());
+
+        // The axes are independent: joining a secret with untrusted data
+        // yields something that is both.
+        let both = Label::CLASSIFIED.join(Label::UNVERIFIED);
+        assert!(both.is_classified() && both.is_unverified());
+        assert_eq!(both.name(), "classified and unverified");
+    }
+
+    #[test]
+    fn verification_clears_only_the_trust_axis() {
+        let both = Label::CLASSIFIED.join(Label::UNVERIFIED);
+        let checked = both.verified();
+        assert!(
+            !checked.is_unverified(),
+            "narrowing makes it safe to act on"
+        );
+        assert!(
+            checked.is_classified(),
+            "but it is still a secret: verifying is not declassifying"
+        );
     }
 
     #[test]
@@ -159,10 +248,10 @@ local_model = { allow = ["classified", "internal"] }
 openai = { allow = ["internal"] }
 "#,
         );
-        assert!(p.permits("local_model", Label::Classified));
-        assert!(!p.permits("openai", Label::Classified));
+        assert!(p.permits("local_model", Label::CLASSIFIED));
+        assert!(!p.permits("openai", Label::CLASSIFIED));
         // Public data flows anywhere.
-        assert!(p.permits("openai", Label::Public));
+        assert!(p.permits("openai", Label::PUBLIC));
     }
 
     #[test]
@@ -173,22 +262,22 @@ openai = { allow = ["internal"] }
 openai = { allow = ["classified"], deny = ["classified"] }
 "#,
         );
-        assert!(!p.permits("openai", Label::Classified));
+        assert!(!p.permits("openai", Label::CLASSIFIED));
     }
 
     #[test]
     fn unknown_sink_refuses_classified() {
         // A typo must not silently open a hole.
         let p = policy("[sinks]\nlocal_model = { allow = [\"classified\"] }\n");
-        assert!(!p.permits("locl_model", Label::Classified));
+        assert!(!p.permits("locl_model", Label::CLASSIFIED));
         assert!(!p.is_known_sink("locl_model"));
     }
 
     #[test]
     fn empty_policy_denies_all_classified_flow() {
         let p = policy("");
-        assert!(!p.permits("anything", Label::Classified));
-        assert!(p.permits("anything", Label::Public));
+        assert!(!p.permits("anything", Label::CLASSIFIED));
+        assert!(p.permits("anything", Label::PUBLIC));
     }
 
     #[test]
