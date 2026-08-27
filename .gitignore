@@ -16,3 +16,5 @@
 # Runtime-generated artifacts
 /cassettes/
 *.trace
+# Durable run journals
+.kora/

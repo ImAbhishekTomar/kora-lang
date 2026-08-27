@@ -121,6 +121,32 @@ sensitive leaves the process and no declassification is needed.
 The list is complete, not best-effort, because every release goes through a
 `declassify` block the parser can see.
 
+## Durable execution
+
+A program can stop and wait for a person. The process exits; the run survives.
+
+```python
+a: Assessment = analyze(request, "assess refund risk")
+
+if assessment.risk != "low":
+    # The program sleeps here -- hours or days. The process may exit.
+    decision = ask_human("approve this refund?", assessment.reason)
+```
+
+```bash
+kora run --durable examples/04_durable_approval.ko   # 30s of model work, then parks
+kora runs examples/04_durable_approval.ko            # see what is waiting
+kora answer examples/04_durable_approval.ko <id> yes # resumes in 0.02s
+```
+
+Resuming does not re-pay for work already done, and does not reprint what you
+already saw. Kill the process with `SIGKILL` mid-run and
+`kora run --durable --resume <id>` picks up from the last completed effect.
+
+Durability is replay-based: every effect is journaled, and a resumed run
+re-executes with those effects served from the journal. The contract is that
+code between effects is deterministic — the same one Temporal makes.
+
 ## Status
 
 Early development, pre-alpha. Built for personal use first. See

@@ -16,8 +16,15 @@ design changes and should be deliberate.
 **The agent is the unit of execution.** Everything derives from this:
 
 1. **Agents are isolated, durable, resumable processes.** Per-agent private
-   heaps, share-nothing, message passing. Checkpoint at every suspension point
-   (model call, tool call, `ask_human`). Kill the process, restart, it resumes.
+   heaps, share-nothing, message passing. Durability is **replay-based**, not
+   stack-snapshot based: a tree-walking interpreter keeps its state in the
+   Rust call stack, which cannot be serialized, so every effect (model call,
+   tool result, human answer, output line) is journaled and a resumed run
+   re-executes from the top with those effects served from the journal. This
+   is Temporal's and Restate's approach, and it works here precisely because
+   agents share nothing — each replays independently, with no interleaving to
+   reproduce. The contract: code between effects must be deterministic.
+   Output is journaled too, so a resumed run continues rather than retells.
 2. **Real parallelism.** OS threads + work-stealing scheduler, no GIL, no
    async/await coloring. `parallel for` for fan-out. Safe because heaps are
    isolated.
@@ -182,7 +189,7 @@ when something actually demands it (designed, not built speculatively).
 2. `analyze` (OpenAI + Ollama), typed results, cassettes — **done**
 3. `agent`, `tool`, `parallel for`, budgets — **done**
 4. `classified` / `declassify` + `kora audit` — **done**
-5. Durability (checkpoint/resume, `ask_human`)
+5. Durability (journal/replay, `ask_human`) — **done**
 6. `test`/`mock`, OTel, LSP (squiggles, hover, go-to-def)
 7. (parked) in-process GPU inference
 
