@@ -1,0 +1,24 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/kora-syntax",
+    "crates/kora-types",
+    "crates/kora-runtime",
+    "crates/kora-models",
+    "crates/kora-lsp",
+    "crates/kora-cli",
+]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+license = "MIT"
+repository = "https://github.com/abhishektomar/kora-lang"
+
+[workspace.dependencies]
+kora-syntax = { path = "crates/kora-syntax" }
+kora-types = { path = "crates/kora-types" }
+kora-runtime = { path = "crates/kora-runtime" }
+kora-models = { path = "crates/kora-models" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
