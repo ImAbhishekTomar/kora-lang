@@ -156,12 +156,23 @@ use time
 use re
 ```
 
-Each module is native (Rust-backed) and fixes a specific, known defect:
+Eight modules, each native (Rust-backed) and each fixing a specific, known
+defect rather than reimplementing it:
 
+- **`http`** — a timeout always exists (you can change it, not omit it); a
+  non-2xx is `Err`, not a response object that flows onward; retries with
+  backoff are built in, and only for idempotent methods; private address
+  ranges are refused, so a stray URL cannot reach the cloud metadata service
 - **`json`** — errors quote the offending text and name the path
   (`$.users.0.email: not found`), instead of a byte offset on one-line JSON
+- **`csv`** — you declare the row type; nothing is guessed, so a zip code
+  keeps its leading zero, and a bad field names the row and column
+- **`sql`** — parameters only. A value from outside cannot become query text
+  at all, so injection is unavailable rather than discouraged
 - **`fs`** — writes are atomic (temp + rename), missing files name the path,
   and `..` in a path is refused
+- **`env`** — a variable whose name looks like a credential comes back
+  `classified`, so it cannot reach a log line by accident
 - **`re`** — linear-time engine, so `(a+)+$` against hostile input answers
   instead of hanging
 - **`time`** — instants are absolute; there is no naive type to misuse, and
@@ -173,6 +184,10 @@ Two rules hold across all of them. Data that enters from outside is
 ```python
 contents = fs.read("config.txt")   # unverified: it came from outside
 fs.read(contents)                  # error: a path that came from outside
+
+sql.query(db, f"select * from t where id = {user_input}")
+# error: a statement built from outside data
+# hint:  pass the value as a parameter instead
 ```
 
 And failure is a value, never a silent `None` or a forgotten exception:

@@ -1,0 +1,61 @@
+# The stdlib's safety properties, demonstrated rather than described.
+#
+# Each commented block below is a classic vulnerability. None of them are
+# reachable in Kora: the label system stops them at the sink.
+
+use csv
+use http
+use json
+
+type Person:
+    name: str
+    zip: str
+    amount: float
+
+def main():
+    # csv: no type guessing, so a zip code keeps its leading zero
+    text = "name,zip,amount\nada,01234,42.50\ngrace,90210,17.25\n"
+    match csv.parse(text, Person):
+        case Ok(people):
+            for p in people:
+                print(f"{p.name}  zip={p.zip}  amount={p.amount}")
+        case Err(why):
+            print(why)
+
+    # csv: a bad field names the row and the column
+    bad = "name,zip,amount\nada,01234,not-a-number\n"
+    match csv.parse(bad, Person):
+        case Ok(rows):
+            print("unreachable")
+        case Err(why):
+            print(f"csv: {why}")
+
+    # http: private ranges are refused, so a stray url cannot reach the
+    # cloud metadata service
+    match http.get("http://169.254.169.254/latest/meta-data/"):
+        case Ok(r):
+            print("unreachable")
+        case Err(why):
+            print(f"http: {why}")
+
+    # http: a non-2xx is a failure, not a response object that flows onward
+    match http.get("https://example.com/definitely-not-here-xyz"):
+        case Ok(r):
+            status = r["status"]
+            print(f"http: got {status}")
+        case Err(why):
+            print(f"http: {why}")
+
+# None of the following compile or run:
+#
+#   sql.query(db, f"select * from t where id = {user_input}")
+#     error: a statement built from outside data
+#     hint:  pass the value as a parameter instead
+#
+#   key = env.get("API_KEY")   # classified, because of the name
+#   fs.write("log.txt", key)
+#     error: classified data
+#
+#   url = fs.read("targets.txt")
+#   http.get(url)
+#     error: a url that came from outside the program

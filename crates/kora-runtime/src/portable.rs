@@ -35,6 +35,7 @@ pub enum Portable {
     Func(FuncDef),
     Builtin(&'static str),
     Module(String),
+    TypeRef(String),
     /// Labels cross agent boundaries: isolation must not launder them.
     Labeled {
         label: Label,
@@ -75,6 +76,7 @@ impl Portable {
             Value::Func(f) => Portable::Func((**f).clone()),
             Value::Builtin(name) => Portable::Builtin(name),
             Value::Module { name } => Portable::Module(name.to_string()),
+            Value::TypeRef { name } => Portable::TypeRef(name.to_string()),
             Value::Labeled { label, inner } => Portable::Labeled {
                 label: *label,
                 inner: Box::new(Portable::from_value(inner)),
@@ -117,6 +119,9 @@ impl Portable {
             Portable::Func(f) => Value::Func(Rc::new(f)),
             Portable::Builtin(name) => Value::Builtin(name),
             Portable::Module(name) => Value::Module {
+                name: Rc::new(name),
+            },
+            Portable::TypeRef(name) => Value::TypeRef {
                 name: Rc::new(name),
             },
             Portable::Labeled { label, inner } => Value::Labeled {

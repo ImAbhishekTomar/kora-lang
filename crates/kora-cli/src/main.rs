@@ -245,6 +245,8 @@ fn run_file(
     interp.program_name = path.to_string();
     interp.config = Config::discover(program_path);
     interp.sinks = interp.config.sinks.clone();
+    interp.allow_private_hosts = interp.config.http_allow_private;
+    interp.http_timeout_secs = interp.config.http_timeout_secs;
     interp.cassette = Some(std::sync::Arc::new(std::sync::Mutex::new(Cassette::open(
         mode,
         program_path,

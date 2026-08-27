@@ -20,6 +20,10 @@ pub struct Config {
     pub local_endpoint: Option<String>,
     /// Which sinks may receive which labels, from `[sinks]`.
     pub sinks: SinkPolicy,
+    /// `[http] allow_private` — permit loopback and private address ranges.
+    pub http_allow_private: bool,
+    /// `[http] timeout_secs` — applied to every request; there is no "off".
+    pub http_timeout_secs: u64,
 }
 
 impl Config {
@@ -51,8 +55,20 @@ impl Config {
 
         let mut config = Config {
             sinks: SinkPolicy::from_toml(&root),
+            http_timeout_secs: 30,
             ..Default::default()
         };
+        if let Some(http) = root.get("http").and_then(|v| v.as_table()) {
+            config.http_allow_private = http
+                .get("allow_private")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false);
+            if let Some(secs) = http.get("timeout_secs").and_then(|v| v.as_integer()) {
+                // A zero or negative timeout is how "no timeout" sneaks back
+                // in, so it is clamped rather than honoured.
+                config.http_timeout_secs = secs.clamp(1, 600) as u64;
+            }
+        }
 
         if let Some(models) = root.get("models").and_then(|v| v.as_table()) {
             for (key, value) in models {

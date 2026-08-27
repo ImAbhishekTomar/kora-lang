@@ -20,9 +20,13 @@ use kora_syntax::token::Span;
 use crate::interp::{Interpreter, RuntimeError};
 use crate::value::Value;
 
+pub mod csv;
+pub mod env;
 pub mod fs;
+pub mod http;
 pub mod json;
 pub mod re;
+pub mod sql;
 pub mod time;
 
 /// A native function: name, and the implementation.
@@ -51,6 +55,10 @@ impl Module {
 pub fn module(name: &str) -> Option<Module> {
     match name {
         "json" => Some(Module::new("json", json::EXPORTS)),
+        "csv" => Some(Module::new("csv", csv::EXPORTS)),
+        "http" => Some(Module::new("http", http::EXPORTS)),
+        "sql" => Some(Module::new("sql", sql::EXPORTS)),
+        "env" => Some(Module::new("env", env::EXPORTS)),
         "fs" => Some(Module::new("fs", fs::EXPORTS)),
         "time" => Some(Module::new("time", time::EXPORTS)),
         "re" => Some(Module::new("re", re::EXPORTS)),
@@ -59,7 +67,7 @@ pub fn module(name: &str) -> Option<Module> {
 }
 
 /// Module names, for "did you mean" hints.
-pub const MODULE_NAMES: &[&str] = &["json", "fs", "time", "re"];
+pub const MODULE_NAMES: &[&str] = &["json", "csv", "http", "sql", "env", "fs", "time", "re"];
 
 // --- shared helpers for module implementations ---
 
