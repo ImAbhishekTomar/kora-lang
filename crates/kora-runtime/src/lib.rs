@@ -10,6 +10,7 @@ pub mod interp;
 pub mod journal;
 pub mod label;
 pub mod portable;
+pub mod stdlib;
 pub mod value;
 
 pub use budget::{Budget, Meter};

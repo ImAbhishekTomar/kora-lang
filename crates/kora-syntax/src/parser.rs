@@ -40,6 +40,7 @@ impl Parser {
             TokenKind::Match => self.match_stmt(),
             TokenKind::Budget => self.budget_line(),
             TokenKind::Declassify => self.declassify_stmt(),
+            TokenKind::Use => self.use_stmt(),
             TokenKind::Parallel => self.parallel_for(None),
             TokenKind::Classified => self.classified_assign(),
             TokenKind::Ident(name) if name == "with" && self.peek_next_is(&TokenKind::Budget) => {
@@ -346,6 +347,25 @@ impl Parser {
             );
         }
         Ok(spec)
+    }
+
+    /// `use json` / `use json as j`
+    fn use_stmt(&mut self) -> Result<Stmt, SyntaxError> {
+        let span = self.peek_span();
+        self.advance(); // use
+        let module = self.expect_ident("a module name after `use`")?;
+        let alias = match self.peek_kind() {
+            TokenKind::Ident(word) if word == "as" => {
+                self.advance();
+                self.expect_ident("a name after `as`")?
+            }
+            _ => module.clone(),
+        };
+        self.expect_newline("use")?;
+        Ok(Stmt {
+            kind: StmtKind::Use { module, alias },
+            span,
+        })
     }
 
     /// `classified name = value` / `classified name: Type = value`

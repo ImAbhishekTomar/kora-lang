@@ -1,0 +1,76 @@
+# The native standard library.
+#
+# Each module fixes a specific, well-known defect in its equivalent
+# elsewhere. Run this file to see the fixes rather than read about them.
+
+use json
+use fs
+use time
+use re
+
+def main():
+    # json: errors point at the text, not at a byte offset nobody can find
+    match json.parse("{\"a\": 1,,}"):
+        case Ok(d):
+            print("unreachable")
+        case Err(why):
+            print(f"1. {why}")
+
+    # json: a path walk says where it stopped, not just the last segment
+    match json.parse("{\"users\": [{\"name\": \"ada\"}]}"):
+        case Ok(doc):
+            match json.get(doc, "users.0.email"):
+                case Ok(v):
+                    print("unreachable")
+                case Err(why):
+                    print(f"2. {why}")
+        case Err(w):
+            print(w)
+
+    # re: a pattern that hangs a backtracking engine returns immediately here
+    long = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaab"
+    match re.matches("(a+)+$", long):
+        case Ok(hit):
+            print(f"3. ReDoS pattern answered in linear time: {hit}")
+        case Err(w):
+            print(w)
+
+    # re: a bad pattern is data, because patterns come from config and models
+    match re.matches("(unclosed", "text"):
+        case Ok(b):
+            print("unreachable")
+        case Err(why):
+            print(f"4. {why}")
+
+    # time: instants are absolute; there is no naive type to misuse
+    match time.format(1709164800, "iso"):
+        case Ok(s):
+            print(f"5. leap day: {s}")
+        case Err(w):
+            print(w)
+
+    # fs: missing files name the path, which io errors usually omit
+    match fs.read("no-such-file.txt"):
+        case Ok(t):
+            print("unreachable")
+        case Err(why):
+            print(f"6. {why}")
+
+    # fs: writes are atomic, so a crash cannot leave a truncated file
+    match fs.write("greeting.txt", "written atomically\n"):
+        case Ok(_):
+            match fs.read("greeting.txt"):
+                case Ok(text):
+                    print(f"7. read back: {text}")
+                case Err(w):
+                    print(w)
+        case Err(w):
+            print(w)
+
+# These do not compile or run -- the label system stops them:
+#
+#   contents = fs.read("config.txt")     # unverified: it came from outside
+#   fs.read(contents)                    # error: a path from outside the program
+#
+#   classified ssn = "123-45-6789"
+#   json.stringify(person)               # error: classified data

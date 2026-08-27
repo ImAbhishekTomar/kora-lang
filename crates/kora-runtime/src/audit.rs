@@ -68,6 +68,7 @@ fn walk_stmt(stmt: &Stmt, file: &str, out: &mut Vec<DeclassifySite>) {
         | StmtKind::Return(_)
         | StmtKind::Break
         | StmtKind::Continue
+        | StmtKind::Use { .. }
         | StmtKind::Pass => {}
     }
 }
