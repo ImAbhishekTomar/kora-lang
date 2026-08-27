@@ -58,6 +58,10 @@ pub enum TokenKind {
     Type,
     Match,
     Case,
+    Agent,
+    Tool,
+    Budget,
+    Parallel,
 
     // Operators
     Plus,
@@ -127,6 +131,10 @@ impl fmt::Display for TokenKind {
             Type => write!(f, "type"),
             Match => write!(f, "match"),
             Case => write!(f, "case"),
+            Agent => write!(f, "agent"),
+            Tool => write!(f, "tool"),
+            Budget => write!(f, "budget"),
+            Parallel => write!(f, "parallel"),
             Plus => write!(f, "+"),
             Minus => write!(f, "-"),
             Star => write!(f, "*"),

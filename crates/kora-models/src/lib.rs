@@ -68,6 +68,42 @@ pub struct AnalyzeRequest {
     /// The input data serialized as JSON text.
     pub data_json: String,
     pub schema: Schema,
+    /// Tools the model may call before producing its final answer.
+    pub tools: Vec<ToolSpec>,
+    /// Results of tool calls already performed, appended to the conversation
+    /// as the loop progresses.
+    pub tool_history: Vec<ToolExchange>,
+}
+
+/// A function the model may call. Built from a Kora `tool` declaration:
+/// the signature becomes the schema, the docstring becomes the description.
+#[derive(Debug, Clone)]
+pub struct ToolSpec {
+    pub name: String,
+    pub description: String,
+    pub params: Vec<(String, FieldType)>,
+}
+
+/// One completed tool call and its result.
+#[derive(Debug, Clone)]
+pub struct ToolExchange {
+    pub name: String,
+    pub arguments_json: String,
+    pub result_json: String,
+}
+
+/// What the model wants next.
+#[derive(Debug, Clone)]
+pub enum Step {
+    /// Final answer produced.
+    Done(AnalyzeOutcome),
+    /// Model asked to run a tool; the runtime should execute it and loop.
+    CallTool {
+        name: String,
+        arguments_json: String,
+        tokens_in: u64,
+        tokens_out: u64,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -109,5 +145,17 @@ impl std::error::Error for ModelError {}
 
 /// Run one schema-constrained analyze call against the configured provider.
 pub fn analyze(config: &ModelConfig, req: &AnalyzeRequest) -> Result<AnalyzeOutcome, ModelError> {
-    provider::analyze_with(config, req, &provider::ureq_transport)
+    match provider::step_with(config, req, &provider::ureq_transport)? {
+        Step::Done(outcome) => Ok(outcome),
+        // Without tools declared the model has nothing to call, so a tool
+        // request here means it ignored the contract.
+        Step::CallTool { name, .. } => Err(ModelError::new(format!(
+            "model tried to call tool `{name}`, but no tools were provided"
+        ))),
+    }
+}
+
+/// One turn of the tool loop: either the final answer, or a tool to run.
+pub fn step(config: &ModelConfig, req: &AnalyzeRequest) -> Result<Step, ModelError> {
+    provider::step_with(config, req, &provider::ureq_transport)
 }

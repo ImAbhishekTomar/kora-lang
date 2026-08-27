@@ -91,11 +91,15 @@ fn run_file(path: &str, mode: Mode, report: bool) -> ExitCode {
     interp.direct_stdout = true;
     interp.program_name = path.to_string();
     interp.config = Config::discover(program_path);
-    interp.cassette = Some(Cassette::open(mode, program_path));
+    interp.cassette = Some(std::sync::Arc::new(std::sync::Mutex::new(Cassette::open(
+        mode,
+        program_path,
+    ))));
 
     let result = interp.run(&program);
 
     if let Some(cassette) = &interp.cassette {
+        let cassette = cassette.lock().unwrap_or_else(|e| e.into_inner());
         if let Err(e) = cassette.save() {
             eprintln!("warning: could not write cassette: {e}");
         }

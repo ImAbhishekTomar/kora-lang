@@ -49,7 +49,10 @@ fn run_with_cassette(name: &str, source: &str, entries: Vec<Entry>) -> Result<Ve
     let mut interp = Interpreter::new();
     interp.program_name = path.to_string_lossy().to_string();
     interp.config = Config::parse(CONFIG).unwrap();
-    interp.cassette = Some(Cassette::open(Mode::Replay, &path));
+    interp.cassette = Some(std::sync::Arc::new(std::sync::Mutex::new(Cassette::open(
+        Mode::Replay,
+        &path,
+    ))));
 
     interp
         .run(&program)
@@ -204,7 +207,10 @@ fn token_usage_accumulates_from_cassette() {
     let mut interp = Interpreter::new();
     interp.program_name = path.to_string_lossy().to_string();
     interp.config = Config::parse(CONFIG).unwrap();
-    interp.cassette = Some(Cassette::open(Mode::Replay, &path));
+    interp.cassette = Some(std::sync::Arc::new(std::sync::Mutex::new(Cassette::open(
+        Mode::Replay,
+        &path,
+    ))));
     interp.run(&program).unwrap();
 
     assert_eq!(interp.tokens_in, 100);
@@ -270,4 +276,61 @@ fn unmatched_value_errors_with_hint() {
     let err = interp.run(&program).unwrap_err();
     assert!(err.message.contains("no `case` arm matched"));
     assert!(err.hint.as_deref().unwrap_or("").contains("case _:"));
+}
+
+#[test]
+fn parallel_workers_share_one_cassette() {
+    // Regression: workers used to take the cassette out of a shared slot, so
+    // concurrent workers saw None and recordings were lost. All parallel
+    // branches must replay from the same cassette.
+    let scratch = Scratch::new("parallel-cassette");
+    let src = r#"type Insight:
+    summary: str
+    severity: int
+
+agent look(item: str) -> str:
+    result: Insight = analyze(item, "assess this")
+    match result:
+        case Ok(v):
+            return v.summary
+        case Uncertain(reason):
+            return reason
+
+def main():
+    results = parallel for item in ["a", "b", "c"]:
+        return look(item)
+    for r in results:
+        print(r)
+"#;
+    let path = scratch.program(src);
+    let path_str = path.to_string_lossy().to_string();
+
+    // One entry per distinct input, all at the same call site and line.
+    let mut recording = Cassette::open(Mode::Record, &path);
+    for item in ["a", "b", "c"] {
+        recording.insert(entry_for(
+            &path_str,
+            6,
+            "assess this",
+            &format!("\"{item}\""),
+            ok_fields(&[
+                ("summary", serde_json::json!(format!("saw {item}"))),
+                ("severity", serde_json::json!(1)),
+            ]),
+        ));
+    }
+    recording.save().unwrap();
+
+    let program = parse(src).unwrap();
+    let mut interp = Interpreter::new();
+    interp.program_name = path_str;
+    interp.config = Config::parse(CONFIG).unwrap();
+    interp.cassette = Some(std::sync::Arc::new(std::sync::Mutex::new(Cassette::open(
+        Mode::Replay,
+        &path,
+    ))));
+    interp.run(&program).expect("all branches should replay");
+
+    assert_eq!(interp.output, vec!["saw a", "saw b", "saw c"]);
+    assert_eq!(interp.model_calls, 0, "replay must not call a provider");
 }

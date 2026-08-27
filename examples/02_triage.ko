@@ -1,29 +1,46 @@
-# Phase 3 target: agents, tools, parallel fan-out, budgets, failure handling.
+# Phase 3: agents, tools, parallel fan-out, and token budgets.
+#
+# Every ticket is triaged by its own agent on its own thread, all drawing
+# from one shared token budget. Exhaustion is a value, so partial work
+# survives instead of the whole run failing.
 
 type Ticket:
-    severity: str        # "low" | "medium" | "high"
+    severity: str
     product: str
     summary: str
 
-tool lookup_customer(email: str) -> Customer:
-    "Fetch customer record from billing DB."
-    return db.query("select * from customers where email = ?", email)
+tool priority_for(severity: str) -> int:
+    "Map a severity label to the on-call priority number."
+    if severity == "high":
+        return 1
+    if severity == "medium":
+        return 2
+    return 3
 
-agent triage(raw: str) -> Ticket:
-    budget: max_tokens = 20_000, max_steps = 5
+agent triage(raw: str) -> str:
+    budget: max_tokens = 4000, max_steps = 4
 
-    t = analyze(raw, "classify this support ticket", tools=[lookup_customer])
+    t: Ticket = analyze(raw, "classify this support ticket into severity (low/medium/high), product, and a one-line summary")
     match t:
         case Ok(ticket):
-            return ticket
+            return f"P{priority_for(ticket.severity)}  [{ticket.product}] {ticket.summary}"
         case Uncertain(reason):
-            return escalate(raw, reason)
+            return f"??  needs a human: {reason}"
+        case Exhausted(meter):
+            return f"--  budget out of {meter}"
 
 def main():
-    tickets = inbox.fetch_all()
+    tickets = [
+        "the checkout page returns a 500 for every card payment, nobody can buy anything",
+        "could you add a dark mode to the dashboard someday?",
+        "CSV export drops the last row when there are more than 1000 records",
+    ]
 
-    results = parallel for t in tickets:
-        triage(t)
+    with budget(max_tokens = 20000):
+        results = parallel for t in tickets:
+            return triage(t)
 
-    for r in results.failed():
-        log.warn(f"triage failed: {r.error}")
+        for line in results:
+            print(line)
+
+        print(f"\nspent {tokens_spent()} tokens across {calls_spent()} calls")
