@@ -20,6 +20,8 @@ pub enum StmtKind {
         target: Expr,
         ty: Option<TypeExpr>,
         value: Expr,
+        /// Declared with `classified`, so the bound value carries the label.
+        classified: bool,
     },
     /// `x += expr` and friends (desugared op stored explicitly)
     AugAssign {
@@ -57,6 +59,19 @@ pub enum StmtKind {
         /// Name bound to the result list, when written as
         /// `results = parallel for ...`.
         collect_into: Option<String>,
+    },
+    /// `declassify <expr> for <sink>:` — a bounded region in which a
+    /// classified value may reach one named sink. Scoped on purpose: the
+    /// exposure is the block, not the rest of the program.
+    Declassify {
+        /// The value being declassified.
+        value: Expr,
+        /// Name it is bound to inside the block (defaults to the expression
+        /// text when written as `declassify x for sink:`).
+        binding: String,
+        /// Where it is allowed to flow, e.g. `local_model`.
+        sink: String,
+        body: Vec<Stmt>,
     },
     /// `with budget(max_tokens = N):` — a nested spending fence.
     WithBudget {
@@ -143,6 +158,8 @@ pub struct FieldDef {
     pub name: String,
     pub ty: TypeExpr,
     pub span: Span,
+    /// `classified` marker on the field: values read from it carry the label.
+    pub classified: bool,
 }
 
 /// Type annotations. Kept simple for Phase 1; grows with the checker.

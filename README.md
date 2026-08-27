@@ -77,6 +77,50 @@ Each branch of `parallel for` runs on its own thread with its own heap, so
 there is no shared mutable state to guard. All branches draw from one token
 budget, and results come back in input order.
 
+## Classified data
+
+Sensitive values cannot reach a model unless a scoped `declassify` block
+releases them to a sink the project policy allows:
+
+```python
+type Employee:
+    name: str
+    classified salary: int
+
+agent review(emp: Employee) -> str:
+    declassify emp.salary as pay for local_model:
+        a: Assessment = analyze({"pay": pay}, "assess against market")
+```
+
+The label is transitive: slicing, arithmetic, f-strings, containers, and
+function returns all carry it, so laundering does not work.
+
+```
+error: classified data cannot reach model sink `local_model` (no declassify in scope)
+  --> payroll.ko:12:20
+   |
+12 |     r: R = analyze(f"value is {ssn}", "anything")
+   |                    ^
+   = hint: wrap it in `declassify <value> for local_model:`
+```
+
+Sink policy lives in `kora.toml`, so salary data can reach the on-box model
+and never a vendor API:
+
+```toml
+[sinks]
+local_model = { allow = ["classified"] }
+openai      = { allow = ["internal"], deny = ["classified"] }
+```
+
+`redact()` is the easy path when the model only needs shape, not values:
+it replaces sensitive leaves with placeholders (`<NUM_1>`), so nothing
+sensitive leaves the process and no declassification is needed.
+
+`kora audit <file.ko>` lists every declassification site in a program.
+The list is complete, not best-effort, because every release goes through a
+`declassify` block the parser can see.
+
 ## Status
 
 Early development, pre-alpha. Built for personal use first. See

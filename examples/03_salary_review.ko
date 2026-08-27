@@ -1,36 +1,53 @@
-# Phases 4-5 target: classified data, scoped declassify, durable ask_human.
+# Phase 4: classified data and scoped declassification.
+#
+# `salary` is classified, so it cannot reach a model at all unless a
+# `declassify ... for <sink>:` block releases it to a sink the project
+# policy allows. Policy lives in kora.toml: local_model accepts classified
+# data, openai does not.
+
+type Employee:
+    name: str
+    role: str
+    classified salary: int
 
 type Assessment:
-    band: str            # "below" | "at" | "above"
+    band: str
     rationale: str
 
-def main():
-    employees = db.load("hr.employees")     # schema marks salary, ssn classified
+def market_rate(role: str) -> int:
+    if role == "staff engineer":
+        return 210
+    if role == "senior engineer":
+        return 175
+    return 140
 
-    reviews = parallel for emp in employees:
-        review(emp)
+agent review(emp: Employee) -> str:
+    budget: max_tokens = 4000
 
-    report.save(reviews)
-
-agent review(emp: Employee) -> Assessment:
-
-    # salary is classified: allowed into the local model, never a vendor API
-    declassify emp.salary for local_model:
+    # Salary may reach the on-box model, never a vendor API.
+    declassify emp.salary as pay for local_model:
         a: Assessment = analyze(
-            {role: emp.role, salary: emp.salary, market: market_data(emp.role)},
-            "assess pay against market"
+            {"role": emp.role, "pay": pay, "market": market_rate(emp.role)},
+            "assess whether pay is below, at, or above market; band must be one of below/at/above"
         )
 
-    if a.band == "below":
-        # program sleeps here -- hours or days. survives restarts.
-        decision = ask_human(f"raise for {emp.name}?", a.rationale)
-        if decision.approved:
-            hr.queue_adjustment(emp, decision.amount)
+    match a:
+        case Ok(assessment):
+            return f"{emp.name}: {assessment.band} — {assessment.rationale}"
+        case Uncertain(reason):
+            return f"{emp.name}: needs a human ({reason})"
+        case Exhausted(meter):
+            return f"{emp.name}: budget out of {meter}"
 
-    return a
+def main():
+    team = [
+        Employee("Ada", "staff engineer", 165),
+        Employee("Grace", "senior engineer", 180),
+    ]
 
-# These two lines must NOT compile (the thirty-second demo):
-#   analyze(emp.ssn, "anything")
-#     -> error: `emp.ssn` is classified, no declassify in scope [E0731]
-#   declassify emp.ssn for openai:
-#     -> error: policy forbids `classified` data to sink `openai`
+    with budget(max_tokens = 20000):
+        results = parallel for emp in team:
+            return review(emp)
+
+        for line in results:
+            print(line)

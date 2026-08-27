@@ -11,6 +11,7 @@ use std::rc::Rc;
 
 use kora_syntax::ast::FuncDef;
 
+use crate::label::Label;
 use crate::value::Value;
 
 /// A deep, `Send`-safe copy of a [`Value`].
@@ -33,6 +34,11 @@ pub enum Portable {
     },
     Func(FuncDef),
     Builtin(&'static str),
+    /// Labels cross agent boundaries: isolation must not launder them.
+    Labeled {
+        label: Label,
+        inner: Box<Portable>,
+    },
 }
 
 impl Portable {
@@ -67,6 +73,10 @@ impl Portable {
             },
             Value::Func(f) => Portable::Func((**f).clone()),
             Value::Builtin(name) => Portable::Builtin(name),
+            Value::Labeled { label, inner } => Portable::Labeled {
+                label: *label,
+                inner: Box::new(Portable::from_value(inner)),
+            },
         }
     }
 
@@ -104,6 +114,10 @@ impl Portable {
             },
             Portable::Func(f) => Value::Func(Rc::new(f)),
             Portable::Builtin(name) => Value::Builtin(name),
+            Portable::Labeled { label, inner } => Value::Labeled {
+                label,
+                inner: Rc::new(inner.into_value()),
+            },
         }
     }
 }

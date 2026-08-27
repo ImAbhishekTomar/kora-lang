@@ -9,6 +9,8 @@ use std::path::{Path, PathBuf};
 
 use kora_models::{ModelConfig, ModelError};
 
+use crate::label::SinkPolicy;
+
 #[derive(Debug, Clone, Default)]
 pub struct Config {
     /// Named model aliases, e.g. "default" -> "local:llama3.1:8b".
@@ -16,6 +18,8 @@ pub struct Config {
     /// Per-provider settings.
     pub openai_max_output_tokens: Option<u32>,
     pub local_endpoint: Option<String>,
+    /// Which sinks may receive which labels, from `[sinks]`.
+    pub sinks: SinkPolicy,
 }
 
 impl Config {
@@ -45,7 +49,10 @@ impl Config {
             .parse()
             .map_err(|e| ModelError::new(format!("kora.toml is not valid TOML: {e}")))?;
 
-        let mut config = Config::default();
+        let mut config = Config {
+            sinks: SinkPolicy::from_toml(&root),
+            ..Default::default()
+        };
 
         if let Some(models) = root.get("models").and_then(|v| v.as_table()) {
             for (key, value) in models {

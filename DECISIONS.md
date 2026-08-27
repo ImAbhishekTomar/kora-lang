@@ -181,7 +181,7 @@ when something actually demands it (designed, not built speculatively).
    (highlighting, icon, run command) — **done**
 2. `analyze` (OpenAI + Ollama), typed results, cassettes — **done**
 3. `agent`, `tool`, `parallel for`, budgets — **done**
-4. `classified` / `declassify` + `kora audit`
+4. `classified` / `declassify` + `kora audit` — **done**
 5. Durability (checkpoint/resume, `ask_human`)
 6. `test`/`mock`, OTel, LSP (squiggles, hover, go-to-def)
 7. (parked) in-process GPU inference

@@ -15,6 +15,7 @@ use std::sync::{Arc, Mutex};
 use crate::budget::Budget;
 use crate::cassette::{self, Cassette, Mode, RecordedOutcome};
 use crate::config::Config;
+use crate::label::{DeclassifySite, Label, SinkPolicy};
 use crate::portable::Portable;
 use crate::value::Value;
 
@@ -94,6 +95,12 @@ pub struct Interpreter {
     pub budget: Budget,
     /// How many worker threads `parallel for` may use at once.
     pub max_workers: usize,
+    /// Which sinks may receive which labels, from `[sinks]` in kora.toml.
+    pub sinks: SinkPolicy,
+    /// Sinks currently unlocked by an enclosing `declassify` block.
+    declassified_for: Vec<String>,
+    /// Every declassification reached during this run, for `kora audit`.
+    pub declassify_sites: Vec<DeclassifySite>,
 }
 
 const BUILTINS: &[&str] = &[
@@ -115,6 +122,7 @@ const BUILTINS: &[&str] = &[
     "tokens_spent",
     "tokens_remaining",
     "calls_spent",
+    "redact",
 ];
 
 impl Default for Interpreter {
@@ -140,6 +148,9 @@ impl Interpreter {
             max_workers: std::thread::available_parallelism()
                 .map(|n| n.get())
                 .unwrap_or(4),
+            sinks: SinkPolicy::default(),
+            declassified_for: Vec::new(),
+            declassify_sites: Vec::new(),
         }
     }
 
@@ -175,7 +186,12 @@ impl Interpreter {
                 self.eval(e, scope)?;
                 Ok(Flow::Normal)
             }
-            StmtKind::Assign { target, ty, value } => {
+            StmtKind::Assign {
+                target,
+                ty,
+                value,
+                classified,
+            } => {
                 // `x: T = analyze(...)` is the one place the declared type is
                 // available, and analyze needs it to build the model schema.
                 let v = match (ty, analyze_args(value)) {
@@ -189,6 +205,11 @@ impl Interpreter {
                         }
                         v
                     }
+                };
+                let v = if *classified {
+                    v.with_label(Label::Classified)
+                } else {
+                    v
                 };
                 self.assign(target, v, scope)?;
                 Ok(Flow::Normal)
@@ -255,6 +276,75 @@ impl Interpreter {
                     None => Value::None,
                 };
                 Ok(Flow::Return(v))
+            }
+            StmtKind::Declassify {
+                value,
+                binding,
+                sink,
+                body,
+            } => {
+                let released = self.eval(value, scope)?;
+                let label = released.label();
+
+                if !self.sinks.is_known_sink(sink) {
+                    let known = self.sinks.known_sinks();
+                    let mut err =
+                        RuntimeError::new(format!("`{sink}` is not a declared sink"), stmt.span);
+                    err = if known.is_empty() {
+                        err.with_hint(
+                            "declare sinks in kora.toml, e.g. `[sinks] local_model = { allow = [\"classified\"] }`",
+                        )
+                    } else {
+                        err.with_hint(format!("declared sinks: {}", known.join(", ")))
+                    };
+                    return Err(err);
+                }
+
+                if !self.sinks.permits(sink, label) {
+                    let accepting = self.sinks.sinks_accepting_classified();
+                    let hint = if accepting.is_empty() {
+                        "no sink currently accepts classified data — check `[sinks]` in kora.toml"
+                            .to_string()
+                    } else {
+                        format!(
+                            "sinks allowed for classified data: {}",
+                            accepting.join(", ")
+                        )
+                    };
+                    return Err(RuntimeError::new(
+                        format!(
+                            "policy forbids {} data reaching sink `{sink}`",
+                            label.name()
+                        ),
+                        stmt.span,
+                    )
+                    .with_hint(hint));
+                }
+
+                // Record the release before running the block: the audit trail
+                // should show intent even if the body later fails.
+                self.declassify_sites.push(DeclassifySite {
+                    file: self.program_name.clone(),
+                    line: stmt.span.line,
+                    expression: binding.clone(),
+                    sink: sink.clone(),
+                });
+
+                // Inside the block the value is usable for this sink only, and
+                // the binding is scoped: nothing escapes to the rest of the
+                // program.
+                let shadowed = scope.get(binding).cloned();
+                scope.insert(binding.clone(), released.unlabeled().clone());
+                self.declassified_for.push(sink.clone());
+
+                let result = self.exec_block(body, scope);
+
+                self.declassified_for.pop();
+                match shadowed {
+                    Some(previous) => scope.insert(binding.clone(), previous),
+                    Option::None => scope.remove(binding),
+                };
+                result
             }
             StmtKind::WithBudget { budget, body } => {
                 let outer = self.budget.clone();
@@ -366,6 +456,8 @@ impl Interpreter {
     /// Phase 1 annotation check: verify the value's runtime type matches the
     /// annotation. The static checker (kora-types) will subsume this later.
     fn check_annotation(&self, v: &Value, ty: &TypeExpr, span: Span) -> Result<(), RuntimeError> {
+        // A label does not change what type a value is.
+        let v = v.unlabeled();
         let expected = match ty {
             TypeExpr::Name(n) => n.clone(),
             TypeExpr::Generic(n, _) => n.clone(),
@@ -409,14 +501,16 @@ impl Interpreter {
             ExprKind::Name(name) => self.lookup(name, scope, expr.span),
             ExprKind::FString { parts, exprs } => {
                 let mut out = String::new();
+                let mut label = Label::Public;
                 for (i, part) in parts.iter().enumerate() {
                     out.push_str(part);
                     if i < exprs.len() {
                         let v = self.eval(&exprs[i], scope)?;
+                        label = label.join(v.label());
                         out.push_str(&v.to_string());
                     }
                 }
-                Ok(Value::Str(Rc::new(out)))
+                Ok(Value::Str(Rc::new(out)).with_label(label))
             }
             ExprKind::List(items) => {
                 let mut vals = Vec::with_capacity(items.len());
@@ -443,7 +537,9 @@ impl Interpreter {
             }
             ExprKind::Unary { op, operand } => {
                 let v = self.eval(operand, scope)?;
-                match op {
+                let label = v.label();
+                let v = v.unlabeled().clone();
+                let result = match op {
                     UnaryOp::Not => Ok(Value::Bool(!v.truthy())),
                     UnaryOp::Neg => match v {
                         Value::Int(i) => Ok(Value::Int(-i)),
@@ -453,7 +549,8 @@ impl Interpreter {
                             expr.span,
                         )),
                     },
-                }
+                };
+                result.map(|v| v.with_label(label))
             }
             ExprKind::Binary { op, left, right } => {
                 // Short-circuit logic first.
@@ -476,11 +573,30 @@ impl Interpreter {
                 }
                 let l = self.eval(left, scope)?;
                 let r = self.eval(right, scope)?;
+                // Transitivity: a result computed from classified data is
+                // classified. Without this, `f"{ssn}"` would launder it.
+                let label = l.label().join(r.label());
                 self.binop(*op, l, r, expr.span)
+                    .map(|v| v.with_label(label))
             }
             ExprKind::Attr { object, name } => {
                 let obj = self.eval(object, scope)?;
-                match &obj {
+                let outer_label = obj.label();
+                // A `classified` field marks values read from it, even when
+                // the containing object is public.
+                let field_label = match obj.unlabeled() {
+                    Value::Object { type_name, .. } => self
+                        .types
+                        .get(type_name.as_str())
+                        .and_then(|fields| fields.iter().find(|f| &f.name == name))
+                        .filter(|f| f.classified)
+                        .map(|_| Label::Classified)
+                        .unwrap_or_default(),
+                    _ => Label::Public,
+                };
+                let label = outer_label.join(field_label);
+                let obj = obj.unlabeled().clone();
+                let result = match &obj {
                     Value::Object { fields, type_name } => {
                         fields.borrow().get(name).cloned().ok_or_else(|| {
                             let available: Vec<String> = fields.borrow().keys().cloned().collect();
@@ -502,12 +618,16 @@ impl Interpreter {
                         format!("`{}` has no attribute `{name}`", other.type_name()),
                         expr.span,
                     )),
-                }
+                };
+                result.map(|v| v.with_label(label))
             }
             ExprKind::Index { object, index } => {
                 let obj = self.eval(object, scope)?;
                 let idx = self.eval(index, scope)?;
-                match (&obj, &idx) {
+                let label = obj.label().join(idx.label());
+                let obj = obj.unlabeled().clone();
+                let idx = idx.unlabeled().clone();
+                let result = match (&obj, &idx) {
                     (Value::List(items), Value::Int(i)) => {
                         let items = items.borrow();
                         let real = normalize_index(*i, items.len()).ok_or_else(|| {
@@ -534,7 +654,8 @@ impl Interpreter {
                         format!("cannot index {} with {}", obj.type_name(), idx.type_name()),
                         expr.span,
                     )),
-                }
+                };
+                result.map(|v| v.with_label(label))
             }
             ExprKind::Slice {
                 object,
@@ -542,6 +663,8 @@ impl Interpreter {
                 stop,
             } => {
                 let obj = self.eval(object, scope)?;
+                let label = obj.label();
+                let obj = obj.unlabeled().clone();
                 let start_v = match start {
                     Some(e) => Some(self.expect_int(e, scope)?),
                     None => None,
@@ -550,7 +673,7 @@ impl Interpreter {
                     Some(e) => Some(self.expect_int(e, scope)?),
                     None => None,
                 };
-                match obj {
+                let result = match obj {
                     Value::List(items) => {
                         let items = items.borrow();
                         let (a, b) = slice_bounds(start_v, stop_v, items.len());
@@ -565,7 +688,8 @@ impl Interpreter {
                         format!("cannot slice {}", other.type_name()),
                         expr.span,
                     )),
-                }
+                };
+                result.map(|v| v.with_label(label))
             }
             ExprKind::Call {
                 callee,
@@ -744,6 +868,10 @@ impl Interpreter {
     fn binop(&self, op: BinOp, l: Value, r: Value, span: Span) -> Result<Value, RuntimeError> {
         use BinOp::*;
         use Value::*;
+        // Operators work on the underlying value; the caller re-applies the
+        // joined label to the result.
+        let l = l.unlabeled().clone();
+        let r = r.unlabeled().clone();
         match op {
             Add => match (l, r) {
                 (Int(a), Int(b)) => Ok(Int(a + b)),
@@ -803,6 +931,8 @@ impl Interpreter {
 
     fn arith(&self, op: BinOp, l: Value, r: Value, span: Span) -> Result<Value, RuntimeError> {
         use Value::*;
+        let l = l.unlabeled().clone();
+        let r = r.unlabeled().clone();
         // Special case: str * int repetition.
         if let (BinOp::Mul, Str(s), Int(n)) = (op, &l, &r) {
             return Ok(Str(Rc::new(s.repeat((*n).max(0) as usize))));
@@ -871,6 +1001,8 @@ impl Interpreter {
 
     fn compare(&self, op: BinOp, l: Value, r: Value, span: Span) -> Result<Value, RuntimeError> {
         use Value::*;
+        let l = l.unlabeled().clone();
+        let r = r.unlabeled().clone();
         let ord = match (&l, &r) {
             (Int(a), Int(b)) => (*a as f64).partial_cmp(&(*b as f64)),
             (Float(a), Float(b)) => a.partial_cmp(b),
@@ -903,6 +1035,13 @@ impl Interpreter {
     // --- iteration & builtins ---
 
     fn iterate(&self, v: Value, span: Span) -> Result<Vec<Value>, RuntimeError> {
+        let label = v.label();
+        let v = v.unlabeled().clone();
+        let items = self.iterate_inner(v, span)?;
+        Ok(items.into_iter().map(|i| i.with_label(label)).collect())
+    }
+
+    fn iterate_inner(&self, v: Value, span: Span) -> Result<Vec<Value>, RuntimeError> {
         match v {
             Value::List(items) => Ok(items.borrow().clone()),
             Value::Str(s) => Ok(s
@@ -923,6 +1062,35 @@ impl Interpreter {
     }
 
     fn call_builtin(
+        &mut self,
+        name: &str,
+        args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, RuntimeError> {
+        // `redact` is the one builtin that must see labels: masking them is
+        // its whole job. Everything else works on plain values and passes the
+        // joined label through to its result.
+        if name == "redact" {
+            return match args.as_slice() {
+                [value] => {
+                    let types = self.types.clone();
+                    Ok(redact_value(value, &types, false, &mut 0))
+                }
+                _ => Err(RuntimeError::new(
+                    format!("redact() expects 1 argument, got {}", args.len()),
+                    span,
+                )),
+            };
+        }
+        let label = args
+            .iter()
+            .fold(Label::Public, |acc, v| acc.join(v.label()));
+        let args: Vec<Value> = args.iter().map(|v| v.unlabeled().clone()).collect();
+        self.call_builtin_inner(name, args, span)
+            .map(|v| v.with_label(label))
+    }
+
+    fn call_builtin_inner(
         &mut self,
         name: &str,
         args: Vec<Value>,
@@ -1248,7 +1416,49 @@ impl Interpreter {
         }
 
         let data = self.eval(&args[0], scope)?;
-        let prompt = match self.eval(&args[1], scope)? {
+
+        // The enforcement point. Classified data may only reach a model when
+        // an enclosing `declassify ... for <sink>:` unlocked that sink and
+        // policy permits the label there.
+        let data_label = data.label();
+        if data_label.is_classified() {
+            let sink_name = self.model_sink_name();
+            let unlocked = self.declassified_for.contains(&sink_name);
+            if !unlocked {
+                let accepting = self.sinks.sinks_accepting_classified();
+                let hint = if accepting.is_empty() {
+                    "wrap it in `declassify <value> for <sink>:` and allow that sink in kora.toml"
+                        .to_string()
+                } else {
+                    format!(
+                        "wrap it in `declassify <value> for {}:`",
+                        accepting.join("` or `declassify <value> for ")
+                    )
+                };
+                return Err(RuntimeError::new(
+                    format!(
+                        "classified data cannot reach model sink `{sink_name}` (no declassify in scope)"
+                    ),
+                    args[0].span,
+                )
+                .with_hint(hint));
+            }
+            if !self.sinks.permits(&sink_name, data_label) {
+                return Err(RuntimeError::new(
+                    format!("policy forbids classified data reaching sink `{sink_name}`"),
+                    args[0].span,
+                ));
+            }
+        }
+        let prompt_value = self.eval(&args[1], scope)?;
+        if prompt_value.label().is_classified() {
+            return Err(
+                RuntimeError::new("the prompt contains classified data", args[1].span).with_hint(
+                    "declassify it first, or keep sensitive values in the data argument",
+                ),
+            );
+        }
+        let prompt = match prompt_value.unlabeled().clone() {
             Value::Str(s) => s.to_string(),
             other => {
                 return Err(RuntimeError::new(
@@ -1277,7 +1487,7 @@ impl Interpreter {
             .map(|f| self.tool_spec(f))
             .collect::<Result<_, _>>()?;
 
-        let data_json = value_to_json(&data);
+        let data_json = value_to_json(data.unlabeled());
         let data_text = serde_json::to_string(&data_json).unwrap_or_else(|_| "null".to_string());
 
         let model = self
@@ -1536,6 +1746,9 @@ fn value_to_json(value: &Value) -> serde_json::Value {
         }
         Value::Func(f) => J::String(format!("<function {}>", f.name)),
         Value::Builtin(name) => J::String(format!("<builtin {name}>")),
+        // Serialization is only reached after a label check has passed, so
+        // the wrapper is transparent here.
+        Value::Labeled { inner, .. } => value_to_json(inner),
     }
 }
 
@@ -1592,6 +1805,7 @@ impl Interpreter {
         }
         let types = self.types.clone();
         let config = self.config.clone();
+        let sinks = self.sinks.clone();
         let program_name = self.program_name.clone();
         let body: Vec<Stmt> = body.to_vec();
         let budget = self.budget.clone();
@@ -1622,6 +1836,7 @@ impl Interpreter {
                         &seed,
                         &types,
                         &config,
+                        &sinks,
                         &program_name,
                         &budget,
                         cassette.as_ref(),
@@ -1643,6 +1858,7 @@ impl Interpreter {
             self.tokens_out += result.tokens_out;
             self.model_calls += result.model_calls;
             self.output.extend(result.output);
+            self.declassify_sites.extend(result.declassify_sites);
             match result.value {
                 Ok(v) => collected.push(v.into_value()),
                 Err(e) => {
@@ -1671,6 +1887,7 @@ struct WorkerResult {
     tokens_in: u64,
     tokens_out: u64,
     model_calls: u64,
+    declassify_sites: Vec<DeclassifySite>,
 }
 
 /// Execute one iteration of a `parallel for` body in a private interpreter.
@@ -1683,6 +1900,7 @@ fn run_one(
     seed: &[(String, Portable)],
     types: &HashMap<String, Vec<FieldDef>>,
     config: &Config,
+    sinks: &SinkPolicy,
     program_name: &str,
     budget: &Budget,
     cassette: Option<&Arc<Mutex<Cassette>>>,
@@ -1690,6 +1908,7 @@ fn run_one(
     let mut interp = Interpreter::new();
     interp.types = types.clone();
     interp.config = config.clone();
+    interp.sinks = sinks.clone();
     interp.program_name = program_name.to_string();
     interp.budget = budget.clone();
     for (name, value) in seed {
@@ -1720,6 +1939,7 @@ fn run_one(
         tokens_in: interp.tokens_in,
         tokens_out: interp.tokens_out,
         model_calls: interp.model_calls,
+        declassify_sites: interp.declassify_sites,
     }
 }
 
@@ -1921,5 +2141,100 @@ fn field_type_of(ty: &TypeExpr, what: &str, span: Span) -> Result<FieldType, Run
             ),
             span,
         )),
+    }
+}
+
+impl Interpreter {
+    /// The sink name a model call flows to, derived from the configured
+    /// provider: an Ollama model is `local_model`, an API model is its
+    /// provider name. Policy in kora.toml is written against these names.
+    pub fn model_sink_name(&self) -> String {
+        match self.config.default_model() {
+            Ok(model) => match model.provider {
+                kora_models::Provider::Ollama => "local_model".to_string(),
+                kora_models::Provider::OpenAI => "openai".to_string(),
+            },
+            Err(_) => "model".to_string(),
+        }
+    }
+}
+
+/// Replace sensitive leaf values with stable placeholders.
+///
+/// The model gets shape without secrets: `<STR_1> owes <NUM_2>`. Because the
+/// result contains no classified content, it is public by construction and
+/// needs no declassification.
+fn redact_value(
+    value: &Value,
+    types: &HashMap<String, Vec<FieldDef>>,
+    inherited: bool,
+    counter: &mut usize,
+) -> Value {
+    if inherited
+        && !matches!(
+            value,
+            Value::List(_) | Value::Dict(_) | Value::Object { .. }
+        )
+    {
+        *counter += 1;
+        return Value::Str(Rc::new(format!("<{}_{counter}>", tag_for(value))));
+    }
+    match value {
+        Value::Labeled { inner, .. } => {
+            // Containers keep their shape; only sensitive leaves are masked.
+            match inner.unlabeled() {
+                inner @ (Value::List(_) | Value::Dict(_) | Value::Object { .. }) => {
+                    redact_value(inner, types, true, counter)
+                }
+                leaf => {
+                    *counter += 1;
+                    Value::Str(Rc::new(format!("<{}_{counter}>", tag_for(leaf))))
+                }
+            }
+        }
+        Value::List(items) => Value::List(Rc::new(RefCell::new(
+            items
+                .borrow()
+                .iter()
+                .map(|v| redact_value(v, types, inherited, counter))
+                .collect(),
+        ))),
+        Value::Dict(map) => Value::Dict(Rc::new(RefCell::new(
+            map.borrow()
+                .iter()
+                .map(|(k, v)| (k.clone(), redact_value(v, types, inherited, counter)))
+                .collect(),
+        ))),
+        Value::Object { type_name, fields } => {
+            // Per-field `classified` markers live on the type declaration, so
+            // consult it: the field's value carries no wrapper of its own.
+            let declared = types.get(type_name.as_str());
+            Value::Object {
+                type_name: type_name.clone(),
+                fields: Rc::new(RefCell::new(
+                    fields
+                        .borrow()
+                        .iter()
+                        .map(|(k, v)| {
+                            let sensitive = inherited
+                                || declared.is_some_and(|fs| {
+                                    fs.iter().any(|f| &f.name == k && f.classified)
+                                });
+                            (k.clone(), redact_value(v, types, sensitive, counter))
+                        })
+                        .collect(),
+                )),
+            }
+        }
+        other => other.clone(),
+    }
+}
+
+fn tag_for(value: &Value) -> &'static str {
+    match value.unlabeled() {
+        Value::Str(_) => "STR",
+        Value::Int(_) | Value::Float(_) => "NUM",
+        Value::Bool(_) => "BOOL",
+        _ => "VALUE",
     }
 }

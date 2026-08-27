@@ -361,6 +361,8 @@ impl<'a> Lexer<'a> {
             "case" => TokenKind::Case,
             "agent" => TokenKind::Agent,
             "tool" => TokenKind::Tool,
+            "classified" => TokenKind::Classified,
+            "declassify" => TokenKind::Declassify,
             "budget" => TokenKind::Budget,
             "parallel" => TokenKind::Parallel,
             "True" => TokenKind::True,
