@@ -359,6 +359,36 @@ impl Parser {
         let span = self.peek_span();
         self.advance(); // use
 
+        // `use python <module> as <alias>` reaches a Python module through
+        // the sidecar worker.
+        if matches!(self.peek_kind(), TokenKind::Ident(word) if word == "python") {
+            self.advance();
+            // Python module names are dotted: `os.path`, `xml.etree`.
+            let mut module = self.expect_ident("a module name after `use python`")?;
+            while self.check(&TokenKind::Dot) {
+                self.advance();
+                module.push('.');
+                module.push_str(&self.expect_ident("a name after `.`")?);
+            }
+            let alias = match self.peek_kind() {
+                TokenKind::Ident(word) if word == "as" => {
+                    self.advance();
+                    self.expect_ident("a name after `as`")?
+                }
+                // A dotted module has no usable bare name, so require one.
+                _ if module.contains('.') => {
+                    return Err(SyntaxError::new(format!("`{module}` needs a name"), span)
+                        .with_hint(format!("write `use python {module} as <name>`")))
+                }
+                _ => module.clone(),
+            };
+            self.expect_newline("use")?;
+            return Ok(Stmt {
+                kind: StmtKind::UsePython { module, alias },
+                span,
+            });
+        }
+
         // `use mcp <server> as <alias>` names a server configured in
         // kora.toml rather than a stdlib module.
         if matches!(self.peek_kind(), TokenKind::Ident(word) if word == "mcp") {

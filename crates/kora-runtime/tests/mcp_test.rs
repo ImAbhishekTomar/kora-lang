@@ -216,3 +216,41 @@ def main():
         "a declared tool should not look like a server: {err}"
     );
 }
+
+#[test]
+fn parallel_branches_share_the_server_connection() {
+    // Regression. Workers are fresh interpreters seeded with what they need,
+    // and the MCP registry was left out — so a `use mcp` at the top level was
+    // invisible inside a `parallel for`, and the branch reported the server as
+    // not connected. A server is a process; one per branch would be both slow
+    // and wrong.
+    let src = r#"type R:
+    ok: bool
+
+agent look(item: str) -> str:
+    classified secret = "hunter2"
+    declassify secret as s for local_model:
+        r: R = analyze(s, "do something", tools=files.tools)
+    return "unreachable"
+
+def main():
+    results = parallel for i in ["a"]:
+        return look(i)
+"#;
+    let program = parse(src).unwrap();
+    let mut i = with_fake_server("files");
+    i.bind_global(
+        "files",
+        kora_runtime::Value::McpServer {
+            alias: std::rc::Rc::new("files".to_string()),
+        },
+    );
+    let e = i.run(&program).unwrap_err();
+    // Reaching the sink check at all proves the branch saw the connection;
+    // "not connected" would mean it did not.
+    assert!(
+        e.message.contains("cannot reach MCP server"),
+        "the branch should see the server, got: {}",
+        e.message
+    );
+}

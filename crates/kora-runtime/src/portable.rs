@@ -37,6 +37,7 @@ pub enum Portable {
     Module(String),
     TypeRef(String),
     McpServer(String),
+    PyModule(String),
     McpTool(String, String),
     /// Labels cross agent boundaries: isolation must not launder them.
     Labeled {
@@ -80,6 +81,7 @@ impl Portable {
             Value::Module { name } => Portable::Module(name.to_string()),
             Value::TypeRef { name } => Portable::TypeRef(name.to_string()),
             Value::McpServer { alias } => Portable::McpServer(alias.to_string()),
+            Value::PyModule { module } => Portable::PyModule(module.to_string()),
             Value::McpTool { server, name } => {
                 Portable::McpTool(server.to_string(), name.to_string())
             }
@@ -132,6 +134,9 @@ impl Portable {
             },
             Portable::McpServer(alias) => Value::McpServer {
                 alias: Rc::new(alias),
+            },
+            Portable::PyModule(module) => Value::PyModule {
+                module: Rc::new(module),
             },
             Portable::McpTool(server, name) => Value::McpTool {
                 server: Rc::new(server),

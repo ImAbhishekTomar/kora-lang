@@ -336,11 +336,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "kora-python"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "kora-runtime"
 version = "0.0.1"
 dependencies = [
  "kora-mcp",
  "kora-models",
+ "kora-python",
  "kora-syntax",
  "kora-types",
  "regex",

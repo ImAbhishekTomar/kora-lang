@@ -75,8 +75,12 @@ design changes and should be deliberate.
   declassified values. Sink-aware policy from config.
 - Redaction (`redact()`) is the blessed easy path: placeholders out, real
   values re-substituted, nothing secret leaves.
-- Integrity direction (`unverified` model output vs trusted sinks) is
-  designed but parked; slot after Phase 4.
+- Integrity direction: data entering from outside is `unverified` and cannot
+  reach a dangerous sink until narrowed. Shipped with the stdlib, since that
+  is where the sinks are.
+- A release names one sink. `declassify x for local_model:` does not make x
+  plain inside the block — it records what x was approved for, so a secret
+  released to a model still cannot be written to a file three lines later.
 - Telemetry export is a labeled sink: classified values cannot reach spans.
 
 ## Testing & observability
@@ -213,8 +217,8 @@ For third-party *native* packages, the destination is WASM components rather
 than dynamic libraries: sandboxed by construction, language-agnostic, and a
 sandboxed package cannot exfiltrate classified data. Immature today.
 
-Sequencing: native stdlib after Phase 5, MCP around Phase 6, Python sidecar
-when something actually demands it (designed, not built speculatively).
+All three layers are built. What is left is a package manager and WASM
+components, both deliberately deferred until there is a reason.
 
 ## Parked / non-goals
 
@@ -228,9 +232,9 @@ when something actually demands it (designed, not built speculatively).
 
 ## Status
 
-Phases 0 through 6 are complete, as are the standard library and MCP
-integration. What remains is a Python bridge and a package manager — see the
-ecosystem strategy above.
+Phases 0 through 6 are complete, as are the standard library, MCP
+integration, and the Python sidecar. What remains is a package manager and
+WASM components — see the ecosystem strategy above.
 
 Reference documentation lives in [docs/](docs): the
 [language](docs/language.md), the [standard library](docs/stdlib.md), and the
@@ -253,7 +257,7 @@ Ecosystem work, sequenced alongside the phases above:
 - Native stdlib: `json`, `fs`, `time`, `re`, `http`, `csv`, `sql`, `env` —
   **done**
 - MCP integration (`use mcp <server> as <alias>`) — **done**
-- Python sidecar (`use python "..."`) — on demand
+- Python sidecar (`use python <module> as <alias>`) — **done**
 - Kora package manager + WASM components — later
 
 Each phase ends with a runnable demo program. Demo programs live in
