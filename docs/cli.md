@@ -106,6 +106,33 @@ review                                 812ms
 
 Run the language server over stdio. Editors start this; you do not.
 
+### `kora dap`
+
+Run the debug adapter over stdio. Editors start this; you do not.
+
+It speaks the Debug Adapter Protocol, so any editor that implements DAP can
+drive it. What it supports:
+
+| | |
+|---|---|
+| Breakpoints | set per file; a breakpoint on a blank line or a comment moves to the next statement, and the editor is told where it landed |
+| Stepping | step over, step into, step out, continue, and pause |
+| Call stack | one frame per function call and per file's top level, each naming its own file |
+| Variables | locals for the selected frame, plus that file's top-level names; lists, dicts, and objects expand |
+| Watch and hover | names and field paths — `total`, `employee.salary`, `rows.0` |
+| Output | `print` reaches the debug console as it happens |
+
+The launch configuration takes `program` (required), `stopOnEntry`, and
+`replay` or `record`, which do what the same flags do on `kora run`. Debugging
+with `replay` costs nothing and gives the same answer every time, which is
+usually what you want when stepping through code that calls a model.
+
+Two limits worth knowing. A `parallel for` body runs on worker threads that
+have no debugger attached, so breakpoints inside one do not fire — its output
+arrives when the run ends. And a watch expression is a lookup, not an
+evaluation: a debugger that could call a model or write a file while you hover
+over a variable is not inspecting the program, it is changing it.
+
 ---
 
 ## Configuration
@@ -164,6 +191,26 @@ ln -s "$PWD/editors/vscode" ~/.vscode/extensions/kora-lang
 Restart VS Code. You get diagnostics as you type, hover signatures and
 docstrings, go-to-definition, an outline, completion, and run/test buttons.
 Set `kora.serverPath` if the binary is not on `PATH`.
+
+Press F5 on a `.ko` file to debug it — breakpoints in the gutter, the call
+stack, and a variables pane. No `launch.json` is needed for the common case;
+write one to pin the options:
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "kora",
+      "request": "launch",
+      "name": "Debug current Kora file",
+      "program": "${file}",
+      "stopOnEntry": false,
+      "replay": true
+    }
+  ]
+}
+```
 
 ---
 

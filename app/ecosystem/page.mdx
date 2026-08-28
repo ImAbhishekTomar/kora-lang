@@ -16,6 +16,8 @@ The published extension is available today:
 - Syntax gets colorized.
 - **Kora: Run Current File** and **Kora: Test Current File** run commands from the editor.
 - IntelliSense includes diagnostics, completion, hover, symbols, and go-to-definition.
+- Press **F5** to debug: breakpoints, step over / into / out, the call stack,
+  and a variables pane. No `launch.json` needed to start.
 
 [Install Kora Language from the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kora-lang.kora-lang), then install the CLI using [Homebrew, npm, a release archive, or source](/installation).
 
@@ -29,6 +31,7 @@ Kora extension
 ├── IntelliSense
 ├── syntax colors + themes
 ├── .ko file icons
+├── debugger (breakpoints, stepping, variables)
 └── run, replay, and project tools
 ```
 
@@ -46,6 +49,7 @@ The repository is organized into focused Rust crates:
 | `kora-runtime` | Interpreter, cassettes, and execution |
 | `kora-models` | OpenAI and Ollama model clients |
 | `kora-lsp` | Language server foundation |
+| `kora-dap` | Debug adapter: breakpoints, stepping, variables |
 | `kora-cli` | The `kora` command |
 
 You can browse the full [repository](https://github.com/ImAbhishekTomar/kora-lang) when you want to go deeper.

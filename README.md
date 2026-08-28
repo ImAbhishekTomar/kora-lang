@@ -384,7 +384,7 @@ because they are ordinary values.
 ## Editor support
 
 The VS Code extension in `editors/vscode` gives syntax highlighting, run and
-test buttons, and a language server providing:
+test buttons, a debugger, and a language server providing:
 
 - **Diagnostics** as you type — parse errors, undefined names, undeclared
   types, unknown modules and module functions, each with the same hint the
@@ -405,6 +405,22 @@ ln -s "$PWD/editors/vscode" ~/.vscode/extensions/kora-lang
 
 The editor and the compiler share one analysis pass, so their answers cannot
 disagree.
+
+### Debugging
+
+Press F5 on a `.ko` file. Breakpoints in the gutter, step over / into / out,
+the call stack, and a variables pane where lists, dicts, and typed objects
+expand. `classified` values are labelled as such, so it is visible at a glance
+which data is under a flow restriction.
+
+The adapter is `kora dap`, the same binary, speaking the Debug Adapter
+Protocol — so any DAP-capable editor can drive it, not only VS Code. Setting
+`"replay": true` in the launch configuration serves model calls from the
+cassette, which makes stepping through agent code free and repeatable.
+
+The debugger reads a snapshot of each frame rather than reaching into a live
+interpreter, which is why inspecting a paused program cannot perturb it: there
+is no way for the variables pane to run code.
 
 ## Tracing
 
@@ -450,6 +466,7 @@ crates/kora-types     name resolution and editor checks
 crates/kora-runtime   interpreter, agents, budgets, labels, journal, stdlib
 crates/kora-models    OpenAI + Ollama clients, schema-constrained output
 crates/kora-lsp       language server (diagnostics, hover, definition)
+crates/kora-dap       debug adapter (breakpoints, stepping, variables)
 crates/kora-mcp       Model Context Protocol client
 crates/kora-python    Python sidecar worker
 crates/kora-cli       the `kora` binary
