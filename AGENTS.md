@@ -123,12 +123,19 @@ not decoration. Merging the release PR tags `vX.Y.Z`, and that tag is what
 `release.yml` already listens for — the build, the archives, Homebrew,
 crates.io, npm, and both extension marketplaces are unchanged.
 
-Four files carry a version, and all four move together in that PR:
+Five files carry a version, and all five move together in that PR:
 `Cargo.toml` (the workspace and every internal path dependency, marked with
-`# x-release-please-version`), `npm/package.json`, and
-`editors/vscode/package.json`. `release.yml` verifies the tag matches
-`Cargo.toml` and refuses to publish a mismatch, so a missed bump fails the
-release instead of shipping a wrong number.
+`# x-release-please-version`), `Cargo.lock`, `npm/package.json`,
+`editors/vscode/package.json`, and `version.txt`. `release.yml` verifies the
+tag matches `Cargo.toml` and refuses to publish a mismatch, so a missed bump
+fails the release instead of shipping a wrong number.
+
+Two details worth knowing before changing any of this. The `rust` release
+type cannot be used: it walks every member `Cargo.toml` expecting a literal
+`[package] version`, and these crates use `version.workspace = true`. And
+release-please does not know about `Cargo.lock`, which pins the version of
+every workspace member — so the workflow refreshes it on the release branch,
+without which the `--locked` build fails *after* the tag exists.
 
 A release PR is a pull request like any other: if the version or the notes
 look wrong, say so there rather than tagging by hand.

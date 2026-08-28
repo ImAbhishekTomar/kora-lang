@@ -4,7 +4,7 @@
 # minor, a `fix` the patch, a `!` or `BREAKING CHANGE` the major. The action
 # keeps one open "chore: release" pull request holding the bump and the
 # generated CHANGELOG. Merging that PR tags `vX.Y.Z`, and the tag is what
-# `release.yml` already listens for — so this workflow adds the deciding and
+# `release.yml` already listens for -- so this workflow adds the deciding and
 # the changelog, and changes nothing about how a release is built.
 #
 # Why a pull request rather than tagging on every push: a release is a
@@ -27,6 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: googleapis/release-please-action@v4
+        id: release
         with:
           config-file: release-please-config.json
           manifest-file: .release-please-manifest.json
@@ -34,3 +35,38 @@ jobs:
           # tag it pushes would not start `release.yml`. A PAT with `repo`
           # scope makes the tag look like a person pushed it.
           token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+      # release-please writes Cargo.toml but knows nothing about Cargo.lock,
+      # and the lock pins the version of every workspace member. `release.yml`
+      # builds with `--locked`, so a release PR whose lock still names the old
+      # version fails the release it was opened for -- after the tag exists.
+      - uses: actions/checkout@v7
+        if: steps.release.outputs.prs_created == 'true'
+        with:
+          fetch-depth: 0
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
+
+      - name: Install Rust toolchain
+        if: steps.release.outputs.prs_created == 'true'
+        run: rustup update stable && rustup default stable
+
+      - name: Sync Cargo.lock on the release branch
+        if: steps.release.outputs.prs_created == 'true'
+        env:
+          BRANCH: ${{ fromJSON(steps.release.outputs.prs)[0].headBranchName }}
+        run: |
+          set -euo pipefail
+          git fetch origin "$BRANCH"
+          git checkout "$BRANCH"
+          # --workspace touches only the member versions; every third-party
+          # dependency stays pinned exactly where it was.
+          cargo update --workspace
+          git config user.name "kora-release-bot"
+          git config user.email "actions@github.com"
+          git add Cargo.lock
+          if git diff --cached --quiet; then
+            echo "Cargo.lock already matches the release version"
+          else
+            git commit -m "chore: sync Cargo.lock with the release version"
+            git push origin "$BRANCH"
+          fi
