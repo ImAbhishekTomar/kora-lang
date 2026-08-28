@@ -12,6 +12,7 @@ use std::rc::Rc;
 use kora_syntax::ast::FuncDef;
 
 use crate::label::Label;
+use crate::modules::ModuleId;
 use crate::value::Value;
 
 /// A deep, `Send`-safe copy of a [`Value`].
@@ -32,9 +33,18 @@ pub enum Portable {
         tag: String,
         payload: Vec<Portable>,
     },
-    Func(FuncDef),
+    /// A function plus the module it was defined in, so a worker resolves its
+    /// free names the same way the spawning interpreter would.
+    Func {
+        def: FuncDef,
+        home: ModuleId,
+    },
     Builtin(&'static str),
     Module(String),
+    UserModule {
+        id: ModuleId,
+        alias: String,
+    },
     TypeRef(String),
     McpServer(String),
     PyModule(String),
@@ -76,9 +86,16 @@ impl Portable {
                 tag: tag.to_string(),
                 payload: payload.iter().map(Portable::from_value).collect(),
             },
-            Value::Func(f) => Portable::Func((**f).clone()),
+            Value::Func { def, home } => Portable::Func {
+                def: (**def).clone(),
+                home: *home,
+            },
             Value::Builtin(name) => Portable::Builtin(name),
             Value::Module { name } => Portable::Module(name.to_string()),
+            Value::UserModule { id, alias } => Portable::UserModule {
+                id: *id,
+                alias: alias.to_string(),
+            },
             Value::TypeRef { name } => Portable::TypeRef(name.to_string()),
             Value::McpServer { alias } => Portable::McpServer(alias.to_string()),
             Value::PyModule { module } => Portable::PyModule(module.to_string()),
@@ -124,8 +141,15 @@ impl Portable {
                 tag: Rc::new(tag),
                 payload: payload.into_iter().map(Portable::into_value).collect(),
             },
-            Portable::Func(f) => Value::Func(Rc::new(f)),
+            Portable::Func { def, home } => Value::Func {
+                def: Rc::new(def),
+                home,
+            },
             Portable::Builtin(name) => Value::Builtin(name),
+            Portable::UserModule { id, alias } => Value::UserModule {
+                id,
+                alias: Rc::new(alias),
+            },
             Portable::Module(name) => Value::Module {
                 name: Rc::new(name),
             },

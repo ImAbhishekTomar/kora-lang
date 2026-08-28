@@ -3,18 +3,48 @@
   "name": "Kora",
   "scopeName": "source.kora",
   "patterns": [
-    { "include": "#comments" },
-    { "include": "#fstrings" },
-    { "include": "#strings" },
-    { "include": "#keywords" },
-    { "include": "#kora-keywords" },
-    { "include": "#types" },
-    { "include": "#constants" },
-    { "include": "#numbers" },
-    { "include": "#function-def" },
-    { "include": "#function-call" },
-    { "include": "#field-metadata" },
-    { "include": "#operators" }
+    {
+      "include": "#comments"
+    },
+    {
+      "include": "#file-import"
+    },
+    {
+      "include": "#module-import"
+    },
+    {
+      "include": "#fstrings"
+    },
+    {
+      "include": "#strings"
+    },
+    {
+      "include": "#keywords"
+    },
+    {
+      "include": "#kora-keywords"
+    },
+    {
+      "include": "#types"
+    },
+    {
+      "include": "#constants"
+    },
+    {
+      "include": "#numbers"
+    },
+    {
+      "include": "#function-def"
+    },
+    {
+      "include": "#function-call"
+    },
+    {
+      "include": "#field-metadata"
+    },
+    {
+      "include": "#operators"
+    }
   ],
   "repository": {
     "comments": {
@@ -31,20 +61,36 @@
           "end": "\\}",
           "name": "meta.embedded.expression.kora",
           "patterns": [
-            { "include": "#keywords" },
-            { "include": "#constants" },
-            { "include": "#numbers" },
-            { "include": "#operators" }
+            {
+              "include": "#keywords"
+            },
+            {
+              "include": "#constants"
+            },
+            {
+              "include": "#numbers"
+            },
+            {
+              "include": "#operators"
+            }
           ]
         },
-        { "match": "\\\\.", "name": "constant.character.escape.kora" }
+        {
+          "match": "\\\\.",
+          "name": "constant.character.escape.kora"
+        }
       ]
     },
     "strings": {
       "begin": "(\"|')",
       "end": "\\1",
       "name": "string.quoted.kora",
-      "patterns": [{ "match": "\\\\.", "name": "constant.character.escape.kora" }]
+      "patterns": [
+        {
+          "match": "\\\\.",
+          "name": "constant.character.escape.kora"
+        }
+      ]
     },
     "keywords": {
       "match": "\\b(def|if|elif|else|while|for|in|return|break|continue|pass|and|or|not|match|case|type)\\b",
@@ -81,6 +127,45 @@
     "operators": {
       "match": "(\\*\\*|//|==|!=|<=|>=|->|\\+=|-=|\\*=|/=|[+\\-*/%<>=])",
       "name": "keyword.operator.kora"
+    },
+    "file-import": {
+      "comment": "use \"./lib/tax.ko\" as tax",
+      "match": "\\b(use)\\s+(\"[^\"]*\"|'[^']*')\\s+(as)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": {
+          "name": "keyword.other.agent.kora"
+        },
+        "2": {
+          "name": "string.quoted.kora"
+        },
+        "3": {
+          "name": "keyword.other.agent.kora"
+        },
+        "4": {
+          "name": "entity.name.namespace.kora"
+        }
+      }
+    },
+    "module-import": {
+      "comment": "use json as j / use python statistics as stats / use mcp github as gh",
+      "match": "\\b(use)\\s+(?:(python|mcp)\\s+)?([A-Za-z_][A-Za-z0-9_.]*)(?:\\s+(as)\\s+([A-Za-z_][A-Za-z0-9_]*))?",
+      "captures": {
+        "1": {
+          "name": "keyword.other.agent.kora"
+        },
+        "2": {
+          "name": "keyword.other.agent.kora"
+        },
+        "3": {
+          "name": "entity.name.namespace.kora"
+        },
+        "4": {
+          "name": "keyword.other.agent.kora"
+        },
+        "5": {
+          "name": "entity.name.namespace.kora"
+        }
+      }
     }
   }
 }

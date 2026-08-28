@@ -186,7 +186,9 @@ fn check_files(paths: &[String], syntax_only: bool) -> ExitCode {
                 let _ = program;
             }
             Ok(program) => {
-                for d in kora_types::analyze(&program).diagnostics {
+                // Checking follows `use "./lib.ko"`, so a name that only
+                // exists in an imported file resolves here too.
+                for d in kora_types::analyze_file(&program, Path::new(path)).diagnostics {
                     let line = d.span.line as usize;
                     let src_line = source.lines().nth(line.saturating_sub(1)).unwrap_or("");
                     eprintln!("error: {}", d.message);
@@ -322,7 +324,10 @@ fn audit_file(path: &str) -> ExitCode {
             return ExitCode::from(1);
         }
     };
-    let sites = kora_runtime::audit::audit(&program, path);
+    // Every file the program imports is part of the program, so the audit
+    // covers them too: an inventory that stopped at the entry file would not
+    // be the complete list it claims to be.
+    let sites = kora_runtime::audit::audit_program(&program, path);
     print!("{}", kora_runtime::audit::render(&sites));
     ExitCode::SUCCESS
 }

@@ -4,6 +4,7 @@
 # Documentation site dependencies and build output
 /node_modules/
 /.next/
+/.vercel/
 
 # Local OS and editor files
 .DS_Store
@@ -18,3 +19,5 @@
 *.trace
 # Durable run journals
 .kora/
+.vercel
+.env*

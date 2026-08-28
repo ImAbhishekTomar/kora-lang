@@ -25,8 +25,8 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DOCS = ["README.md", "DECISIONS.md", "docs/language.md", "docs/stdlib.md",
-        "docs/cli.md", "examples/README.md"]
+DOCS = ["README.md", "DECISIONS.md", "AGENTS.md", "docs/language.md",
+        "docs/stdlib.md", "docs/cli.md", "examples/README.md"]
 
 # Blocks that are not Kora at all, or that deliberately show a failure.
 SKIP_MARKERS = (
@@ -177,13 +177,19 @@ def check_examples(kora: str) -> None:
     print("Examples")
     directory = os.path.join(ROOT, "examples")
     files = sorted(f for f in os.listdir(directory) if f.endswith(".ko"))
+    # Library files an example imports are part of the examples too.
+    library = os.path.join(directory, "lib")
+    library_files = sorted(
+        os.path.join("lib", f) for f in os.listdir(library) if f.endswith(".ko")
+    ) if os.path.isdir(library) else []
     result = subprocess.run(
-        [kora, "check"] + [os.path.join(directory, f) for f in files],
+        [kora, "check"]
+        + [os.path.join(directory, f) for f in files + library_files],
         capture_output=True, text=True)
     if result.returncode != 0:
         fail("an example does not check:\n" + result.stderr.strip())
     else:
-        print(f"  {len(files)} examples check")
+        print(f"  {len(files) + len(library_files)} example files check")
 
     # Every example should be listed in the index, or nobody will find it.
     index = read("examples/README.md")

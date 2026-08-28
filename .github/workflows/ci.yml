@@ -106,9 +106,12 @@ jobs:
       - name: Build
         run: cargo build --locked
       - name: Check every example
-        run: ./target/debug/kora check examples/*.ko
+        run: ./target/debug/kora check examples/*.ko examples/lib/*.ko
       - name: Run the Kora test suite
-        run: ./target/debug/kora test examples/07_tests.ko
+        run: |
+          set -euo pipefail
+          ./target/debug/kora test examples/07_tests.ko
+          ./target/debug/kora test examples/10_modules.ko
 
   # Every example that does not need a live model or the network. These are
   # cassette-backed, so they are deterministic and free -- and they catch the
@@ -128,6 +131,7 @@ jobs:
           set -euo pipefail
           ./target/debug/kora run examples/00_basics.ko
           ./target/debug/kora run examples/05_stdlib.ko
+          ./target/debug/kora run examples/10_modules.ko
       - name: Cassette-backed examples replay without a model
         run: |
           set -euo pipefail

@@ -73,9 +73,10 @@ pub fn serve(connection: &Connection) -> Result<(), Box<dyn Error + Sync + Send>
             Message::Notification(notification) => {
                 if let Some((uri, text)) = document_change(&notification) {
                     documents.text.insert(uri.clone(), text.clone());
+                    let diagnostics = diagnose(&text, &uri);
                     let params = PublishDiagnosticsParams {
                         uri,
-                        diagnostics: diagnose(&text),
+                        diagnostics,
                         version: None,
                     };
                     connection.sender.send(Message::Notification(
@@ -134,7 +135,7 @@ fn reply<T: serde::Serialize>(id: RequestId, value: Option<T>) -> Response {
 
 /// Parse and check a document. Parse errors become a single diagnostic;
 /// otherwise the checker's findings are reported.
-fn diagnose(text: &str) -> Vec<Diagnostic> {
+fn diagnose(text: &str, uri: &Url) -> Vec<Diagnostic> {
     match kora_syntax::parse(text) {
         Err(e) => vec![Diagnostic {
             range: range_at(
@@ -150,7 +151,7 @@ fn diagnose(text: &str) -> Vec<Diagnostic> {
             },
             ..Default::default()
         }],
-        Ok(program) => kora_types::analyze(&program)
+        Ok(program) => analyze_program(&program, uri)
             .diagnostics
             .into_iter()
             .map(|d| Diagnostic {
@@ -198,7 +199,18 @@ fn range_at(line: u32, column: u32, width: usize) -> Range {
 fn analysis_for(documents: &Documents, uri: &Url) -> Option<Analysis> {
     let text = documents.text.get(uri)?;
     let program = kora_syntax::parse(text).ok()?;
-    Some(kora_types::analyze(&program))
+    Some(analyze_program(&program, uri))
+}
+
+/// Analyse a document, following its file imports when it lives on disk.
+///
+/// An untitled buffer has no directory to resolve `use "./lib.ko"` against, so
+/// it falls back to the path-less analysis rather than guessing.
+fn analyze_program(program: &kora_syntax::ast::Program, uri: &Url) -> Analysis {
+    match uri.to_file_path() {
+        Ok(path) => kora_types::analyze_file(program, &path),
+        Err(()) => kora_types::analyze(program),
+    }
 }
 
 fn hover(request: &Request, documents: &Documents) -> Option<Hover> {
@@ -226,8 +238,21 @@ fn definition(request: &Request, documents: &Documents) -> Option<GotoDefinition
     let uri = params.text_document_position_params.text_document.uri;
     let position = params.text_document_position_params.position;
     let analysis = analysis_for(documents, &uri)?;
-    let symbol = analysis.symbol_at(position.line + 1, position.character + 1)?;
+    let name = analysis.name_at(position.line + 1, position.character + 1)?;
 
+    // An import alias jumps to the file it names, not to the `use` line.
+    if let Some(module) = analysis.file_modules.get(&name) {
+        if !module.path.is_empty() {
+            if let Ok(target) = Url::from_file_path(&module.path) {
+                return Some(GotoDefinitionResponse::Scalar(Location {
+                    uri: target,
+                    range: range_at(1, 1, 1),
+                }));
+            }
+        }
+    }
+
+    let symbol = analysis.symbols.get(&name)?;
     Some(GotoDefinitionResponse::Scalar(Location {
         uri,
         range: range_at(
@@ -300,6 +325,29 @@ fn completion(request: &Request, documents: &Documents) -> Option<CompletionResp
     }) {
         // Completion happens *while* the code is incomplete, so this cannot
         // depend on the document parsing. Read the `use` lines directly.
+        // A file import: offer what that file defines.
+        if let Some(module) = analysis_for(documents, &uri)
+            .as_ref()
+            .and_then(|a| a.file_modules.get(alias))
+        {
+            let mut names: Vec<_> = module.exports.values().cloned().collect();
+            names.sort_by(|a, b| a.name.cmp(&b.name));
+            return Some(CompletionResponse::Array(
+                names
+                    .into_iter()
+                    .map(|s| CompletionItem {
+                        label: s.name,
+                        kind: Some(match s.kind {
+                            SymbolKind::Type => CompletionItemKind::STRUCT,
+                            _ => CompletionItemKind::FUNCTION,
+                        }),
+                        detail: Some(s.detail.lines().next().unwrap_or_default().to_string()),
+                        documentation: s.doc.map(lsp_types::Documentation::String),
+                        ..Default::default()
+                    })
+                    .collect(),
+            ));
+        }
         let aliases = module_aliases(text);
         if let Some(module) = aliases.get(alias) {
             if let Some(functions) = kora_types::module_functions(module) {
@@ -362,6 +410,10 @@ fn module_aliases(text: &str) -> HashMap<String, String> {
         };
         let mut words = rest.split_whitespace();
         let Some(module) = words.next() else { continue };
+        // `use "./lib.ko" as lib` is a file import, handled by the analysis.
+        if module.starts_with('"') || module.starts_with('\'') {
+            continue;
+        }
         let alias = match (words.next(), words.next()) {
             (Some("as"), Some(alias)) => alias,
             _ => module,
@@ -411,7 +463,7 @@ mod tests {
 
     #[test]
     fn parse_errors_become_a_diagnostic() {
-        let diagnostics = diagnose("if x:\nprint(1)\n");
+        let diagnostics = diagnose("if x:\nprint(1)\n", &scratch_uri());
         assert_eq!(diagnostics.len(), 1);
         assert_eq!(diagnostics[0].severity, Some(DiagnosticSeverity::ERROR));
         assert!(
@@ -420,16 +472,21 @@ mod tests {
         );
     }
 
+    /// A URI with no file path, so tests exercise the unsaved-buffer route.
+    fn scratch_uri() -> Url {
+        Url::parse("untitled:scratch.ko").expect("a valid uri")
+    }
+
     #[test]
     fn checker_findings_become_diagnostics() {
-        let diagnostics = diagnose("def main():\n    print(nope)\n");
+        let diagnostics = diagnose("def main():\n    print(nope)\n", &scratch_uri());
         assert_eq!(diagnostics.len(), 1);
         assert!(diagnostics[0].message.contains("`nope` is not defined"));
     }
 
     #[test]
     fn a_clean_document_has_no_diagnostics() {
-        assert!(diagnose("def main():\n    print(1)\n").is_empty());
+        assert!(diagnose("def main():\n    print(1)\n", &scratch_uri()).is_empty());
     }
 
     #[test]
@@ -444,7 +501,7 @@ mod tests {
 
     #[test]
     fn diagnostics_underline_the_offending_name() {
-        let diagnostics = diagnose("def main():\n    print(missing_name)\n");
+        let diagnostics = diagnose("def main():\n    print(missing_name)\n", &scratch_uri());
         let range = diagnostics[0].range;
         assert_eq!(
             range.end.character - range.start.character,

@@ -43,6 +43,10 @@ kora check examples/*.ko
 kora check --syntax draft.ko    # parse only, skip name resolution
 ```
 
+Checking follows `use "./lib.ko"` imports, so a name that only exists in an
+imported file resolves here, and a name no imported file defines is reported.
+Problems *inside* an imported file belong to that file: check it directly.
+
 Exits non-zero if anything fails to parse or resolve.
 
 ### `kora test <file.ko>`
@@ -59,7 +63,8 @@ kora test examples/07_tests.ko
 
 List every place classified data is released, and to which sink. The list is
 complete rather than best-effort, because every release goes through a
-`declassify` block the parser can see.
+`declassify` block the parser can see. Imported files are part of the
+program, so the audit covers every file the program imports.
 
 ```bash
 kora audit examples/03_salary_review.ko

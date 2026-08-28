@@ -9,6 +9,7 @@
 //! and its squiggles can never disagree.
 
 use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use kora_syntax::ast::*;
 use kora_syntax::token::Span;
@@ -79,6 +80,19 @@ pub struct Analysis {
     pub references: Vec<(String, Span)>,
     /// Module aliases in scope: alias -> module name.
     pub modules: HashMap<String, String>,
+    /// File imports in scope: alias -> the imported file and what it defines.
+    pub file_modules: HashMap<String, FileModule>,
+}
+
+/// Another Kora file, brought in with `use "./lib.ko" as lib`.
+#[derive(Debug, Clone, Default)]
+pub struct FileModule {
+    /// Path as written in the import.
+    pub written: String,
+    /// Path the import resolved to, for hover and go-to-definition.
+    pub path: String,
+    /// Top-level definitions the file offers, by name.
+    pub exports: HashMap<String, Symbol>,
 }
 
 impl Analysis {
@@ -101,13 +115,49 @@ impl Analysis {
     }
 }
 
+/// Drop `.` components so a path reads `lib/tax.ko`, not `./lib/./tax.ko`.
+fn normalize(path: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for part in path.components() {
+        match part {
+            std::path::Component::CurDir => {}
+            other => out.push(other),
+        }
+    }
+    if out.as_os_str().is_empty() {
+        out.push(".");
+    }
+    out
+}
+
 /// Analyse a parsed program.
+///
+/// Without a path, file imports are recorded but not followed: there is no
+/// directory to resolve them against. Editors and `kora check` call
+/// [`analyze_file`] instead, which does follow them.
 pub fn analyze(program: &Program) -> Analysis {
+    analyze_inner(program, None, &mut Vec::new())
+}
+
+/// Analyse a program that lives at `path`, following its file imports.
+pub fn analyze_file(program: &Program, path: &Path) -> Analysis {
+    let base = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let mut loading = vec![path.canonicalize().unwrap_or_else(|_| path.to_path_buf())];
+    analyze_inner(program, Some(base), &mut loading)
+}
+
+fn analyze_inner(program: &Program, base: Option<PathBuf>, loading: &mut Vec<PathBuf>) -> Analysis {
     let mut analysis = Analysis::default();
     let mut checker = Checker {
         analysis: &mut analysis,
         scopes: vec![HashSet::new()],
         type_names: HashSet::new(),
+        base,
+        loading,
     };
     checker.collect_definitions(&program.items);
     checker.check_block(&program.items);
@@ -119,6 +169,12 @@ struct Checker<'a> {
     /// Innermost scope last.
     scopes: Vec<HashSet<String>>,
     type_names: HashSet<String>,
+    /// Directory file imports resolve against; `None` when the source has no
+    /// path (an unsaved buffer, or a string in a test).
+    base: Option<PathBuf>,
+    /// Files whose analysis is in progress, so a cycle is reported once
+    /// instead of recursing.
+    loading: &'a mut Vec<PathBuf>,
 }
 
 /// Names the runtime provides without a definition.
@@ -244,6 +300,29 @@ impl Checker<'_> {
                         ),
                     });
                 }
+                StmtKind::UseFile { path, alias } => {
+                    let module = self.load_file_module(path, stmt.span);
+                    // Types are shared across files at runtime, so a type
+                    // declared in an imported file may be named here.
+                    for (name, symbol) in &module.exports {
+                        if symbol.kind == SymbolKind::Type {
+                            self.type_names.insert(name.clone());
+                        }
+                    }
+                    let detail = if module.path.is_empty() {
+                        format!("use {path:?}")
+                    } else {
+                        format!("use {path:?}  ({})", module.path)
+                    };
+                    self.analysis.file_modules.insert(alias.clone(), module);
+                    self.define_symbol(Symbol {
+                        name: alias.clone(),
+                        kind: SymbolKind::Module,
+                        span: stmt.span,
+                        detail,
+                        doc: None,
+                    });
+                }
                 StmtKind::Use { module, alias } => {
                     self.analysis.modules.insert(alias.clone(), module.clone());
                     self.define_symbol(Symbol {
@@ -266,6 +345,96 @@ impl Checker<'_> {
                 _ => {}
             }
         }
+    }
+
+    /// Read an imported file and collect what it defines.
+    ///
+    /// Diagnostics from inside the imported file are its own business: they
+    /// belong to that file's spans, and the editor reports them when that file
+    /// is open. Only the failure to load it is reported here.
+    fn load_file_module(&mut self, written: &str, span: Span) -> FileModule {
+        let mut module = FileModule {
+            written: written.to_string(),
+            ..FileModule::default()
+        };
+
+        if !written.ends_with(".ko") {
+            self.analysis.diagnostics.push(
+                Diagnostic::error(span, format!("`{written}` is not a Kora file"))
+                    .with_hint("an imported path must end in `.ko`"),
+            );
+            return module;
+        }
+
+        // No path means an unsaved buffer: record the alias and stop, rather
+        // than guessing a directory and reporting an import that is fine.
+        let Some(base) = self.base.clone() else {
+            return module;
+        };
+
+        let candidate = normalize(&base.join(written));
+        let Ok(source) = std::fs::read_to_string(&candidate) else {
+            self.analysis.diagnostics.push(
+                Diagnostic::error(span, format!("cannot read `{written}`"))
+                    .with_hint(format!("looked for {}", candidate.display())),
+            );
+            return module;
+        };
+        module.path = candidate.display().to_string();
+
+        let key = candidate
+            .canonicalize()
+            .unwrap_or_else(|_| candidate.clone());
+        if self.loading.contains(&key) {
+            self.analysis.diagnostics.push(
+                Diagnostic::error(span, format!("import cycle: `{written}` imports itself"))
+                    .with_hint("move the shared code into a third file both can import"),
+            );
+            return module;
+        }
+
+        let Ok(program) = kora_syntax::parse(&source) else {
+            self.analysis.diagnostics.push(
+                Diagnostic::error(span, format!("`{written}` has a syntax error"))
+                    .with_hint(format!("run `kora check {}`", candidate.display())),
+            );
+            return module;
+        };
+
+        let dir = key
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        self.loading.push(key);
+        let inner = analyze_inner(&program, Some(dir), self.loading);
+        self.loading.pop();
+
+        module.exports = inner.symbols;
+        // A `test` block is not a name another file can reach.
+        module.exports.retain(|_, s| s.kind != SymbolKind::Test);
+        // Top-level assignments are exported too — the runtime binds them in
+        // the module's namespace — but they are not definitions the checker
+        // collects, so pick them up here.
+        for stmt in &program.items {
+            let StmtKind::Assign { target, ty, .. } = &stmt.kind else {
+                continue;
+            };
+            let ExprKind::Name(name) = &target.kind else {
+                continue;
+            };
+            let detail = match ty {
+                Some(t) => format!("{name}: {}", t.display()),
+                None => name.clone(),
+            };
+            module.exports.entry(name.clone()).or_insert(Symbol {
+                name: name.clone(),
+                kind: SymbolKind::Variable,
+                span: stmt.span,
+                detail,
+                doc: None,
+            });
+        }
+        module
     }
 
     fn define_symbol(&mut self, symbol: Symbol) {
@@ -429,6 +598,11 @@ impl Checker<'_> {
                 // rather than reporting a name it cannot verify.
                 self.declare(alias);
             }
+            StmtKind::UseFile { alias, .. } => {
+                // Resolution and its diagnostics happened while collecting
+                // definitions, so the file is read once per analysis.
+                self.declare(alias);
+            }
             StmtKind::Use { module, alias } => {
                 if !MODULES.iter().any(|(name, _)| name == module) {
                     let known: Vec<&str> = MODULES.iter().map(|(n, _)| *n).collect();
@@ -513,6 +687,27 @@ impl Checker<'_> {
                 }
             }
             ExprKind::Attr { object, name } => {
+                // `lib.helper`: check the imported file actually defines it.
+                if let ExprKind::Name(alias) = &object.kind {
+                    if let Some(module) = self.analysis.file_modules.get(alias).cloned() {
+                        self.analysis.references.push((alias.clone(), object.span));
+                        // An unreadable import already reported itself; do not
+                        // report every use of it as well.
+                        if !module.exports.is_empty() && !module.exports.contains_key(name) {
+                            let mut available: Vec<&str> =
+                                module.exports.keys().map(String::as_str).collect();
+                            available.sort();
+                            self.analysis.diagnostics.push(
+                                Diagnostic::error(
+                                    expr.span,
+                                    format!("`{alias}` has no name `{name}`"),
+                                )
+                                .with_hint(format!("{alias} provides: {}", available.join(", "))),
+                            );
+                        }
+                        return;
+                    }
+                }
                 // `json.parse(...)`: check the function exists on the module.
                 if let ExprKind::Name(alias) = &object.kind {
                     if let Some(module) = self.analysis.modules.get(alias).cloned() {
@@ -804,6 +999,103 @@ def main():
     fn tests_appear_in_the_outline() {
         let analysis = check("test \"it works\":\n    assert True\n");
         assert!(analysis.symbols.contains_key("test it works"));
+    }
+
+    /// A scratch directory for the file-import tests.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new(name: &str) -> Scratch {
+            let dir =
+                std::env::temp_dir().join(format!("kora-types-{name}-{}", std::process::id()));
+            std::fs::remove_dir_all(&dir).ok();
+            std::fs::create_dir_all(&dir).unwrap();
+            Scratch(dir)
+        }
+
+        fn write(&self, name: &str, source: &str) -> PathBuf {
+            let path = self.0.join(name);
+            std::fs::write(&path, source).unwrap();
+            path
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            std::fs::remove_dir_all(&self.0).ok();
+        }
+    }
+
+    fn check_at(path: &Path) -> Analysis {
+        let source = std::fs::read_to_string(path).expect("readable");
+        analyze_file(&parse(&source).expect("should parse"), path)
+    }
+
+    #[test]
+    fn names_from_an_imported_file_resolve() {
+        let scratch = Scratch::new("resolve");
+        scratch.write(
+            "lib.ko",
+            "RATE = 2
+
+type Money:
+    amount: int
+
+def go(n: int) -> int:
+    return n
+",
+        );
+        let main = scratch.write(
+            "main.ko",
+            "use \"./lib.ko\" as lib\n\ndef main():\n    m = lib.Money(1)\n    print(lib.go(lib.RATE))\n",
+        );
+        let analysis = check_at(&main);
+        let messages: Vec<&str> = analysis
+            .diagnostics
+            .iter()
+            .map(|d| d.message.as_str())
+            .collect();
+        assert!(messages.is_empty(), "{messages:?}");
+        assert!(analysis.file_modules["lib"].exports.contains_key("go"));
+    }
+
+    #[test]
+    fn a_name_the_imported_file_lacks_is_reported() {
+        let scratch = Scratch::new("missing-name");
+        scratch.write("lib.ko", "def go() -> int:\n    return 1\n");
+        let main = scratch.write(
+            "main.ko",
+            "use \"./lib.ko\" as lib\n\ndef main():\n    print(lib.nope())\n",
+        );
+        let analysis = check_at(&main);
+        assert_eq!(analysis.diagnostics.len(), 1);
+        assert!(analysis.diagnostics[0]
+            .message
+            .contains("`lib` has no name `nope`"));
+    }
+
+    #[test]
+    fn an_import_that_cannot_be_read_is_reported_once() {
+        let scratch = Scratch::new("unreadable");
+        let main = scratch.write(
+            "main.ko",
+            "use \"./nope.ko\" as lib\n\ndef main():\n    print(lib.go())\n",
+        );
+        let analysis = check_at(&main);
+        // One diagnostic for the import, not one per use of the alias.
+        assert_eq!(analysis.diagnostics.len(), 1);
+        assert!(analysis.diagnostics[0].message.contains("cannot read"));
+    }
+
+    #[test]
+    fn a_file_import_without_a_path_is_recorded_but_not_followed() {
+        // An unsaved buffer has no directory, so the alias must still resolve.
+        let analysis = check("use \"./lib.ko\" as lib\n\ndef main():\n    print(lib.go())\n");
+        assert!(
+            analysis.diagnostics.is_empty(),
+            "{:?}",
+            analysis.diagnostics
+        );
     }
 
     #[test]

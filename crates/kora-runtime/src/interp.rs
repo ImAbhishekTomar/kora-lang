@@ -2,6 +2,7 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use kora_models::{
@@ -17,6 +18,7 @@ use crate::cassette::{self, Cassette, Mode, RecordedOutcome};
 use crate::config::Config;
 use crate::journal::{self, Effect, Journal, Lookup, PendingQuestion};
 use crate::label::{DeclassifySite, Label, SinkPolicy};
+use crate::modules::{self, ModuleId, ModuleSpace};
 use crate::portable::Portable;
 use crate::telemetry::Tracer;
 use crate::value::Value;
@@ -42,6 +44,9 @@ pub struct RuntimeError {
     pub hint: Option<String>,
     pub span: Span,
     pub kind: StopKind,
+    /// The file the span belongs to, when it is not the entry file. Set as an
+    /// error leaves an imported module, so `render` quotes the right line.
+    pub file: Option<String>,
 }
 
 impl RuntimeError {
@@ -51,6 +56,7 @@ impl RuntimeError {
             hint: None,
             span,
             kind: StopKind::Error,
+            file: None,
         }
     }
 
@@ -61,6 +67,7 @@ impl RuntimeError {
             hint: None,
             span,
             kind: StopKind::Suspended,
+            file: None,
         }
     }
 
@@ -73,7 +80,25 @@ impl RuntimeError {
         self
     }
 
+    /// Record which file the span is in, unless an inner frame already did.
+    ///
+    /// The innermost module wins: that is where the failing line actually is.
+    fn in_file(mut self, file: &str) -> Self {
+        if self.file.is_none() {
+            self.file = Some(file.to_string());
+        }
+        self
+    }
+
     pub fn render(&self, source: &str, filename: &str) -> String {
+        // An error raised inside an imported module belongs to that file, so
+        // read it rather than quoting the entry file's line by the same
+        // number, which would point at unrelated code.
+        let (owned, filename) = match &self.file {
+            Some(file) if file != filename => (std::fs::read_to_string(file).ok(), file.as_str()),
+            _ => (None, filename),
+        };
+        let source = owned.as_deref().unwrap_or(source);
         let line_no = self.span.line as usize;
         let col = self.span.col as usize;
         let src_line = source.lines().nth(line_no.saturating_sub(1)).unwrap_or("");
@@ -103,8 +128,17 @@ enum Flow {
 type Scope = HashMap<String, Value>;
 
 pub struct Interpreter {
-    /// Global scope, then a stack of function-call scopes.
+    /// Top-level names of the module currently executing. Swapped out with
+    /// `modules[current_module].names` whenever execution crosses a file
+    /// boundary, so each file sees only its own top level.
     globals: Scope,
+    /// Every file loaded this run. Index 0 is the entry file; imports append.
+    modules: Vec<ModuleSpace>,
+    /// Which module `globals` currently belongs to.
+    current_module: ModuleId,
+    /// Modules whose top level is mid-execution, innermost last. Used to
+    /// catch an import cycle before it recurses forever.
+    loading: Vec<ModuleId>,
     /// User `type` declarations: name -> field list.
     types: HashMap<String, Vec<FieldDef>>,
     /// Where `print` writes (swappable for tests).
@@ -199,6 +233,13 @@ impl Interpreter {
     pub fn new() -> Self {
         Interpreter {
             globals: HashMap::new(),
+            modules: vec![ModuleSpace::new(
+                "<input>".to_string(),
+                PathBuf::from("<input>"),
+                PathBuf::from("."),
+            )],
+            current_module: modules::ROOT,
+            loading: Vec::new(),
             types: HashMap::new(),
             output: Vec::new(),
             direct_stdout: false,
@@ -235,14 +276,26 @@ impl Interpreter {
     /// Used by the test runner: definitions and `use` statements must be in
     /// scope, but the program's entry point must not run.
     pub fn run_top_level(&mut self, program: &Program) -> Result<(), RuntimeError> {
+        self.sync_root();
+        // The entry file counts as loading while its top level runs, so a file
+        // that imports it back is reported as the cycle it is rather than
+        // silently seeing a half-built namespace.
+        self.loading.push(modules::ROOT);
         let mut scope = HashMap::new();
+        let mut outcome = Ok(());
         for stmt in &program.items {
-            if let Flow::Return(_) = self.exec(stmt, &mut scope)? {
-                break;
+            match self.exec(stmt, &mut scope) {
+                Ok(Flow::Return(_)) => break,
+                Ok(_) => {}
+                Err(e) => {
+                    outcome = Err(e);
+                    break;
+                }
             }
         }
+        self.loading.pop();
         self.globals.extend(scope);
-        Ok(())
+        outcome
     }
 
     /// Run a sequence of statements in a fresh scope, for one test body.
@@ -254,23 +307,16 @@ impl Interpreter {
     /// Run a whole program: execute top-level statements, then call `main()`
     /// if it was defined.
     pub fn run(&mut self, program: &Program) -> Result<(), RuntimeError> {
-        let mut scope = HashMap::new();
-        for stmt in &program.items {
-            if let Flow::Return(_) = self.exec(stmt, &mut scope)? {
-                break;
-            }
-        }
-        // Promote top-level bindings into globals.
-        self.globals.extend(scope);
+        self.run_top_level(program)?;
 
-        if let Some(Value::Func(main_fn)) = self.globals.get("main").cloned() {
+        if let Some(Value::Func { def: main_fn, .. }) = self.globals.get("main").cloned() {
             if !main_fn.params.is_empty() {
                 return Err(RuntimeError::new(
                     "main() must take no parameters",
                     Span::new(0, 0, 1, 1),
                 ));
             }
-            self.call_function(&main_fn, vec![], Span::new(0, 0, 1, 1))?;
+            self.call_function(&main_fn, modules::ROOT, vec![], Span::new(0, 0, 1, 1))?;
         }
         Ok(())
     }
@@ -356,7 +402,10 @@ impl Interpreter {
                 Ok(Flow::Normal)
             }
             StmtKind::FuncDef(f) => {
-                let func = Value::Func(Rc::new(f.clone()));
+                let func = Value::Func {
+                    def: Rc::new(f.clone()),
+                    home: self.current_module,
+                };
                 scope.insert(f.name.clone(), func.clone());
                 // Register globally right away so recursion and forward calls
                 // from other functions resolve.
@@ -367,7 +416,29 @@ impl Interpreter {
                 for field in fields {
                     self.validate_field_metadata(field)?;
                 }
+                // Types share one namespace across every module, so a value
+                // built in one file is the same type everywhere. Two files
+                // declaring the same name differently is a mistake, not a
+                // pair of unrelated types, so say so.
+                if let Some(existing) = self.types.get(name) {
+                    if existing != fields {
+                        return Err(RuntimeError::new(
+                            format!("type `{name}` is declared twice with different fields"),
+                            stmt.span,
+                        )
+                        .with_hint(
+                            "types are shared across imported files; give one of them another name",
+                        ));
+                    }
+                }
                 self.types.insert(name.clone(), fields.clone());
+                // Also bind it in this module's namespace, so an importer can
+                // reach it as `alias.Name`.
+                let type_ref = Value::TypeRef {
+                    name: Rc::new(name.clone()),
+                };
+                scope.insert(name.clone(), type_ref.clone());
+                self.globals.insert(name.clone(), type_ref);
                 Ok(Flow::Normal)
             }
             StmtKind::Return(value) => {
@@ -413,6 +484,16 @@ impl Interpreter {
                 let outcome = self.exec_block(body, scope);
                 self.mocked_analyze.pop();
                 outcome
+            }
+            StmtKind::UseFile { path, alias } => {
+                let id = self.load_module(path, stmt.span)?;
+                let value = Value::UserModule {
+                    id,
+                    alias: Rc::new(alias.clone()),
+                };
+                scope.insert(alias.clone(), value.clone());
+                self.globals.insert(alias.clone(), value);
+                Ok(Flow::Normal)
             }
             StmtKind::UsePython { module, alias } => {
                 let value = Value::PyModule {
@@ -840,6 +921,25 @@ impl Interpreter {
                     let alias = alias.to_string();
                     return self.mcp_member(&alias, name, expr.span);
                 }
+                // `lib.helper` reads that file's top level.
+                if let Value::UserModule { id, alias } = obj.unlabeled() {
+                    let (id, alias) = (*id, alias.to_string());
+                    return match self.module_member(id, name) {
+                        Some(v) => Ok(v),
+                        None => {
+                            let exports = self.module_exports(id);
+                            Err(RuntimeError::new(
+                                format!("`{alias}` has no name `{name}`"),
+                                expr.span,
+                            )
+                            .with_hint(if exports.is_empty() {
+                                format!("{alias} defines nothing at its top level")
+                            } else {
+                                format!("{alias} provides: {}", exports.join(", "))
+                            }))
+                        }
+                    };
+                }
                 let outer_label = obj.label();
                 // A `classified` field marks values read from it, even when
                 // the containing object is public.
@@ -995,8 +1095,20 @@ impl Interpreter {
                             });
                         }
                         match self.lookup(name, scope, callee.span)? {
-                            Value::Func(f) => self.call_function(&f, arg_vals, expr.span),
+                            Value::Func { def, home } => {
+                                self.call_function(&def, home, arg_vals, expr.span)
+                            }
                             Value::Builtin(b) => self.call_builtin(b, arg_vals, expr.span),
+                            // `tax.Money(...)`: a type reached through the
+                            // module that declared it.
+                            Value::TypeRef { name } => match self.types.get(name.as_str()).cloned()
+                            {
+                                Some(fields) => self.construct(&name, &fields, arg_vals, expr.span),
+                                Option::None => Err(RuntimeError::new(
+                                    format!("there is no type named `{name}`"),
+                                    expr.span,
+                                )),
+                            },
                             other => Err(RuntimeError::new(
                                 format!("{} is not callable", other.type_name()),
                                 expr.span,
@@ -1028,8 +1140,20 @@ impl Interpreter {
                         }
                         let target = self.eval(callee, scope)?;
                         match target {
-                            Value::Func(f) => self.call_function(&f, arg_vals, expr.span),
+                            Value::Func { def, home } => {
+                                self.call_function(&def, home, arg_vals, expr.span)
+                            }
                             Value::Builtin(b) => self.call_builtin(b, arg_vals, expr.span),
+                            // `tax.Money(...)`: a type reached through the
+                            // module that declared it.
+                            Value::TypeRef { name } => match self.types.get(name.as_str()).cloned()
+                            {
+                                Some(fields) => self.construct(&name, &fields, arg_vals, expr.span),
+                                Option::None => Err(RuntimeError::new(
+                                    format!("there is no type named `{name}`"),
+                                    expr.span,
+                                )),
+                            },
                             other => Err(RuntimeError::new(
                                 format!("{} is not callable", other.type_name()),
                                 expr.span,
@@ -1039,8 +1163,20 @@ impl Interpreter {
                     _ => {
                         let target = self.eval(callee, scope)?;
                         match target {
-                            Value::Func(f) => self.call_function(&f, arg_vals, expr.span),
+                            Value::Func { def, home } => {
+                                self.call_function(&def, home, arg_vals, expr.span)
+                            }
                             Value::Builtin(b) => self.call_builtin(b, arg_vals, expr.span),
+                            // `tax.Money(...)`: a type reached through the
+                            // module that declared it.
+                            Value::TypeRef { name } => match self.types.get(name.as_str()).cloned()
+                            {
+                                Some(fields) => self.construct(&name, &fields, arg_vals, expr.span),
+                                Option::None => Err(RuntimeError::new(
+                                    format!("there is no type named `{name}`"),
+                                    expr.span,
+                                )),
+                            },
                             other => Err(RuntimeError::new(
                                 format!("{} is not callable", other.type_name()),
                                 expr.span,
@@ -1132,6 +1268,7 @@ impl Interpreter {
     fn call_function(
         &mut self,
         f: &FuncDef,
+        home: ModuleId,
         args: Vec<Value>,
         span: Span,
     ) -> Result<Value, RuntimeError> {
@@ -1178,7 +1315,13 @@ impl Interpreter {
             }
             local.insert(p.name.clone(), v);
         }
-        let flow = self.exec_block(&f.body, &mut local);
+        // A function body reads its own file's top level, so entering one
+        // defined elsewhere switches namespaces for the duration of the call.
+        let outer_module = self.enter_module(home);
+        let flow = self
+            .exec_block(&f.body, &mut local)
+            .map_err(|e| self.blame_current_file(e));
+        self.leave_module(outer_module);
         self.budget = outer_budget;
 
         if let Some((mut span, outer_parent)) = agent_span {
@@ -1850,7 +1993,7 @@ impl Interpreter {
                 .iter()
                 .filter_map(|h| match h {
                     ToolHandle::Mcp { server, .. } => Some(server.as_str()),
-                    ToolHandle::Kora(_) => Option::None,
+                    ToolHandle::Kora { .. } => Option::None,
                 })
                 .collect();
             servers.sort();
@@ -1872,7 +2015,7 @@ impl Interpreter {
         let tools: Vec<ToolSpec> = tool_funcs
             .iter()
             .map(|handle| match handle {
-                ToolHandle::Kora(f) => self.tool_spec(f),
+                ToolHandle::Kora { def, .. } => self.tool_spec(def),
                 ToolHandle::Mcp { server, name } => self.mcp_tool_spec(server, name, span),
             })
             .collect::<Result<_, _>>()?;
@@ -2154,9 +2297,10 @@ fn value_to_json(value: &Value) -> serde_json::Value {
                 J::Object(obj)
             }
         }
-        Value::Func(f) => J::String(format!("<function {}>", f.name)),
+        Value::Func { def, .. } => J::String(format!("<function {}>", def.name)),
         Value::Builtin(name) => J::String(format!("<builtin {name}>")),
         Value::Module { name } => J::String(format!("<module {name}>")),
+        Value::UserModule { alias, .. } => J::String(format!("<module {alias}>")),
         Value::TypeRef { name } => J::String(format!("<type {name}>")),
         Value::McpServer { alias } => J::String(format!("<mcp server {alias}>")),
         Value::PyModule { module } => J::String(format!("<python module {module}>")),
@@ -2218,6 +2362,10 @@ impl Interpreter {
                 seed.push((name.clone(), Portable::from_value(value)));
             }
         }
+        // Imported modules travel with the worker: a function copied into a
+        // branch still resolves the names of the file it was written in.
+        let module_seed = self.snapshot_modules();
+        let current_module = self.current_module;
         let types = self.types.clone();
         let config = self.config.clone();
         let sinks = self.sinks.clone();
@@ -2258,6 +2406,8 @@ impl Interpreter {
                         var,
                         &body,
                         &seed,
+                        &module_seed,
+                        current_module,
                         &types,
                         &config,
                         &sinks,
@@ -2328,6 +2478,8 @@ fn run_one(
     var: &str,
     body: &[Stmt],
     seed: &[(String, Portable)],
+    module_seed: &[ModuleSnapshot],
+    current_module: ModuleId,
     types: &HashMap<String, Vec<FieldDef>>,
     config: &Config,
     sinks: &SinkPolicy,
@@ -2342,6 +2494,7 @@ fn run_one(
     python: &Arc<Mutex<Option<kora_python::Worker>>>,
 ) -> WorkerResult {
     let mut interp = Interpreter::new();
+    interp.restore_modules(module_seed, current_module);
     interp.types = types.clone();
     interp.config = config.clone();
     interp.allow_private_hosts = config.http_allow_private;
@@ -2412,19 +2565,22 @@ impl Interpreter {
         let mut out = Vec::new();
         for item in items {
             match item {
-                Value::Func(f) if f.kind == FuncKind::Tool => out.push(ToolHandle::Kora(f)),
+                Value::Func { def, home } if def.kind == FuncKind::Tool => {
+                    out.push(ToolHandle::Kora { def, home })
+                }
                 Value::McpTool { server, name } => out.push(ToolHandle::Mcp {
                     server: server.to_string(),
                     name: name.to_string(),
                 }),
-                Value::Func(f) => {
-                    return Err(
-                        RuntimeError::new(format!("`{}` is not a tool", f.name), arg.span)
-                            .with_hint(format!(
-                                "declare it with `tool {}(...)` so the model may call it",
-                                f.name
-                            )),
+                Value::Func { def, .. } => {
+                    return Err(RuntimeError::new(
+                        format!("`{}` is not a tool", def.name),
+                        arg.span,
                     )
+                    .with_hint(format!(
+                        "declare it with `tool {}(...)` so the model may call it",
+                        def.name
+                    )))
                 }
                 other => {
                     return Err(RuntimeError::new(
@@ -2549,11 +2705,11 @@ impl Interpreter {
 
         // An MCP tool runs in its server's process. What it returns is data
         // from outside the program, labeled accordingly by the caller.
-        let func = match handle {
+        let (func, home) = match handle {
             ToolHandle::Mcp { server, name } => {
                 return self.run_mcp_tool(&server, &name, arguments_json, span)
             }
-            ToolHandle::Kora(f) => f,
+            ToolHandle::Kora { def, home } => (def, home),
         };
 
         let parsed: serde_json::Value =
@@ -2569,7 +2725,7 @@ impl Interpreter {
             args.push(json_to_value(raw));
         }
 
-        let result = self.call_function(&func, args, span)?;
+        let result = self.call_function(&func, home, args, span)?;
         Ok(serde_json::to_string(&value_to_json(&result)).unwrap_or_else(|_| "null".to_string()))
     }
 }
@@ -2841,6 +2997,226 @@ impl Interpreter {
                 Ok(true)
             }
         }
+    }
+}
+
+/// A module's namespace in a form that can cross a thread boundary.
+struct ModuleSnapshot {
+    path: String,
+    key: PathBuf,
+    dir: PathBuf,
+    names: Vec<(String, Portable)>,
+}
+
+// --- file modules ---
+
+impl Interpreter {
+    /// Copy every loaded module, for seeding a `parallel for` worker.
+    ///
+    /// The active module's names live in `globals`, so they are read from
+    /// there rather than from the table, which is empty for it.
+    fn snapshot_modules(&self) -> Vec<ModuleSnapshot> {
+        self.modules
+            .iter()
+            .enumerate()
+            .map(|(id, space)| {
+                let live = if id == self.current_module {
+                    &self.globals
+                } else {
+                    &space.names
+                };
+                ModuleSnapshot {
+                    path: space.path.clone(),
+                    key: space.key.clone(),
+                    dir: space.dir.clone(),
+                    names: live
+                        .iter()
+                        .map(|(k, v)| (k.clone(), Portable::from_value(v)))
+                        .collect(),
+                }
+            })
+            .collect()
+    }
+
+    /// Rebuild a module table from a snapshot. Ids are preserved, so a copied
+    /// function still points at the module it was defined in.
+    fn restore_modules(&mut self, snapshot: &[ModuleSnapshot], current: ModuleId) {
+        self.modules = snapshot
+            .iter()
+            .map(|m| {
+                let mut space = ModuleSpace::new(m.path.clone(), m.key.clone(), m.dir.clone());
+                space.names = m
+                    .names
+                    .iter()
+                    .map(|(k, v)| (k.clone(), v.clone().into_value()))
+                    .collect();
+                space
+            })
+            .collect();
+        self.current_module = current.min(self.modules.len().saturating_sub(1));
+        self.globals = std::mem::take(&mut self.modules[self.current_module].names);
+    }
+
+    /// Give the entry file its real identity in the module table.
+    ///
+    /// `program_name` is set after the interpreter is built, so the root entry
+    /// starts as a placeholder. Fixing it up before any import means a file
+    /// that imports the entry file back gets the same module rather than a
+    /// second copy with its own state.
+    fn sync_root(&mut self) {
+        let path = Path::new(&self.program_name);
+        let key = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+        let root = &mut self.modules[modules::ROOT];
+        root.path = self.program_name.clone();
+        root.key = key;
+    }
+
+    /// Directory that imports written in the current module resolve against.
+    ///
+    /// The entry file's directory comes from `program_name`, so a program run
+    /// from anywhere still finds the files sitting next to it.
+    fn current_dir(&self) -> PathBuf {
+        if self.current_module == modules::ROOT {
+            return Path::new(&self.program_name)
+                .parent()
+                .filter(|p| !p.as_os_str().is_empty())
+                .map(Path::to_path_buf)
+                .unwrap_or_else(|| PathBuf::from("."));
+        }
+        self.modules[self.current_module].dir.clone()
+    }
+
+    /// The file the current module was loaded from, for error messages.
+    pub fn current_file(&self) -> String {
+        if self.current_module == modules::ROOT {
+            return self.program_name.clone();
+        }
+        self.modules[self.current_module].path.clone()
+    }
+
+    /// Make `target` the active module, returning the one it replaced.
+    ///
+    /// The live namespace lives in `globals`; the table holds the others. A
+    /// swap rather than a copy keeps this O(1) no matter how large a module's
+    /// top level is.
+    fn enter_module(&mut self, target: ModuleId) -> ModuleId {
+        let previous = self.current_module;
+        if target == previous {
+            return previous;
+        }
+        self.modules[previous].names = std::mem::take(&mut self.globals);
+        self.globals = std::mem::take(&mut self.modules[target].names);
+        self.current_module = target;
+        previous
+    }
+
+    /// Undo `enter_module`.
+    fn leave_module(&mut self, previous: ModuleId) {
+        self.enter_module(previous);
+    }
+
+    /// Attach the current file to an error, so a failure inside an imported
+    /// module is reported against that file rather than the entry file.
+    fn blame_current_file(&self, error: RuntimeError) -> RuntimeError {
+        if error.is_suspension() {
+            return error;
+        }
+        error.in_file(&self.current_file())
+    }
+
+    /// Read one module's top-level name, for `alias.name`.
+    fn module_member(&self, id: ModuleId, name: &str) -> Option<Value> {
+        if id == self.current_module {
+            return self.globals.get(name).cloned();
+        }
+        self.modules[id].names.get(name).cloned()
+    }
+
+    /// Every name a module exports, for the "no such name" hint.
+    fn module_exports(&self, id: ModuleId) -> Vec<String> {
+        let names = if id == self.current_module {
+            &self.globals
+        } else {
+            &self.modules[id].names
+        };
+        let mut out: Vec<String> = names.keys().cloned().collect();
+        out.sort();
+        out
+    }
+
+    /// Load `path` as a module and return its id, reusing an already-loaded
+    /// copy. Top-level statements run exactly once per file per run.
+    fn load_module(&mut self, written: &str, span: Span) -> Result<ModuleId, RuntimeError> {
+        self.sync_root();
+        let base = self.current_dir();
+        let resolved = modules::resolve(written, &base).map_err(|e| {
+            RuntimeError::new(e.message(), span)
+                .with_hint(e.hint())
+                .in_file(&self.current_file())
+        })?;
+
+        if let Some(id) = self.modules.iter().position(|m| m.key == resolved.key) {
+            // Already loaded, or being loaded: a file mid-import means the
+            // graph has a cycle, and its names are not there yet.
+            if self.loading.contains(&id) {
+                let chain: Vec<String> = self
+                    .loading
+                    .iter()
+                    .map(|m| self.modules[*m].path.clone())
+                    .collect();
+                return Err(RuntimeError::new(
+                    modules::cycle_message(&chain, &self.modules[id].path),
+                    span,
+                )
+                .with_hint("move the shared code into a third file both can import")
+                .in_file(&self.current_file()));
+            }
+            return Ok(id);
+        }
+
+        let display = resolved.path.display().to_string();
+        let source = std::fs::read_to_string(&resolved.path).map_err(|e| {
+            RuntimeError::new(format!("cannot read `{written}`: {e}"), span)
+                .in_file(&self.current_file())
+        })?;
+        let program = kora_syntax::parse(&source).map_err(|e| {
+            RuntimeError::new(e.message.clone(), e.span)
+                .with_hint(
+                    e.hint
+                        .clone()
+                        .unwrap_or_else(|| format!("while importing {display}")),
+                )
+                .in_file(&display)
+        })?;
+
+        let id = self.modules.len();
+        self.modules.push(ModuleSpace::new(
+            display.clone(),
+            resolved.key,
+            resolved.dir,
+        ));
+
+        let outer = self.enter_module(id);
+        self.loading.push(id);
+        let mut scope: Scope = HashMap::new();
+        let mut outcome = Ok(());
+        for stmt in &program.items {
+            match self.exec(stmt, &mut scope) {
+                // A bare `return` at a module's top level ends its loading,
+                // exactly as it ends the entry file's top level.
+                Ok(Flow::Return(_)) => break,
+                Ok(_) => {}
+                Err(e) => {
+                    outcome = Err(self.blame_current_file(e));
+                    break;
+                }
+            }
+        }
+        self.globals.extend(scope);
+        self.loading.pop();
+        self.leave_module(outer);
+        outcome?;
+        Ok(id)
     }
 }
 
@@ -3294,8 +3670,16 @@ impl Interpreter {
 /// server.
 #[derive(Debug, Clone)]
 enum ToolHandle {
-    Kora(Rc<FuncDef>),
-    Mcp { server: String, name: String },
+    /// A `tool` declared in this program, with the module it belongs to so it
+    /// runs against its own file's names.
+    Kora {
+        def: Rc<FuncDef>,
+        home: ModuleId,
+    },
+    Mcp {
+        server: String,
+        name: String,
+    },
 }
 
 impl ToolHandle {
@@ -3303,7 +3687,7 @@ impl ToolHandle {
     /// servers offering `search` do not collide.
     fn model_name(&self) -> String {
         match self {
-            ToolHandle::Kora(f) => f.name.clone(),
+            ToolHandle::Kora { def, .. } => def.name.clone(),
             ToolHandle::Mcp { server, name } => format!("{server}__{name}"),
         }
     }
