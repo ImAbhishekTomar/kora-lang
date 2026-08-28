@@ -9,6 +9,7 @@ pub mod config;
 pub mod interp;
 pub mod journal;
 pub mod label;
+pub mod modules;
 pub mod portable;
 pub mod stdlib;
 pub mod telemetry;

@@ -323,9 +323,10 @@ pub(crate) fn value_to_json(value: &Value) -> Option<J> {
             }
             J::Object(out)
         }
-        Value::Func(_)
+        Value::Func { .. }
         | Value::Builtin(_)
         | Value::Module { .. }
+        | Value::UserModule { .. }
         | Value::TypeRef { .. }
         | Value::McpServer { .. }
         | Value::McpTool { .. }

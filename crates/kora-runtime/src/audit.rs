@@ -5,6 +5,9 @@
 //! is best-effort, this is exhaustive, and it is what makes the feature
 //! answerable to a reviewer or an auditor.
 
+use std::collections::HashSet;
+use std::path::{Path, PathBuf};
+
 use kora_syntax::ast::*;
 
 use crate::label::DeclassifySite;
@@ -15,6 +18,65 @@ pub fn audit(program: &Program, file: &str) -> Vec<DeclassifySite> {
     walk_stmts(&program.items, file, &mut sites);
     sites.sort_by_key(|s| s.line);
     sites
+}
+
+/// Audit a program and every file it imports.
+///
+/// Imports are part of the program, so an inventory that stopped at the entry
+/// file would not be the complete list this command promises. Files that
+/// cannot be read or parsed are skipped rather than failing the audit: the
+/// sites that *are* visible are still worth reporting.
+pub fn audit_program(program: &Program, file: &str) -> Vec<DeclassifySite> {
+    let mut sites = Vec::new();
+    let mut seen = HashSet::new();
+    let base = Path::new(file)
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    seen.insert(
+        Path::new(file)
+            .canonicalize()
+            .unwrap_or_else(|_| PathBuf::from(file)),
+    );
+    walk_stmts(&program.items, file, &mut sites);
+    walk_imports(&program.items, &base, &mut seen, &mut sites);
+    sites.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
+    sites
+}
+
+/// Follow `use "..."` statements, depth first, loading each file once.
+fn walk_imports(
+    stmts: &[Stmt],
+    base: &Path,
+    seen: &mut HashSet<PathBuf>,
+    out: &mut Vec<DeclassifySite>,
+) {
+    for stmt in stmts {
+        let StmtKind::UseFile { path, .. } = &stmt.kind else {
+            continue;
+        };
+        let candidate = crate::modules::normalize(&base.join(path));
+        let key = candidate
+            .canonicalize()
+            .unwrap_or_else(|_| candidate.clone());
+        if !seen.insert(key.clone()) {
+            continue;
+        }
+        let Ok(source) = std::fs::read_to_string(&candidate) else {
+            continue;
+        };
+        let Ok(program) = kora_syntax::parse(&source) else {
+            continue;
+        };
+        let display = candidate.display().to_string();
+        walk_stmts(&program.items, &display, out);
+        let dir = key
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        walk_imports(&program.items, &dir, seen, out);
+    }
 }
 
 fn walk_stmts(stmts: &[Stmt], file: &str, out: &mut Vec<DeclassifySite>) {
@@ -71,6 +133,7 @@ fn walk_stmt(stmt: &Stmt, file: &str, out: &mut Vec<DeclassifySite>) {
         | StmtKind::Break
         | StmtKind::Continue
         | StmtKind::Use { .. }
+        | StmtKind::UseFile { .. }
         | StmtKind::UseMcp { .. }
         | StmtKind::UsePython { .. }
         | StmtKind::Assert { .. }

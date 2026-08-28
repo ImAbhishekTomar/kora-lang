@@ -359,6 +359,35 @@ impl Parser {
         let span = self.peek_span();
         self.advance(); // use
 
+        // `use "./lib/tax.ko" as tax` loads another Kora file. A string
+        // literal marks it, so file imports and stdlib modules can never be
+        // mistaken for one another.
+        if let TokenKind::Str(path) = self.peek_kind().clone() {
+            self.advance();
+            let alias = match self.peek_kind() {
+                TokenKind::Ident(word) if word == "as" => {
+                    self.advance();
+                    self.expect_ident("a name after `as`")?
+                }
+                // A path has no natural bare name, so require one rather
+                // than inventing a binding from the file stem.
+                _ => {
+                    return Err(
+                        SyntaxError::new(format!("`use \"{path}\"` needs a name"), span)
+                            .with_hint(format!("write `use \"{path}\" as <name>`")),
+                    )
+                }
+            };
+            if path.is_empty() {
+                return Err(SyntaxError::new("an import path cannot be empty", span));
+            }
+            self.expect_newline("use")?;
+            return Ok(Stmt {
+                kind: StmtKind::UseFile { path, alias },
+                span,
+            });
+        }
+
         // `use python <module> as <alias>` reaches a Python module through
         // the sidecar worker.
         if matches!(self.peek_kind(), TokenKind::Ident(word) if word == "python") {
@@ -1575,6 +1604,31 @@ mod tests {
             err.hint.is_some(),
             "missing-indent error should carry a hint"
         );
+    }
+
+    #[test]
+    fn file_import_parses_with_an_alias() {
+        let p = ok("use \"./lib/tax.ko\" as tax\n");
+        match &p.items[0].kind {
+            StmtKind::UseFile { path, alias } => {
+                assert_eq!(path, "./lib/tax.ko");
+                assert_eq!(alias, "tax");
+            }
+            other => panic!("expected a file import, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn file_import_without_a_name_is_an_error_with_the_fix() {
+        let err = parse("use \"./lib/tax.ko\"\n").unwrap_err();
+        assert!(err.message.contains("needs a name"), "{}", err.message);
+        assert!(err.hint.unwrap().contains("as <name>"));
+    }
+
+    #[test]
+    fn a_bare_module_name_is_still_a_stdlib_import() {
+        let p = ok("use json as j\n");
+        assert!(matches!(p.items[0].kind, StmtKind::Use { .. }));
     }
 
     #[test]

@@ -65,6 +65,16 @@ pub enum StmtKind {
         module: String,
         alias: String,
     },
+    /// `use "./lib/tax.ko" as tax` — bring another Kora file into scope.
+    ///
+    /// The path is a string literal so it can never be confused with a
+    /// stdlib module name, and it is resolved relative to the file that
+    /// writes it, so a program moves as a directory.
+    UseFile {
+        /// The path exactly as written, before resolution.
+        path: String,
+        alias: String,
+    },
     /// `use python statistics as stats` — call into a Python module.
     ///
     /// Data in, data out: there are no live Python objects on this side.

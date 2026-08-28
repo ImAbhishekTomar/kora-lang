@@ -12,6 +12,7 @@ use std::rc::Rc;
 use kora_syntax::ast::FuncDef;
 
 use crate::label::Label;
+use crate::modules::ModuleId;
 
 #[derive(Debug, Clone)]
 pub enum Value {
@@ -23,7 +24,14 @@ pub enum Value {
     List(Rc<RefCell<Vec<Value>>>),
     Dict(Rc<RefCell<HashMap<String, Value>>>),
     /// User-defined function.
-    Func(Rc<FuncDef>),
+    ///
+    /// `home` is the module the function was defined in. A function reads its
+    /// own file's top-level names, not the caller's, so importing a module
+    /// cannot change what the code inside it means.
+    Func {
+        def: Rc<FuncDef>,
+        home: ModuleId,
+    },
     /// Instance of a user-declared `type` block.
     Object {
         type_name: Rc<String>,
@@ -39,6 +47,13 @@ pub enum Value {
     /// A stdlib module brought in with `use`.
     Module {
         name: Rc<String>,
+    },
+    /// Another Kora file, brought in with `use "./lib.ko" as lib`.
+    UserModule {
+        /// Index into the interpreter's module table.
+        id: ModuleId,
+        /// The name it was bound to, for error messages.
+        alias: Rc<String>,
     },
     /// A reference to a declared `type`, so it can be handed to a parser:
     /// `csv.parse(text, Expense)`.
@@ -79,11 +94,12 @@ impl Value {
             Value::None => "None".into(),
             Value::List(_) => "list".into(),
             Value::Dict(_) => "dict".into(),
-            Value::Func(f) => format!("function {}", f.name),
+            Value::Func { def, .. } => format!("function {}", def.name),
             Value::Object { type_name, .. } => type_name.as_str().into(),
             Value::Builtin(name) => format!("builtin {name}"),
             Value::Variant { tag, .. } => tag.as_str().into(),
             Value::Module { name } => format!("module {name}"),
+            Value::UserModule { alias, .. } => format!("module {alias}"),
             Value::TypeRef { name } => format!("type {name}"),
             Value::PyModule { module } => format!("python module {module}"),
             Value::McpServer { alias } => format!("mcp server {alias}"),
@@ -138,9 +154,10 @@ impl Value {
             Value::None => false,
             Value::List(l) => !l.borrow().is_empty(),
             Value::Dict(d) => !d.borrow().is_empty(),
-            Value::Func(_) | Value::Object { .. } | Value::Builtin(_) => true,
+            Value::Func { .. } | Value::Object { .. } | Value::Builtin(_) => true,
             Value::Variant { .. }
             | Value::Module { .. }
+            | Value::UserModule { .. }
             | Value::TypeRef { .. }
             | Value::McpServer { .. }
             | Value::McpTool { .. }
@@ -240,7 +257,7 @@ impl fmt::Display for Value {
                     .collect();
                 write!(f, "{{{}}}", inner.join(", "))
             }
-            Value::Func(fd) => write!(f, "<function {}>", fd.name),
+            Value::Func { def, .. } => write!(f, "<function {}>", def.name),
             Value::Object { type_name, fields } => {
                 let inner: Vec<String> = fields
                     .borrow()
@@ -259,6 +276,7 @@ impl fmt::Display for Value {
                 }
             }
             Value::Module { name } => write!(f, "<module {name}>"),
+            Value::UserModule { alias, .. } => write!(f, "<module {alias}>"),
             Value::TypeRef { name } => write!(f, "<type {name}>"),
             Value::PyModule { module } => write!(f, "<python module {module}>"),
             Value::McpServer { alias } => write!(f, "<mcp server {alias}>"),
