@@ -84,9 +84,12 @@ design changes and should be deliberate.
 - Record/replay cassettes native, from Phase 2. Replay is CI default;
   `(live)` tests opt-in. Cassette format: human-readable JSON on disk.
 - `mock analyze -> ...` is a typed language construct, checked at compile time.
-- Runtime is an OTel producer: agents/calls = spans (GenAI semantic
-  conventions verbatim), budgets = metrics, declassify = events.
-  Zero-config: local file + `kora trace last`.
+- Runtime is an OTel producer: agents and model calls are spans following the
+  GenAI semantic conventions, declassifications are spans of their own, and
+  budget spend rides on the agent span. Zero-config: a local file plus
+  `kora trace`. OTLP JSON is emitted directly rather than through the SDK,
+  which keeps an async runtime out of a synchronous interpreter.
+  A metrics pipeline (as opposed to span attributes) is not built yet.
 - One internal event stream feeds cassettes, OTel, and `--report` cost output.
 - LLM eval (DeepEval-style metrics: answer relevancy, faithfulness,
   hallucination, G-Eval judge) ships as **native stdlib primitives**, not a
@@ -232,8 +235,8 @@ when something actually demands it (designed, not built speculatively).
 3. `agent`, `tool`, `parallel for`, budgets — **done**
 4. `classified` / `declassify` + `kora audit` — **done**
 5. Durability (journal/replay, `ask_human`) — **done**
-6. `test`/`mock` and LSP (squiggles, hover, go-to-def, outline,
-   completion) — **done**; OpenTelemetry next
+6. `test`/`mock`, LSP (squiggles, hover, go-to-def, outline, completion),
+   and OpenTelemetry tracing — **done**
 7. (parked) in-process GPU inference
 
 Ecosystem work, sequenced alongside the phases above:

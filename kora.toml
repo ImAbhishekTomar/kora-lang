@@ -23,6 +23,8 @@ local_model = { allow = ["classified", "internal"] }
 openai      = { allow = ["internal"], deny = ["classified"] }
 
 [telemetry]
-exporter = "file"                   # "file" | "otlp"
+exporter = "file"                   # "file" | "otlp" | omit for none
+path = ".kora/last.trace.json"      # where `kora trace` looks
+# endpoint = "http://localhost:4318"  # for exporter = "otlp"
 level = "calls"                     # off | agents | calls | full
-redact = true                       # classified values never exported
+redact = true                       # labeled values never reach the exporter
