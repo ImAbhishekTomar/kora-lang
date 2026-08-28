@@ -18,7 +18,7 @@ edition = "2021"
 # The CI job pins the same version, so the two cannot drift.
 rust-version = "1.88"
 license = "MIT"
-repository = "https://github.com/abhishektomar/kora-lang"
+repository = "https://github.com/ImAbhishekTomar/kora-lang"
 
 [workspace.dependencies]
 # `version` here must track workspace.package.version: crates.io requires a
