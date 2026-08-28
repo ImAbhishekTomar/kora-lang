@@ -2,14 +2,25 @@
   "name": "kora-lang",
   "displayName": "Kora Language",
   "description": "Syntax highlighting and run support for the Kora programming language (.ko)",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "publisher": "kora-lang",
   "license": "MIT",
+  "icon": "images/icon.png",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/abhishektomar/kora-lang"
+  },
   "engines": {
     "vscode": "^1.85.0"
   },
   "categories": [
     "Programming Languages"
+  ],
+  "keywords": [
+    "kora",
+    "agent",
+    "language server",
+    "syntax highlighting"
   ],
   "main": "./src/extension.js",
   "activationEvents": [
@@ -26,7 +37,11 @@
         "extensions": [
           ".ko"
         ],
-        "configuration": "./language-configuration.json"
+        "configuration": "./language-configuration.json",
+        "icon": {
+          "light": "./images/file-icon.svg",
+          "dark": "./images/file-icon.svg"
+        }
       }
     ],
     "grammars": [
@@ -34,6 +49,13 @@
         "language": "kora",
         "scopeName": "source.kora",
         "path": "./syntaxes/kora.tmLanguage.json"
+      }
+    ],
+    "iconThemes": [
+      {
+        "id": "kora-icons",
+        "label": "Kora Icons",
+        "path": "./fileicons/kora-icon-theme.json"
       }
     ],
     "commands": [

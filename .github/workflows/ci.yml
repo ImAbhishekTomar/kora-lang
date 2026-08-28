@@ -137,6 +137,23 @@ jobs:
       - name: Python sidecar
         run: ./target/debug/kora run examples/09_python.ko
 
+  # A packaging failure here would otherwise only surface at release time,
+  # after a tag already exists.
+  vscode-extension:
+    name: VS Code extension packages
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install dependencies
+        working-directory: editors/vscode
+        run: npm ci
+      - name: Package
+        working-directory: editors/vscode
+        run: npx @vscode/vsce package
+
   docs:
     name: Documentation matches the language
     runs-on: ubuntu-latest

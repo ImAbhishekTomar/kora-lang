@@ -1,0 +1,14 @@
+{
+  "iconDefinitions": {
+    "kora-file": { "iconPath": "../images/file-icon.svg" },
+    "_file": { "iconPath": "../images/file-generic.svg" },
+    "_folder": { "iconPath": "../images/folder.svg" },
+    "_folder-open": { "iconPath": "../images/folder-open.svg" }
+  },
+  "file": "_file",
+  "folder": "_folder",
+  "folderExpanded": "_folder-open",
+  "fileExtensions": {
+    "ko": "kora-file"
+  }
+}

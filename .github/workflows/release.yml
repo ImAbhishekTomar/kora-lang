@@ -264,3 +264,59 @@ jobs:
       - name: Skip notice
         if: ${{ secrets.NPM_TOKEN == '' }}
         run: echo "::notice::NPM_TOKEN not set, skipped npm publish"
+
+  publish-vscode:
+    name: Publish VS Code extension
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install dependencies
+        working-directory: editors/vscode
+        run: npm ci
+
+      - name: Set extension version to match tag
+        working-directory: editors/vscode
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          npm version --no-git-tag-version --allow-same-version "$version"
+
+      - name: Package
+        working-directory: editors/vscode
+        run: npx @vscode/vsce package -o kora-lang.vsix
+
+      - name: Publish to VS Code Marketplace
+        if: ${{ secrets.VSCE_PAT != '' }}
+        working-directory: editors/vscode
+        env:
+          VSCE_PAT: ${{ secrets.VSCE_PAT }}
+        run: npx @vscode/vsce publish --packagePath kora-lang.vsix
+
+      - name: Skip notice (Marketplace)
+        if: ${{ secrets.VSCE_PAT == '' }}
+        run: echo "::notice::VSCE_PAT not set, skipped VS Code Marketplace publish"
+
+      # Open VSX is the marketplace used by VS Code forks (Cursor, VSCodium,
+      # Windsurf, ...) that cannot use Microsoft's Marketplace terms.
+      - name: Publish to Open VSX
+        if: ${{ secrets.OVSX_PAT != '' }}
+        working-directory: editors/vscode
+        env:
+          OVSX_PAT: ${{ secrets.OVSX_PAT }}
+        run: npx ovsx publish kora-lang.vsix -p "$OVSX_PAT"
+
+      - name: Skip notice (Open VSX)
+        if: ${{ secrets.OVSX_PAT == '' }}
+        run: echo "::notice::OVSX_PAT not set, skipped Open VSX publish"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: vscode-extension
+          path: editors/vscode/kora-lang.vsix
+          if-no-files-found: error

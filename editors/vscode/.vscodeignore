@@ -1,0 +1,14 @@
+.vscode/**
+.vscode-test/**
+package-lock.json
+**/*.map
+**/.gitignore
+**/.DS_Store
+*.vsix
+**/*.ts
+**/README.md
+**/CHANGELOG.md
+**/test/**
+**/tests/**
+**/*.md
+!README.md
