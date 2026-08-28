@@ -1,0 +1,5 @@
+# Floor: process start, parse, name resolution, one statement.
+# Every other number in the set should be read as "this, minus startup".
+
+def main():
+    print("ok")

@@ -1,0 +1,19 @@
+# The csv module: header handling, quoting, per-row dict construction. A
+# 20k-row sheet is a realistic input size for an agent program.
+
+use csv
+
+def main():
+    row = "ada,42,compilers,\"quoted, field\"\n"
+    text = "name,age,team,note\n" + row * 20000
+
+    total = 0
+    i = 0
+    while i < 10:
+        match csv.rows(text):
+            case Ok(rows):
+                total += len(rows)
+            case Err(why):
+                print(why)
+        i += 1
+    print(f"csv: {total}")

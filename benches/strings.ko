@@ -1,0 +1,14 @@
+# String work: f-string formatting, concatenation, slicing, membership.
+# Agent programs build prompts, so this path is hot in real programs.
+
+def main():
+    out = ""
+    i = 0
+    while i < 40000:
+        piece = f"row {i}: {i * 3} units"
+        out = out + piece[0:12]
+        if "row" in piece:
+            i += 1
+        else:
+            i += 1
+    print(f"strings: {len(out)}")

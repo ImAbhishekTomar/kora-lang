@@ -1,0 +1,73 @@
+{
+  "version": "kora 0.0.2",
+  "machine": {
+    "os": "Darwin",
+    "release": "25.5.0",
+    "machine": "arm64",
+    "cpus": 10,
+    "python": "3.13.5"
+  },
+  "reps": 7,
+  "results": {
+    "startup": {
+      "min_ms": 4.32,
+      "median_ms": 5.18,
+      "samples": 7
+    },
+    "arith": {
+      "min_ms": 220.07,
+      "median_ms": 223.85,
+      "samples": 7
+    },
+    "calls": {
+      "min_ms": 162.06,
+      "median_ms": 172.66,
+      "samples": 7
+    },
+    "collections": {
+      "min_ms": 200.44,
+      "median_ms": 213.45,
+      "samples": 7
+    },
+    "strings": {
+      "min_ms": 308.75,
+      "median_ms": 327.11,
+      "samples": 7
+    },
+    "json": {
+      "min_ms": 234.21,
+      "median_ms": 247.01,
+      "samples": 7
+    },
+    "regex": {
+      "min_ms": 104.35,
+      "median_ms": 108.48,
+      "samples": 7
+    },
+    "csv": {
+      "min_ms": 172.15,
+      "median_ms": 178.65,
+      "samples": 7
+    },
+    "sequential": {
+      "min_ms": 426.32,
+      "median_ms": 433.8,
+      "samples": 7
+    },
+    "parallel": {
+      "min_ms": 118.16,
+      "median_ms": 124.02,
+      "samples": 7
+    },
+    "durable_off": {
+      "min_ms": 6.41,
+      "median_ms": 9.6,
+      "samples": 7
+    },
+    "durable_on": {
+      "min_ms": 200.4,
+      "median_ms": 214.41,
+      "samples": 7
+    }
+  }
+}

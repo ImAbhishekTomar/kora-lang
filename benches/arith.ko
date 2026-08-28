@@ -1,0 +1,13 @@
+# The evaluator's inner loop: integer and float arithmetic, comparison,
+# assignment. Nothing here touches the heap, so this is the closest thing
+# to a pure tree-walking overhead measurement.
+
+def main():
+    total = 0
+    i = 0
+    while i < 400000:
+        total = total + i * 2 - (i / 3)
+        if total > 1000000000:
+            total = total - 1000000000
+        i += 1
+    print(f"arith: {int(total)}")

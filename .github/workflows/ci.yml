@@ -141,6 +141,37 @@ jobs:
       - name: Python sidecar
         run: ./target/debug/kora run examples/09_python.ko
 
+  # Performance is a stage, not a property: the interpreter is a tree walker
+  # today and a bytecode VM later (DECISIONS.md, "Execution strategy"). A
+  # stage nobody measures is a stage nobody leaves. On a pull request this
+  # builds the base commit and A/Bs it against the branch on one runner,
+  # which is the only comparison a shared machine can make honestly.
+  benchmarks:
+    name: Benchmarks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # The A/B build needs the base commit, not just this one.
+          fetch-depth: 0
+      - name: Install Rust toolchain
+        run: rustup update stable && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --release -p kora-cli --locked
+      - name: Benchmarks still run
+        if: github.event_name != 'pull_request'
+        run: |
+          set -euo pipefail
+          python3 scripts/bench.py --reps 1 --warmup 0 | tee -a "$GITHUB_STEP_SUMMARY"
+      - name: Compare against the base commit
+        if: github.event_name == 'pull_request'
+        run: |
+          set -euo pipefail
+          python3 scripts/bench.py \
+            --against ${{ github.event.pull_request.base.sha }} \
+            --reps 5 | tee -a "$GITHUB_STEP_SUMMARY"
+
   # A packaging failure here would otherwise only surface at release time,
   # after a tag already exists.
   vscode-extension:

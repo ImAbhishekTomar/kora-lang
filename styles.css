@@ -25,5 +25,16 @@ body { background: var(--kora-paper); }
 .signal-card p { color: var(--kora-muted); font-size: .92rem; line-height: 1.5; margin: 0; }
 .home-note { display: flex; gap: .9rem; align-items: flex-start; margin: 2.5rem 0; padding: 1rem 1.1rem; border-left: 3px solid var(--kora-teal); background: rgba(21,154,124,.08); font-size: .92rem; line-height: 1.55; }
 .home-note > span { color: var(--kora-teal); font-size: 1.2rem; }
+.marketing-hero { margin: -1rem 0 3.5rem; overflow: hidden; border-radius: 24px; background: #f7f1df; }
+.marketing-hero img { display: block; width: 100%; height: auto; }
+.marketing-banner { margin: 0 0 1rem; overflow: hidden; border-radius: 18px; background: #102820; }
+.marketing-banner img { display: block; width: 100%; height: auto; }
+.marketing-pillars { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin: 0 0 4rem; }
+.marketing-feature { overflow: hidden; border: 1px solid #dfe6df; border-radius: 16px; background: rgba(255,255,255,.55); }
+.marketing-feature img { display: block; width: 100%; height: auto; }
+.marketing-feature span { display: block; padding: .85rem 1rem 1rem; color: var(--kora-muted); font-size: .85rem; font-weight: 650; }
+.dark .marketing-feature { border-color: #2b3934; background: rgba(255,255,255,.035); }
 code { border-radius: 5px; }
 @media (max-width: 700px) { .signal-grid { grid-template-columns: 1fr; } .signal-number { margin-bottom: 1rem; } }
+@media (max-width: 900px) { .marketing-pillars { grid-template-columns: 1fr; } }
+@media (max-width: 700px) { .marketing-hero { margin-top: 0; border-radius: 16px; } }

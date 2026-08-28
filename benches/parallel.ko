@@ -1,0 +1,17 @@
+# `parallel for`: branch spawn, heap isolation, copying values in and results
+# out. Wall time here depends on the machine's core count, so read it against
+# the same benchmark on the same machine, never across machines.
+
+def work(seed: int) -> int:
+    total = 0
+    i = 0
+    while i < 120000:
+        total += (i * seed) % 97
+        i += 1
+    return total
+
+def main():
+    seeds = range(8)
+    results = parallel for s in seeds:
+        return work(s)
+    print(f"parallel: {sum(results)}")

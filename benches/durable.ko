@@ -1,0 +1,11 @@
+# Durability overhead. Run twice, with and without `--durable`: the second
+# journals every effect to disk so the program survives being killed. The
+# gap between the two runs is what that guarantee costs.
+
+def main():
+    total = 0
+    i = 0
+    while i < 500:
+        total += i
+        print(f"step {i}: {total}")
+        i += 1

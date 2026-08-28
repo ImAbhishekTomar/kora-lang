@@ -1,0 +1,17 @@
+# The sequential twin of parallel.ko: identical work, one thread. The pair
+# exists so the harness can report a speedup, which is the only honest way to
+# show what `parallel for` buys on the machine in front of you.
+
+def work(seed: int) -> int:
+    total = 0
+    i = 0
+    while i < 120000:
+        total += (i * seed) % 97
+        i += 1
+    return total
+
+def main():
+    total = 0
+    for s in range(8):
+        total += work(s)
+    print(f"sequential: {total}")

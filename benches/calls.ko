@@ -1,0 +1,20 @@
+# Function call overhead: frame setup, argument binding, return. Recursion
+# and a flat call loop are separated because they stress different paths.
+
+def fib(n: int) -> int:
+    if n < 2:
+        return n
+    return fib(n - 1) + fib(n - 2)
+
+def add(a: int, b: int) -> int:
+    return a + b
+
+def main():
+    print(f"fib: {fib(23)}")
+
+    total = 0
+    i = 0
+    while i < 150000:
+        total = add(total, i)
+        i += 1
+    print(f"calls: {total}")

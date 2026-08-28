@@ -1,0 +1,28 @@
+# Heap traffic: list growth, indexing, dict insert and lookup, sorting.
+# This is where value representation (Rc, boxing, hashing) shows up.
+
+def main():
+    xs = []
+    i = 0
+    while i < 120000:
+        append(xs, (i * 7919) % 120000)
+        i += 1
+
+    lookups = 0
+    j = 0
+    while j < 120000:
+        lookups += xs[j]
+        j += 1
+
+    counts = {}
+    k = 0
+    while k < 60000:
+        key = f"k{k % 512}"
+        if key in counts:
+            counts[key] += 1
+        else:
+            counts[key] = 1
+        k += 1
+
+    ordered = sorted(xs)
+    print(f"collections: {lookups} {len(keys(counts))} {ordered[0]} {ordered[len(ordered) - 1]}")

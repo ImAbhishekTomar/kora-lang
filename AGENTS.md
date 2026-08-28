@@ -77,6 +77,10 @@ order:
   user hits it, not just the unit underneath
 - `.github/workflows/ci.yml` — a new example that runs deterministically
   belongs in the examples job; a new `test` block belongs in the Kora suite
+- `benches/` — a construct on a hot path (evaluation, calls, values, the
+  journal) needs a benchmark, or its cost is invisible until someone
+  complains. Run `python3 scripts/bench.py --against main` before claiming a
+  change is free; see `benches/README.md`
 
 A change to the *debugger* rather than the language touches
 `crates/kora-runtime/src/debug.rs`, `crates/kora-dap/`, the `debuggers`

@@ -1,0 +1,35 @@
+# The json module: parse, typed parse, path walk, stringify. The document is
+# built with one string repeat so the measurement is the parser, not the
+# interpreter loop that produced the text.
+
+use json
+
+type Row:
+    id: int
+    name: str
+    score: float
+
+def main():
+    one = "{\"id\": 7, \"name\": \"ada\", \"score\": 1.5},"
+    body = one * 4000
+    text = "[" + body[0:len(body) - 1] + "]"
+
+    parsed = 0
+    i = 0
+    while i < 100:
+        match json.parse(text):
+            case Ok(doc):
+                parsed += len(doc)
+            case Err(why):
+                print(why)
+        i += 1
+
+    match json.parse(text):
+        case Ok(doc):
+            match json.get(doc, "3999.name"):
+                case Ok(name):
+                    print(f"json: {parsed} {name}")
+                case Err(why):
+                    print(why)
+        case Err(why):
+            print(why)
