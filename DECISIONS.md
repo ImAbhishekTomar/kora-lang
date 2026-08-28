@@ -132,6 +132,35 @@ design changes and should be deliberate.
   as native stdlib layer in Ecosystem strategy below. Sequencing: alongside
   `test`/`mock` work, Phase 6.
 
+### Debugging
+
+- Debugging is a **first-class tool, not a print statement**: `kora dap` is a
+  Debug Adapter Protocol server, so every DAP-capable editor gets breakpoints,
+  stepping, a call stack, and a variables pane from one implementation.
+- The interpreter knows nothing about the protocol. It keeps a frame stack and
+  asks a `Debugger` trait whether to stop; the translation lives in
+  `kora-dap`. With none attached the cost is one `Option` check per statement.
+- **A paused program is inspected from a snapshot, never from the live
+  interpreter.** When execution stops it pushes a complete copy of the stack
+  and blocks; the adapter answers the editor out of that copy. Nothing reaches
+  into a running interpreter, so inspecting a program cannot perturb it and
+  there is no lock to get wrong.
+- Each frame snapshots its names *before every statement it runs*, so a frame
+  that has called into another shows its names as they stood at the call. This
+  is what makes an outer frame inspectable without unsafe pointers into a live
+  stack.
+- **Watch expressions are lookups, not evaluation**: names and field paths
+  only. A watch that could call a model, spend budget, or write a file is not
+  inspecting the program, it is changing it — and a debugger that changes what
+  it observes is worse than none.
+- A breakpoint on a blank line moves forward to the next statement, and the
+  editor is told where it landed. A breakpoint that silently never fires is
+  the worst outcome available.
+- `parallel for` bodies are **not** debuggable: branches are separate agents on
+  worker threads with their own interpreters. Stopping one would mean stopping
+  a thread the user cannot see, and the DAP thread model would have to grow to
+  match. Deferred rather than faked.
+
 ## Execution strategy
 
 - Stage 1: tree-walking interpreter. Stage 2: bytecode VM. Stage 3 (maybe

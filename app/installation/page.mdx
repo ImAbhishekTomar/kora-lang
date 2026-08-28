@@ -68,16 +68,20 @@ deprecated subdependencies does not come from Kora's source code.
 Install [Kora Language from the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kora-lang.kora-lang).
 
 The extension provides `.ko` file recognition, syntax highlighting, Kora file
-icons, diagnostics, completion, hover information, go-to-definition, and run
-and test commands. Install the CLI separately using Homebrew, npm, a release
-archive, or source so the editor can run your programs.
+icons, diagnostics, completion, hover information, go-to-definition, a
+debugger, and run and test commands. Install the CLI separately using
+Homebrew, npm, a release archive, or source so the editor can run and debug
+your programs.
 
 After installing both pieces:
 
 1. Open a Kora project in VS Code.
 2. Open a `.ko` file.
 3. Use the play button or the command palette command **Kora: Run Current File**.
-4. Set `kora.serverPath` if the `kora` executable is not on your `PATH`.
+4. Press **F5** to debug the file: set breakpoints in the gutter, then step
+   through with the debug toolbar.
+5. Set `kora.serverPath` if the `kora` executable is not on your `PATH`. The
+   same setting points at the language server and the debug adapter.
 
 ## Download a release archive
 

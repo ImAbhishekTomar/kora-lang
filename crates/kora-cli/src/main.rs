@@ -23,6 +23,7 @@ usage:
                                answer a suspended run and resume it
   kora trace <file.ko>         show the spans from the last run
   kora lsp                     run the language server (used by editors)
+  kora dap                     run the debug adapter (used by editors)
   kora --version               print version
 
 flags for `run`:
@@ -47,6 +48,14 @@ fn main() -> ExitCode {
             Ok(()) => ExitCode::SUCCESS,
             Err(e) => {
                 eprintln!("kora lsp: {e}");
+                ExitCode::from(1)
+            }
+        },
+        // Also started by the editor: breakpoints, stepping, and the stack.
+        Some("dap") => match kora_dap::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("kora dap: {e}");
                 ExitCode::from(1)
             }
         },

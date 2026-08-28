@@ -231,7 +231,7 @@ jobs:
             fi
             sleep 15
           }
-          for crate in kora-syntax kora-models kora-mcp kora-python kora-types kora-runtime kora-lsp kora-cli; do
+          for crate in kora-syntax kora-models kora-mcp kora-python kora-types kora-runtime kora-lsp kora-dap kora-cli; do
             publish_or_skip "$crate"
           done
 

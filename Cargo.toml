@@ -6,6 +6,7 @@ members = [
     "crates/kora-runtime",
     "crates/kora-models",
     "crates/kora-lsp",
+    "crates/kora-dap",
     "crates/kora-mcp",
     "crates/kora-python",
     "crates/kora-cli",
@@ -28,6 +29,7 @@ kora-types = { path = "crates/kora-types", version = "0.0.2" }
 kora-runtime = { path = "crates/kora-runtime", version = "0.0.2" }
 kora-models = { path = "crates/kora-models", version = "0.0.2" }
 kora-lsp = { path = "crates/kora-lsp", version = "0.0.2" }
+kora-dap = { path = "crates/kora-dap", version = "0.0.2" }
 kora-mcp = { path = "crates/kora-mcp", version = "0.0.2" }
 kora-python = { path = "crates/kora-python", version = "0.0.2" }
 serde = { version = "1", features = ["derive"] }

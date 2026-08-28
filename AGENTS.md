@@ -28,6 +28,8 @@ order:
 - `crates/kora-syntax/src/lexer.rs` — and the word that produces it
 - `crates/kora-syntax/src/ast.rs` — the node
 - `crates/kora-syntax/src/parser.rs` — the parse, plus a test in the same file
+- `crates/kora-syntax/src/lines.rs` — a new statement kind with a body must
+  list its lines, or breakpoints inside it silently never fire
 - `crates/kora-runtime/src/interp.rs` — execution
 - `crates/kora-runtime/src/value.rs` — new runtime value shape?
 - `crates/kora-runtime/src/portable.rs` — if a value must cross a
@@ -41,6 +43,10 @@ order:
 **Editor**
 
 - `crates/kora-lsp/src/lib.rs` — hover, completion, go-to-definition
+- `crates/kora-dap/src/variables.rs` — a new runtime value shape needs a
+  summary line and, if it has parts, children in the variables pane
+- `crates/kora-dap/src/session.rs` — new launch options, capabilities, or
+  requests
 - `editors/vscode/syntaxes/kora.tmLanguage.json` — highlighting
 - `editors/vscode/package.json` — bump `version`; add keywords if the feature
   is something people would search for
@@ -52,10 +58,12 @@ order:
 - `docs/language.md` — the reference, including the contents list and the
   "Differences from Python" table
 - `docs/stdlib.md` — if a module or function changed
-- `docs/cli.md` — if a command's behavior changed
+- `docs/cli.md` — if a command's behavior changed, including `kora lsp` and
+  `kora dap`
 - `DECISIONS.md` — the *why*, and the trade-offs deliberately accepted
 - `app/language/page.mdx` and `app/reference/page.mdx` — the public docs site
-  is a separate copy; it goes stale silently
+  is a separate copy; it goes stale silently. `app/ecosystem/page.mdx` and
+  `app/installation/page.mdx` describe the editor experience
 
 **Examples and tests**
 
@@ -64,6 +72,12 @@ order:
   user hits it, not just the unit underneath
 - `.github/workflows/ci.yml` — a new example that runs deterministically
   belongs in the examples job; a new `test` block belongs in the Kora suite
+
+A change to the *debugger* rather than the language touches
+`crates/kora-runtime/src/debug.rs`, `crates/kora-dap/`, the `debuggers`
+contribution in `editors/vscode/package.json`, `editors/vscode/src/extension.js`,
+and the debugging sections of `docs/cli.md`, `README.md`, and
+`editors/vscode/README.md`.
 
 ## Before you say it works
 
