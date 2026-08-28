@@ -3,7 +3,7 @@
 use serde_json::{Map, Value};
 
 use crate::schema::UNCERTAIN_KEY;
-use crate::{AnalyzeOutcome, FieldType, ModelError, Schema};
+use crate::{AnalyzeOutcome, FieldType, ModelError, Schema, SchemaField};
 
 /// Turn a raw model response body into an outcome.
 ///
@@ -61,19 +61,22 @@ fn validate_fields(
     schema: &Schema,
 ) -> Result<Map<String, Value>, ModelError> {
     let mut out = Map::new();
-    for (name, field_type) in &schema.fields {
-        let value = obj.remove(name).ok_or_else(|| {
+    for field in &schema.fields {
+        let value = obj.remove(&field.name).ok_or_else(|| {
             ModelError::new(format!(
-                "model response is missing field `{name}` (expected {})",
-                field_type.display_name()
+                "model response is missing field `{}` (expected {})",
+                field.name,
+                field.field_type.display_name()
             ))
         })?;
-        out.insert(name.clone(), coerce(name, field_type, value)?);
+        out.insert(field.name.clone(), coerce(field, value)?);
     }
     Ok(out)
 }
 
-fn coerce(name: &str, field_type: &FieldType, value: Value) -> Result<Value, ModelError> {
+fn coerce(field: &SchemaField, value: Value) -> Result<Value, ModelError> {
+    let name = &field.name;
+    let field_type = &field.field_type;
     let bad = |got: &str| {
         Err(ModelError::new(format!(
             "field `{name}` should be {}, but the model returned {got}",
@@ -82,7 +85,21 @@ fn coerce(name: &str, field_type: &FieldType, value: Value) -> Result<Value, Mod
     };
     match field_type {
         FieldType::Str => match value {
-            Value::String(_) => Ok(value),
+            Value::String(text) => {
+                if let Some(pattern) = &field.pattern {
+                    let regex = regex::Regex::new(pattern).map_err(|e| {
+                        ModelError::new(format!(
+                            "field `{name}` has an invalid pattern `{pattern}`: {e}"
+                        ))
+                    })?;
+                    if !regex.is_match(&text) {
+                        return Err(ModelError::new(format!(
+                            "field `{name}` should match pattern `{pattern}`, but the model returned `{text}`"
+                        )));
+                    }
+                }
+                Ok(Value::String(text))
+            }
             other => bad(&json_kind(&other)),
         },
         FieldType::Int => match &value {
@@ -157,11 +174,36 @@ mod tests {
         Schema {
             type_name: "Insight".into(),
             fields: vec![
-                ("summary".into(), FieldType::Str),
-                ("count".into(), FieldType::Int),
-                ("score".into(), FieldType::Float),
-                ("urgent".into(), FieldType::Bool),
-                ("tags".into(), FieldType::ListOfStr),
+                SchemaField {
+                    name: "summary".into(),
+                    field_type: FieldType::Str,
+                    description: None,
+                    pattern: None,
+                },
+                SchemaField {
+                    name: "count".into(),
+                    field_type: FieldType::Int,
+                    description: None,
+                    pattern: None,
+                },
+                SchemaField {
+                    name: "score".into(),
+                    field_type: FieldType::Float,
+                    description: None,
+                    pattern: None,
+                },
+                SchemaField {
+                    name: "urgent".into(),
+                    field_type: FieldType::Bool,
+                    description: None,
+                    pattern: None,
+                },
+                SchemaField {
+                    name: "tags".into(),
+                    field_type: FieldType::ListOfStr,
+                    description: None,
+                    pattern: None,
+                },
             ],
         }
     }
@@ -252,6 +294,20 @@ mod tests {
                        "tags":["a", 2],"__uncertain__":""}"#;
         let err = parse_response(body, &schema(), 0, 0).unwrap_err();
         assert!(err.message.contains("`tags`"), "{}", err.message);
+    }
+
+    #[test]
+    fn pattern_rejects_a_model_value_that_does_not_match() {
+        let mut constrained = schema();
+        constrained.fields[0].pattern = Some("^[A-Z]{3}$".into());
+        let body = r#"{"summary":"lowercase","count":1,"score":0.1,"urgent":false,
+                       "tags":[],"__uncertain__":""}"#;
+        let err = parse_response(body, &constrained, 0, 0).unwrap_err();
+        assert!(
+            err.message.contains("should match pattern"),
+            "{}",
+            err.message
+        );
     }
 
     #[test]

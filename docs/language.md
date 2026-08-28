@@ -65,6 +65,32 @@ e.salary = 170
 Field types may be `str`, `int`, `float`, `bool`, `list[str]`, or another
 declared type.
 
+### Field metadata and constraints
+
+Fields may carry native metadata. Use the indented form when a field has
+several entries:
+
+```python
+type Expense:
+    merchant: str
+        description: "Merchant identifier, exactly 12 alphanumeric characters"
+        pattern: "^[A-Za-z0-9]{12}$"
+    amount: float
+```
+
+For a short declaration, use the equivalent inline form:
+
+```python
+type Expense:
+    merchant: str @description("Merchant identifier") @pattern("^[A-Za-z0-9]{12}$")
+```
+
+Both forms have identical behavior and can be mixed in one type. `description`
+becomes model and editor guidance. `pattern` is a regular expression for a
+`str` field and is enforced when Kora constructs an object, assigns that field,
+or accepts a model response. Fields without metadata keep their existing
+behavior. The native metadata available today is `description` and `pattern`.
+
 ### Strings
 
 ```python

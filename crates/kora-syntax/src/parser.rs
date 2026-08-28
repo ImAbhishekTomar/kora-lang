@@ -658,13 +658,23 @@ impl Parser {
             let fname = self.expect_ident("field name")?;
             self.expect(&TokenKind::Colon, "expected `:` after field name")?;
             let ty = self.type_expr()?;
+            let mut metadata = FieldMetadata::default();
+            while self.check(&TokenKind::At) {
+                self.field_annotation(&mut metadata)?;
+            }
+            self.expect_newline("field")?;
+            if self.check(&TokenKind::Indent) {
+                self.advance();
+                self.field_metadata_block(&mut metadata)?;
+                self.expect(&TokenKind::Dedent, "expected end of field metadata")?;
+            }
             fields.push(FieldDef {
                 name: fname,
                 ty,
                 span: fspan,
                 classified,
+                metadata,
             });
-            self.expect_newline("field")?;
         }
         self.advance(); // dedent
         if fields.is_empty() {
@@ -677,6 +687,86 @@ impl Parser {
             kind: StmtKind::TypeDef { name, fields },
             span,
         })
+    }
+
+    /// One inline field annotation: `@description("...")`.
+    fn field_annotation(&mut self, metadata: &mut FieldMetadata) -> Result<(), SyntaxError> {
+        self.advance(); // @
+        let name = self.expect_ident("field annotation name after `@`")?;
+        self.expect(
+            &TokenKind::LParen,
+            "expected `(` after field annotation name",
+        )?;
+        let value = match self.peek_kind().clone() {
+            TokenKind::Str(value) => {
+                self.advance();
+                value
+            }
+            other => {
+                return Err(SyntaxError::new(
+                    format!("field annotation `{name}` requires a string, found `{other}`"),
+                    self.peek_span(),
+                ))
+            }
+        };
+        self.expect(
+            &TokenKind::RParen,
+            "expected `)` after field annotation value",
+        )?;
+        self.set_field_metadata(metadata, &name, value)
+    }
+
+    /// An indented metadata block beneath one field.
+    fn field_metadata_block(&mut self, metadata: &mut FieldMetadata) -> Result<(), SyntaxError> {
+        loop {
+            self.skip_newlines();
+            if self.check(&TokenKind::Dedent) {
+                return Ok(());
+            }
+            let name = self.expect_ident("field metadata name")?;
+            self.expect(&TokenKind::Colon, "expected `:` after field metadata name")?;
+            let value = match self.peek_kind().clone() {
+                TokenKind::Str(value) => {
+                    self.advance();
+                    value
+                }
+                other => {
+                    return Err(SyntaxError::new(
+                        format!("field metadata `{name}` requires a string, found `{other}`"),
+                        self.peek_span(),
+                    ))
+                }
+            };
+            self.set_field_metadata(metadata, &name, value)?;
+            self.expect_newline("field metadata")?;
+        }
+    }
+
+    fn set_field_metadata(
+        &self,
+        metadata: &mut FieldMetadata,
+        name: &str,
+        value: String,
+    ) -> Result<(), SyntaxError> {
+        let target = match name {
+            "description" => &mut metadata.description,
+            "pattern" => &mut metadata.pattern,
+            _ => {
+                return Err(SyntaxError::new(
+                    format!("unknown field metadata `{name}`"),
+                    self.peek_span(),
+                )
+                .with_hint("supported metadata: `description` and `pattern`"))
+            }
+        };
+        if target.is_some() {
+            return Err(SyntaxError::new(
+                format!("field metadata `{name}` is declared more than once"),
+                self.peek_span(),
+            ));
+        }
+        *target = Some(value);
+        Ok(())
     }
 
     /// `match expr:` NEWLINE INDENT (`case pattern:` block)+ DEDENT
@@ -1363,6 +1453,34 @@ mod tests {
             }
             other => panic!("expected type def, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn type_fields_accept_indented_and_inline_metadata() {
+        let p = ok(
+            "type Expense:\n    merchant: str\n        description: \"Merchant identifier\"\n        pattern: \"^[A-Za-z0-9]{12}$\"\n    category: str @description(\"Expense category\")\n",
+        );
+        let StmtKind::TypeDef { fields, .. } = &p.items[0].kind else {
+            panic!("expected type definition");
+        };
+        assert_eq!(
+            fields[0].metadata.description.as_deref(),
+            Some("Merchant identifier")
+        );
+        assert_eq!(
+            fields[0].metadata.pattern.as_deref(),
+            Some("^[A-Za-z0-9]{12}$")
+        );
+        assert_eq!(
+            fields[1].metadata.description.as_deref(),
+            Some("Expense category")
+        );
+    }
+
+    #[test]
+    fn type_field_metadata_rejects_unknown_names() {
+        let err = parse("type E:\n    name: str @example(\"Ada\")\n").unwrap_err();
+        assert!(err.message.contains("unknown field metadata `example`"));
     }
 
     #[test]
