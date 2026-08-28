@@ -42,5 +42,6 @@ jobs:
             echo "Formula is already current"
           else
             git -C tap commit -m "kora ${VERSION}"
-            git -C tap -c "http.extraheader=AUTHORIZATION: bearer ${HOMEBREW_TAP_TOKEN}" push
+            auth=$(printf 'x-access-token:%s' "$HOMEBREW_TAP_TOKEN" | base64 | tr -d '\n')
+            git -C tap -c "http.extraheader=AUTHORIZATION: Basic ${auth}" push
           fi
