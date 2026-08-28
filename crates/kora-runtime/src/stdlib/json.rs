@@ -323,7 +323,11 @@ pub(crate) fn value_to_json(value: &Value) -> Option<J> {
             }
             J::Object(out)
         }
-        Value::Func { .. }
+        // An image has no JSON form. Base64 in a text field is how a
+        // megabyte of pixels ends up in a log line by accident, so the
+        // caller is told to hand the image to `analyze` instead.
+        Value::Image(_)
+        | Value::Func { .. }
         | Value::Builtin(_)
         | Value::Module { .. }
         | Value::UserModule { .. }

@@ -20,13 +20,30 @@ no API key and no model installed.
 | [09_python.ko](09_python.ko) | calling Python through the sidecar | `kora run` |
 | [10_modules.ko](10_modules.ko) | splitting a program across files | `kora run` |
 | [11_receipt_classifier.ko](11_receipt_classifier.ko) | reading a receipt and extracting a typed expense record | `kora run --replay` |
+| [12_receipt_images.ko](12_receipt_images.ko) | the same job from the *pictures*: `fs.glob`, `fs.image`, a vision model | `kora run --replay` |
 
 ```bash
 kora run examples/00_basics.ko
 kora run --replay examples/03_salary_review.ko
 kora test examples/07_tests.ko
 kora run --replay examples/11_receipt_classifier.ko
+kora run --replay examples/12_receipt_images.ko
 ```
+
+## The image one
+
+`12_receipt_images.ko` classifies the PNGs in [`receipts/`](receipts) rather
+than a text transcript of them. It is the only example that needs a vision
+model to re-record, and `kora.toml` names one under `vision`:
+
+```toml
+[models]
+vision = "local:gemma4:12b"
+timeout_secs = 900
+```
+
+Replay needs neither. The cassette is keyed on the image bytes, so editing a
+receipt re-asks the model while the untouched one stays free.
 
 ## The module one
 

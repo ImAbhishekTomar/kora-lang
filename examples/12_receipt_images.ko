@@ -1,0 +1,78 @@
+# Receipts as pictures, not as text.
+#
+# An image is an ordinary value here: `fs.image` loads one the way `fs.read`
+# loads text, `analyze` takes it, and the declared type comes back filled in.
+# No base64, no hand-built request body, no Python sidecar -- and because the
+# image is a value, `parallel for` fans the whole folder across cores.
+#
+#   kora run --replay examples/12_receipt_images.ko    # free, deterministic
+#   kora run --record examples/12_receipt_images.ko    # needs a vision model
+
+use fs
+use csv
+
+type Receipt:
+    merchant: str
+    amount: float
+    currency: str
+    purchase_date: str
+    category: str
+    needs_review: bool
+    review_reason: str
+
+type Row:
+    image: str
+    status: str
+    merchant: str
+    amount: float
+    currency: str
+    purchase_date: str
+    category: str
+    note: str
+
+agent classify(path: str) -> Row:
+    budget: max_tokens = 8000
+
+    match fs.image(path):
+        case Ok(picture):
+            # `model="vision"` names a role, not a vendor. kora.toml decides
+            # which model fills it; the default one here reads text and
+            # cannot see.
+            receipt: Receipt = analyze(
+                picture,
+                "Read this expense receipt. Use ISO date YYYY-MM-DD. Choose one category: meals, travel, office, software, services, or other. Set needs_review when the total or the merchant is unclear, and say why in review_reason.",
+                model="vision"
+            )
+            match receipt:
+                case Ok(r):
+                    if r.needs_review:
+                        return Row(path, "review", r.merchant, r.amount, r.currency, r.purchase_date, r.category, r.review_reason)
+                    return Row(path, "ok", r.merchant, r.amount, r.currency, r.purchase_date, r.category, "")
+                case Uncertain(why):
+                    return Row(path, "uncertain", "", 0.0, "", "", "other", why)
+                case Exhausted(meter):
+                    return Row(path, "exhausted", "", 0.0, "", "", "other", meter)
+        case Err(why):
+            return Row(path, "unreadable", "", 0.0, "", "", "other", why)
+
+def main():
+    # One call replaces a hardcoded list of filenames. The results are
+    # sorted, so every run -- and every replay -- visits them in one order.
+    match fs.glob("examples/receipts/*.png"):
+        case Ok(paths):
+            with budget(max_tokens = 40000):
+                rows = parallel for path in paths:
+                    return classify(path)
+
+            for row in rows:
+                print(f"{row.status}  {row.merchant}  {row.amount} {row.currency}  ({row.category})")
+
+            print(f"\nspent {tokens_spent()} tokens across {calls_spent()} calls\n")
+
+            match csv.write(rows):
+                case Ok(text):
+                    print(text)
+                case Err(why):
+                    print(f"could not build the CSV: {why}")
+        case Err(why):
+            print(f"could not list the receipts: {why}")

@@ -5,11 +5,15 @@
 
 use serde_json::{json, Value};
 
+use crate::base64;
 use crate::schema::{build_json_schema, system_prompt, user_prompt};
 use crate::validate::{parse_response, truncate};
 use crate::{AnalyzeRequest, FieldType, ModelConfig, ModelError, Provider, Step, ToolSpec};
 
-const TIMEOUT_SECS: u64 = 120;
+/// Long enough for a large local model to read an image, since a timeout
+/// that fires on ordinary work teaches people to raise it blindly. Override
+/// with `[models] timeout_secs`.
+pub const DEFAULT_TIMEOUT_SECS: u64 = 600;
 const OPENAI_BASE: &str = "https://api.openai.com/v1";
 const OLLAMA_BASE: &str = "http://localhost:11434";
 
@@ -46,6 +50,7 @@ pub fn parse_model_spec(spec: &str) -> Result<ModelConfig, ModelError> {
         endpoint: None,
         api_key: None,
         max_output_tokens: 4096,
+        timeout_secs: DEFAULT_TIMEOUT_SECS,
     })
 }
 
@@ -100,10 +105,47 @@ fn param_schema(ty: &FieldType) -> Value {
 }
 
 /// Conversation messages: system, user, then any tool exchanges so far.
-fn messages(req: &AnalyzeRequest) -> Vec<Value> {
+///
+/// The two providers attach images differently — OpenAI splits the user
+/// message into typed content parts, Ollama keeps plain text and hangs a
+/// parallel `images` array off the message — so the provider decides the
+/// shape rather than the caller.
+fn messages(req: &AnalyzeRequest, provider: &Provider) -> Vec<Value> {
+    let text = user_prompt(&req.prompt, &req.data_json);
+    let user = if req.images.is_empty() {
+        json!({"role": "user", "content": text})
+    } else {
+        match provider {
+            Provider::OpenAI => {
+                let mut parts = vec![json!({"type": "text", "text": text})];
+                for image in &req.images {
+                    parts.push(json!({
+                        "type": "image_url",
+                        "image_url": {
+                            "url": format!(
+                                "data:{};base64,{}",
+                                image.mime,
+                                base64::encode(&image.bytes)
+                            )
+                        }
+                    }));
+                }
+                json!({"role": "user", "content": parts})
+            }
+            Provider::Ollama => {
+                let encoded: Vec<Value> = req
+                    .images
+                    .iter()
+                    .map(|i| Value::String(base64::encode(&i.bytes)))
+                    .collect();
+                json!({"role": "user", "content": text, "images": encoded})
+            }
+        }
+    };
+
     let mut out = vec![
         json!({"role": "system", "content": system_prompt(&req.schema)}),
-        json!({"role": "user", "content": user_prompt(&req.prompt, &req.data_json)}),
+        user,
     ];
     for exchange in &req.tool_history {
         out.push(json!({
@@ -135,7 +177,7 @@ fn openai(
     let mut body = json!({
         "model": config.model,
         "max_completion_tokens": config.max_output_tokens,
-        "messages": messages(req),
+        "messages": messages(req, &Provider::OpenAI),
     });
     if req.tools.is_empty() {
         // Structured output and tool calling are mutually exclusive shapes:
@@ -202,7 +244,7 @@ fn ollama(
         "model": config.model,
         "stream": false,
         "options": {"num_predict": config.max_output_tokens},
-        "messages": messages(req),
+        "messages": messages(req, &Provider::Ollama),
     });
     if req.tools.is_empty() {
         // Ollama takes the JSON schema directly in `format`.
@@ -268,15 +310,23 @@ fn sanitize_schema_name(name: &str) -> String {
     }
 }
 
-/// The real network transport.
-pub(crate) fn ureq_transport(
+/// The real network transport, carrying this config's timeout.
+pub(crate) fn transport_for(config: &ModelConfig) -> Box<Transport> {
+    // Zero is how "no timeout" sneaks back in, so it is clamped rather than
+    // honoured -- the same rule the `http` module applies.
+    let timeout = std::time::Duration::from_secs(config.timeout_secs.max(1));
+    Box::new(move |url: &str, headers: &[(&str, String)], body: &Value| {
+        send(url, headers, body, timeout)
+    })
+}
+
+fn send(
     url: &str,
     headers: &[(&str, String)],
     body: &Value,
+    timeout: std::time::Duration,
 ) -> Result<String, ModelError> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(TIMEOUT_SECS))
-        .build();
+    let agent = ureq::AgentBuilder::new().timeout(timeout).build();
     let mut request = agent.post(url);
     for (name, value) in headers {
         request = request.set(name, value);
@@ -326,6 +376,7 @@ mod tests {
         AnalyzeRequest {
             prompt: "find anomalies".into(),
             data_json: "{\"rows\":2}".into(),
+            images: Vec::new(),
             schema: schema(),
             tools: Vec::new(),
             tool_history: Vec::new(),
@@ -356,6 +407,7 @@ mod tests {
         assert_eq!(c.provider, Provider::OpenAI);
         assert_eq!(c.model, "gpt-4o");
         assert_eq!(c.max_output_tokens, 4096);
+        assert_eq!(c.timeout_secs, DEFAULT_TIMEOUT_SECS);
     }
 
     #[test]
@@ -471,6 +523,70 @@ mod tests {
             seen.borrow().clone().unwrap().0,
             "http://box:11434/api/chat"
         );
+    }
+
+    /// The same image must arrive in each provider's own shape: OpenAI wants
+    /// typed content parts with a data URL, Ollama wants bare base64 in a
+    /// sibling array. Getting either wrong is a silently text-only request.
+    #[test]
+    fn openai_attaches_images_as_content_parts() {
+        let reply = r#"{
+            "choices":[{"message":{"content":"{\"summary\":\"ok\",\"count\":1,\"__uncertain__\":\"\"}"}}],
+            "usage":{"prompt_tokens":1,"completion_tokens":1}
+        }"#;
+        let (transport, seen) = recording(reply);
+        let mut config = parse_model_spec("openai:gpt-4o").unwrap();
+        config.api_key = Some("test-key".into());
+        let mut req = request();
+        req.images = vec![crate::ImagePart {
+            mime: "image/png".into(),
+            bytes: b"foobar".to_vec(),
+        }];
+
+        step_with(&config, &req, &*transport).unwrap();
+        let (_, body) = seen.borrow().clone().unwrap();
+        let parts = &body["messages"][1]["content"];
+        assert_eq!(parts[0]["type"], "text");
+        assert_eq!(parts[1]["type"], "image_url");
+        assert_eq!(
+            parts[1]["image_url"]["url"],
+            "data:image/png;base64,Zm9vYmFy"
+        );
+    }
+
+    #[test]
+    fn ollama_attaches_images_beside_the_text() {
+        let reply =
+            r#"{"message":{"content":"{\"summary\":\"a\",\"count\":1,\"__uncertain__\":\"\"}"}}"#;
+        let (transport, seen) = recording(reply);
+        let config = parse_model_spec("local:llava:7b").unwrap();
+        let mut req = request();
+        req.images = vec![crate::ImagePart {
+            mime: "image/png".into(),
+            bytes: b"foobar".to_vec(),
+        }];
+
+        step_with(&config, &req, &*transport).unwrap();
+        let (_, body) = seen.borrow().clone().unwrap();
+        let message = &body["messages"][1];
+        assert!(message["content"].as_str().unwrap().contains("DATA:"));
+        assert_eq!(message["images"][0], "Zm9vYmFy");
+    }
+
+    /// A text-only call must keep the plain-string content shape: some
+    /// providers and local models reject the content-parts form outright.
+    #[test]
+    fn no_images_keeps_plain_string_content() {
+        let reply = r#"{
+            "choices":[{"message":{"content":"{\"summary\":\"ok\",\"count\":1,\"__uncertain__\":\"\"}"}}]
+        }"#;
+        let (transport, seen) = recording(reply);
+        let mut config = parse_model_spec("openai:gpt-4o").unwrap();
+        config.api_key = Some("test-key".into());
+
+        step_with(&config, &request(), &*transport).unwrap();
+        let (_, body) = seen.borrow().clone().unwrap();
+        assert!(body["messages"][1]["content"].is_string());
     }
 
     #[test]

@@ -138,6 +138,7 @@ jobs:
           ./target/debug/kora run --replay examples/01_expense_check.ko
           ./target/debug/kora run --replay examples/02_triage.ko
           ./target/debug/kora run --replay examples/03_salary_review.ko
+          ./target/debug/kora run --replay examples/12_receipt_images.ko
       - name: Python sidecar
         run: ./target/debug/kora run examples/09_python.ko
 

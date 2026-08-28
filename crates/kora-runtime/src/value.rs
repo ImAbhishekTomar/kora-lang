@@ -12,6 +12,7 @@ use std::rc::Rc;
 use kora_syntax::ast::FuncDef;
 
 use crate::label::Label;
+use crate::media::Image;
 use crate::modules::ModuleId;
 
 #[derive(Debug, Clone)]
@@ -44,6 +45,11 @@ pub enum Value {
         tag: Rc<String>,
         payload: Vec<Value>,
     },
+    /// An image, from `fs.image(path)`.
+    ///
+    /// Shared by `Rc` rather than copied: a receipt scan is megabytes, and
+    /// passing one to a function should not duplicate it.
+    Image(Rc<Image>),
     /// A stdlib module brought in with `use`.
     Module {
         name: Rc<String>,
@@ -98,6 +104,7 @@ impl Value {
             Value::Object { type_name, .. } => type_name.as_str().into(),
             Value::Builtin(name) => format!("builtin {name}"),
             Value::Variant { tag, .. } => tag.as_str().into(),
+            Value::Image(_) => "image".into(),
             Value::Module { name } => format!("module {name}"),
             Value::UserModule { alias, .. } => format!("module {alias}"),
             Value::TypeRef { name } => format!("type {name}"),
@@ -155,6 +162,8 @@ impl Value {
             Value::List(l) => !l.borrow().is_empty(),
             Value::Dict(d) => !d.borrow().is_empty(),
             Value::Func { .. } | Value::Object { .. } | Value::Builtin(_) => true,
+            // An image always has bytes -- `fs.image` refuses an empty file.
+            Value::Image(_) => true,
             Value::Variant { .. }
             | Value::Module { .. }
             | Value::UserModule { .. }
@@ -214,6 +223,9 @@ impl Value {
             }
             // Comparison sees through labels; the *result* of a comparison
             // inherits the label at the operator, handled by the interpreter.
+            // Two images are the same when their bytes are, not when they
+            // came from the same path: a copied file is the same picture.
+            (Image(a), Image(b)) => a == b,
             (Labeled { inner, .. }, other) => inner.same(other),
             (other, Labeled { inner, .. }) => other.same(inner),
             _ => false,
@@ -275,6 +287,7 @@ impl fmt::Display for Value {
                     write!(f, "{tag}({})", inner.join(", "))
                 }
             }
+            Value::Image(image) => write!(f, "{}", image.summary()),
             Value::Module { name } => write!(f, "<module {name}>"),
             Value::UserModule { alias, .. } => write!(f, "<module {alias}>"),
             Value::TypeRef { name } => write!(f, "<type {name}>"),

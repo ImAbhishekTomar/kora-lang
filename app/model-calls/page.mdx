@@ -31,6 +31,22 @@ def main():
 
 No raw JSON parsing. No confidence float to interpret. A model can give you a useful answer or say it is not sure.
 
+## Images
+
+The data argument can be a picture. `fs.image` loads one, and the same typed result comes back:
+
+```kora
+use fs
+
+match fs.image("dataset/0.png"):
+    case Ok(picture):
+        expense: Expense = analyze(picture, "read this receipt", model="vision")
+    case Err(why):
+        print(why)
+```
+
+PNG, JPEG, GIF, and WebP. No base64 and no hand-built request body — an image is a value, so it also crosses a `parallel for` boundary like anything else.
+
 ## Try it with a cassette
 
 For a live run, configure an OpenAI key or a local Ollama model in `kora.toml`.
@@ -50,6 +66,11 @@ Kora currently supports OpenAI and Ollama. Pick the default in `kora.toml`:
 [models]
 default = "local:llama3.2:latest"
 smart = "openai:gpt-4o"
+vision = "local:gemma4:12b"
+
+timeout_secs = 600
 ```
+
+A call reaches for one by name — `analyze(..., model="vision")` — so which model does the work is a config change, not a code change. A local vision model is slow, hence `timeout_secs`.
 
 Keep prompts short and let the result type do more of the work.

@@ -11,6 +11,7 @@ and the constructs Python has no equivalent for.
 ## Contents
 
 - [Values and types](#values-and-types)
+- [Images](#images)
 - [Control flow](#control-flow)
 - [Functions, agents, and tools](#functions-agents-and-tools)
 - [Model calls](#model-calls)
@@ -105,6 +106,43 @@ Escapes: `\n`, `\t`, `\r`, `\\`, `\'`, `\"`, `\0`.
 
 ---
 
+## Images
+
+An image is an ordinary value. `fs.image` loads one the way `fs.read` loads
+text, and it goes into `analyze` like any other data:
+
+```python
+use fs
+
+match fs.image("receipts/0.png"):
+    case Ok(picture):
+        receipt: Receipt = analyze(picture, "read this receipt", model="vision")
+    case Err(why):
+        print(why)      # no such file: receipts/0.png
+```
+
+PNG, JPEG, GIF, and WebP. The type is read from the file's magic bytes rather
+than its extension, so a JPEG named `.png` is still sent as a JPEG. Contents
+are `unverified` like any other file, and an image cannot be serialized —
+`json.stringify` refuses it rather than emitting a megabyte of base64.
+
+Images may sit anywhere in the data argument. They are extracted in the order
+they appear, and the JSON the model sees carries an `<image>` marker in each
+one's place:
+
+```python
+r: Comparison = analyze(
+    {"front": front, "back": back, "claim": claim_id},
+    "do these two photos show the same package?",
+    model="vision"
+)
+```
+
+`print` and the debugger show a summary — source, type, size — never the
+bytes.
+
+---
+
 ## Control flow
 
 ```python
@@ -182,6 +220,27 @@ With tools the model may call:
 ```python
 t: Ticket = analyze(raw, "classify this ticket", tools=[priority_for])
 ```
+
+### Choosing a model
+
+By default a call uses `[models] default` from `kora.toml`. A call that needs
+a different one names a **role**, and the config says which model fills it:
+
+```python
+r: Receipt = analyze(picture, "read this receipt", model="vision")
+```
+
+```toml
+[models]
+default = "local:qwen3:8b"
+vision  = "local:gemma4:12b"
+```
+
+`model=` takes a name declared in `[models]`, never a provider spec like
+`"openai:gpt-4o"`. A vendor's model name in a source file is how a program
+ends up needing an environment variable to choose between two providers. A
+name that came from outside the program is refused: the model is a
+destination, and model output should not be able to redirect the call.
 
 ---
 

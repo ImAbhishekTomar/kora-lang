@@ -23,6 +23,7 @@ use crate::value::Value;
 pub mod csv;
 pub mod env;
 pub mod fs;
+pub(crate) mod glob;
 pub mod http;
 pub mod json;
 pub mod re;

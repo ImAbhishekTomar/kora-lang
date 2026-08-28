@@ -3,13 +3,14 @@
 //!
 //! Synchronous/blocking HTTP only (the interpreter is a sync tree-walker).
 
+mod base64;
 mod provider;
 mod schema;
 mod validate;
 
 use std::fmt;
 
-pub use provider::parse_model_spec;
+pub use provider::{parse_model_spec, DEFAULT_TIMEOUT_SECS};
 
 /// JSON-schema-ish description of the expected result shape.
 /// Built by the runtime from Kora `type` declarations.
@@ -62,6 +63,9 @@ pub struct ModelConfig {
     pub api_key: Option<String>,
     /// Default 4096.
     pub max_output_tokens: u32,
+    /// How long to wait for one response. There is no "off": a request that
+    /// waits forever is the most common way a program hangs.
+    pub timeout_secs: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -76,12 +80,30 @@ pub struct AnalyzeRequest {
     pub prompt: String,
     /// The input data serialized as JSON text.
     pub data_json: String,
+    /// Images accompanying the data, in the order the program listed them.
+    ///
+    /// Text and pixels travel together in one request: a receipt is not a
+    /// JSON blob with a picture attached, it *is* the picture, and splitting
+    /// them into two calls loses the association the model needs.
+    pub images: Vec<ImagePart>,
     pub schema: Schema,
     /// Tools the model may call before producing its final answer.
     pub tools: Vec<ToolSpec>,
     /// Results of tool calls already performed, appended to the conversation
     /// as the loop progresses.
     pub tool_history: Vec<ToolExchange>,
+}
+
+/// One image travelling to a multimodal model.
+///
+/// Bytes, not base64: the encoding is a wire detail each provider spells
+/// differently, so it happens at request construction rather than being
+/// carried around pre-encoded.
+#[derive(Debug, Clone)]
+pub struct ImagePart {
+    /// An image MIME type, e.g. `image/png`.
+    pub mime: String,
+    pub bytes: Vec<u8>,
 }
 
 /// A function the model may call. Built from a Kora `tool` declaration:
@@ -154,7 +176,7 @@ impl std::error::Error for ModelError {}
 
 /// Run one schema-constrained analyze call against the configured provider.
 pub fn analyze(config: &ModelConfig, req: &AnalyzeRequest) -> Result<AnalyzeOutcome, ModelError> {
-    match provider::step_with(config, req, &provider::ureq_transport)? {
+    match provider::step_with(config, req, &*provider::transport_for(config))? {
         Step::Done(outcome) => Ok(outcome),
         // Without tools declared the model has nothing to call, so a tool
         // request here means it ignored the contract.
@@ -166,5 +188,5 @@ pub fn analyze(config: &ModelConfig, req: &AnalyzeRequest) -> Result<AnalyzeOutc
 
 /// One turn of the tool loop: either the final answer, or a tool to run.
 pub fn step(config: &ModelConfig, req: &AnalyzeRequest) -> Result<Step, ModelError> {
-    provider::step_with(config, req, &provider::ureq_transport)
+    provider::step_with(config, req, &*provider::transport_for(config))
 }

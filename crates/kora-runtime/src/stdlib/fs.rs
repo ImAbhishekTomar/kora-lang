@@ -14,15 +14,23 @@
 //! **Silent overwrite.** `write()` destroying an existing file by default has
 //! cost people work for decades. Overwriting is spelled differently from
 //! creating.
+//!
+//! **Directory order.** `os.listdir` and `glob.glob` hand back whatever order
+//! the filesystem happened to store, which differs between machines. A
+//! program that fans that list across threads then does its work in a
+//! different sequence on every host, and a durable replay stops matching the
+//! run it is resuming. Listings here are always sorted.
 
 use std::path::{Component, Path};
 use std::rc::Rc;
 
 use kora_syntax::token::Span;
 
+use super::glob;
 use super::{err, ok, require_not_classified, require_verified, str_arg};
 use crate::interp::{Interpreter, RuntimeError};
 use crate::label::Label;
+use crate::media::Image;
 use crate::value::Value;
 
 pub const EXPORTS: super::Exports = &[
@@ -31,6 +39,9 @@ pub const EXPORTS: super::Exports = &[
     ("append", append),
     ("exists", exists),
     ("lines", lines),
+    ("image", image),
+    ("list", list),
+    ("glob", glob_files),
 ];
 
 /// `fs.read(path) -> Ok(text) | Err(reason)`
@@ -111,6 +122,75 @@ fn append(interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Valu
         },
         Err(e) => Ok(err(describe_io(&path, &e))),
     }
+}
+
+/// `fs.image(path) -> Ok(image) | Err(reason)`
+///
+/// The image is `unverified` like any other file content, and its type comes
+/// from the bytes rather than the extension (see [`crate::media`]).
+fn image(_interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
+    let path = checked_path(&args, "fs.image", span)?;
+    let bytes = match std::fs::read(&path) {
+        Ok(bytes) => bytes,
+        Err(e) => return Ok(err(describe_io(&path, &e))),
+    };
+    match Image::detect(bytes, &path) {
+        Ok(image) => Ok(ok(
+            Value::Image(Rc::new(image)).with_label(Label::UNVERIFIED)
+        )),
+        Err(reason) => Ok(err(reason)),
+    }
+}
+
+/// `fs.list(dir) -> Ok(list of paths) | Err(reason)`
+///
+/// Full paths, not bare names: a name alone has to be re-joined by hand, and
+/// forgetting to is how a listing loop ends up reading the wrong directory.
+fn list(_interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
+    let dir = checked_path(&args, "fs.list", span)?;
+    let entries = match std::fs::read_dir(&dir) {
+        Ok(entries) => entries,
+        Err(e) => return Ok(err(describe_io(&dir, &e))),
+    };
+    let mut names: Vec<String> = Vec::new();
+    for entry in entries.flatten() {
+        // A name that is not valid UTF-8 is skipped rather than mangled: a
+        // lossy name would not open again.
+        if let Some(name) = entry.file_name().to_str() {
+            names.push(format!("{}/{name}", dir.trim_end_matches('/')));
+        }
+    }
+    names.sort();
+    Ok(ok(paths_value(names)))
+}
+
+/// `fs.glob(pattern) -> Ok(list of paths) | Err(reason)`
+fn glob_files(
+    _interp: &mut Interpreter,
+    args: Vec<Value>,
+    span: Span,
+) -> Result<Value, RuntimeError> {
+    let pattern = checked_path(&args, "fs.glob", span)?;
+    match glob::expand(&pattern) {
+        Ok(paths) => Ok(ok(paths_value(paths))),
+        Err(reason) => Ok(err(format!("fs.glob({pattern}): {reason}"))),
+    }
+}
+
+/// Paths the runtime produced from a program-supplied pattern.
+///
+/// Verified, unlike file *contents*. The program named the directory and the
+/// shape of the names, and every result was matched against it — that is an
+/// allowlist, which is exactly what narrows `unverified` elsewhere. Leaving
+/// these unverified would mean no listed path could be opened without a
+/// laundering step that checks nothing.
+fn paths_value(paths: Vec<String>) -> Value {
+    Value::List(Rc::new(std::cell::RefCell::new(
+        paths
+            .into_iter()
+            .map(|p| Value::Str(Rc::new(p)))
+            .collect::<Vec<_>>(),
+    )))
 }
 
 /// `fs.exists(path) -> bool`

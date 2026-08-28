@@ -410,3 +410,300 @@ def main():
         "the label must survive read -> parse -> path walk, got: {err}"
     );
 }
+
+// --- fs: images and listings ---
+
+/// A minimal but real PNG header, so `fs.image` sees the bytes it checks.
+fn png_bytes() -> Vec<u8> {
+    let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+    bytes.extend_from_slice(&[0u8; 64]);
+    bytes
+}
+
+#[test]
+fn fs_image_loads_a_picture_as_a_value() {
+    let scratch = Scratch::new("image-read");
+    std::fs::write(scratch.0.join("receipt.png"), png_bytes()).unwrap();
+    let path = scratch.path("receipt.png");
+    let out = run(&format!(
+        r#"use fs
+def main():
+    match fs.image("{path}"):
+        case Ok(picture):
+            print(picture)
+        case Err(why):
+            print(why)
+"#
+    ));
+    assert_eq!(out.len(), 1);
+    // The summary, never the bytes: a terminal full of binary helps nobody.
+    assert!(out[0].starts_with("<image "), "got: {}", out[0]);
+    assert!(out[0].contains("image/png"), "got: {}", out[0]);
+    assert!(out[0].ends_with("72 bytes>"), "got: {}", out[0]);
+}
+
+/// The defect being fixed: `mimetypes.guess_type` trusts the filename, so a
+/// mislabelled file is sent to the provider as the wrong type and comes back
+/// as an opaque 400.
+#[test]
+fn fs_image_reads_the_type_from_the_bytes_not_the_name() {
+    let scratch = Scratch::new("image-mislabelled");
+    std::fs::write(
+        scratch.0.join("receipt.png"),
+        [0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10],
+    )
+    .unwrap();
+    let path = scratch.path("receipt.png");
+    let out = run(&format!(
+        r#"use fs
+def main():
+    match fs.image("{path}"):
+        case Ok(picture):
+            print(picture)
+        case Err(why):
+            print(why)
+"#
+    ));
+    assert!(out[0].contains("image/jpeg"), "got: {}", out[0]);
+}
+
+#[test]
+fn fs_image_refuses_a_file_that_is_not_an_image() {
+    let scratch = Scratch::new("image-not");
+    std::fs::write(scratch.0.join("invoice.png"), b"%PDF-1.7 not a picture").unwrap();
+    let path = scratch.path("invoice.png");
+    let out = run(&format!(
+        r#"use fs
+def main():
+    match fs.image("{path}"):
+        case Ok(picture):
+            print("unreachable")
+        case Err(why):
+            print(why)
+"#
+    ));
+    assert!(
+        out[0].contains("not a PNG, JPEG, GIF, or WebP"),
+        "got: {}",
+        out[0]
+    );
+    assert!(out[0].contains("invoice.png"), "got: {}", out[0]);
+}
+
+#[test]
+fn fs_image_missing_file_is_a_value_not_a_crash() {
+    let out = run(r#"use fs
+def main():
+    match fs.image("definitely-not-here.png"):
+        case Ok(p):
+            print("unreachable")
+        case Err(why):
+            print(why)
+"#);
+    assert_eq!(out, vec!["no such file: definitely-not-here.png"]);
+}
+
+#[test]
+fn fs_glob_matches_and_sorts() {
+    let scratch = Scratch::new("glob");
+    for name in ["2.png", "0.png", "1.png", "notes.txt", ".hidden.png"] {
+        std::fs::write(scratch.0.join(name), b"x").unwrap();
+    }
+    let pattern = scratch.path("*.png");
+    let out = run(&format!(
+        r#"use fs
+def main():
+    match fs.glob("{pattern}"):
+        case Ok(paths):
+            for p in paths:
+                print(p)
+        case Err(why):
+            print(why)
+"#
+    ));
+    let names: Vec<String> = out
+        .iter()
+        .map(|p| p.rsplit('/').next().unwrap().to_string())
+        .collect();
+    // Sorted, and a dotfile is not swept up by `*`.
+    assert_eq!(names, vec!["0.png", "1.png", "2.png"]);
+}
+
+#[test]
+fn fs_glob_with_no_matches_is_an_empty_list_not_an_error() {
+    let scratch = Scratch::new("glob-empty");
+    std::fs::write(scratch.0.join("notes.txt"), b"x").unwrap();
+    let pattern = scratch.path("*.png");
+    let out = run(&format!(
+        r#"use fs
+def main():
+    match fs.glob("{pattern}"):
+        case Ok(paths):
+            print(len(paths))
+        case Err(why):
+            print(why)
+"#
+    ));
+    assert_eq!(out, vec!["0"]);
+}
+
+/// The whole point of the listing: a globbed path feeds straight back into
+/// `fs`. If results came back `unverified`, every program would need a
+/// laundering step that checks nothing.
+#[test]
+fn fs_glob_results_can_be_opened() {
+    let scratch = Scratch::new("glob-open");
+    std::fs::write(scratch.0.join("a.png"), png_bytes()).unwrap();
+    let pattern = scratch.path("*.png");
+    let out = run(&format!(
+        r#"use fs
+def main():
+    match fs.glob("{pattern}"):
+        case Ok(paths):
+            for p in paths:
+                match fs.image(p):
+                    case Ok(picture):
+                        print(picture)
+                    case Err(why):
+                        print(why)
+        case Err(why):
+            print(why)
+"#
+    ));
+    assert!(out[0].contains("image/png"), "got: {}", out[0]);
+}
+
+#[test]
+fn fs_list_returns_full_paths_sorted() {
+    let scratch = Scratch::new("list");
+    for name in ["b.txt", "a.txt"] {
+        std::fs::write(scratch.0.join(name), b"x").unwrap();
+    }
+    let dir = scratch.path("");
+    let dir = dir.trim_end_matches(['/', '\\']).to_string();
+    let out = run(&format!(
+        r#"use fs
+def main():
+    match fs.list("{dir}"):
+        case Ok(paths):
+            for p in paths:
+                print(p)
+        case Err(why):
+            print(why)
+"#
+    ));
+    assert_eq!(out.len(), 2);
+    assert!(out[0].ends_with("a.txt"), "got: {}", out[0]);
+    assert!(out[1].ends_with("b.txt"), "got: {}", out[1]);
+    // Full paths, so the result opens without being re-joined by hand.
+    assert!(
+        out[0].contains('/') || out[0].contains('\\'),
+        "got: {}",
+        out[0]
+    );
+}
+
+#[test]
+fn fs_list_missing_directory_names_the_path() {
+    let out = run(r#"use fs
+def main():
+    match fs.list("no-such-directory"):
+        case Ok(paths):
+            print("unreachable")
+        case Err(why):
+            print(why)
+"#);
+    assert_eq!(out, vec!["no such file: no-such-directory"]);
+}
+
+#[test]
+fn fs_glob_refuses_a_pattern_that_came_from_outside() {
+    let scratch = Scratch::new("glob-unverified");
+    let path = scratch.path("evil.txt");
+    std::fs::write(&path, "/etc/*").unwrap();
+    let err = run_err(&format!(
+        r#"use fs
+def main():
+    match fs.read("{path}"):
+        case Ok(contents):
+            fs.glob(contents)
+        case Err(w):
+            print(w)
+"#
+    ));
+    assert!(err.contains("came from outside"), "got: {err}");
+}
+
+#[test]
+fn an_image_cannot_be_smuggled_into_json() {
+    let scratch = Scratch::new("image-json");
+    std::fs::write(scratch.0.join("a.png"), png_bytes()).unwrap();
+    let path = scratch.path("a.png");
+    let out = run(&format!(
+        r#"use fs
+use json
+def main():
+    match fs.image("{path}"):
+        case Ok(picture):
+            match json.stringify(picture):
+                case Ok(text):
+                    print("unreachable")
+                case Err(why):
+                    print(why)
+        case Err(why):
+            print(why)
+"#
+    ));
+    assert_eq!(out, vec!["image cannot be represented as JSON"]);
+}
+
+/// Images are values, so they cross a `parallel for` boundary like anything
+/// else. Loading outside the loop and using inside it is the case that
+/// exercises the copy: a worker gets the bytes, not a handle into another
+/// agent's heap.
+#[test]
+fn images_can_be_fanned_out_across_threads() {
+    let scratch = Scratch::new("image-parallel");
+    for name in ["a.png", "b.png", "c.png"] {
+        std::fs::write(scratch.0.join(name), png_bytes()).unwrap();
+    }
+    let pattern = scratch.path("*.png");
+    let out = run(&format!(
+        r#"use fs
+
+def describe(picture) -> str:
+    return f"{{picture}}"
+
+def main():
+    pictures = []
+    match fs.glob("{pattern}"):
+        case Ok(paths):
+            for p in paths:
+                match fs.image(p):
+                    case Ok(picture):
+                        append(pictures, picture)
+                    case Err(why):
+                        print(why)
+        case Err(why):
+            print(why)
+
+    summaries = parallel for picture in pictures:
+        return describe(picture)
+
+    for line in summaries:
+        print(line)
+"#
+    ));
+    assert_eq!(out.len(), 3, "{out:?}");
+    // Input order is preserved, and the bytes made it across intact.
+    assert!(
+        out[0].ends_with("a.png image/png 72 bytes>"),
+        "got: {}",
+        out[0]
+    );
+    assert!(
+        out[2].ends_with("c.png image/png 72 bytes>"),
+        "got: {}",
+        out[2]
+    );
+}

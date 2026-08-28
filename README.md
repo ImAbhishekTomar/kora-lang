@@ -134,7 +134,7 @@ not GitHub, and killing the process mid-`ask_human` loses nothing.
 | [CLI reference](docs/cli.md) | commands, flags, `kora.toml`, editor setup |
 | [DECISIONS.md](DECISIONS.md) | the frozen design and why each call was made |
 | [AGENTS.md](AGENTS.md) | contributing: what a language change has to touch |
-| [examples/](examples) | eleven runnable programs, in order |
+| [examples/](examples) | twelve runnable programs, in order |
 
 ## Agents, tools, and budgets
 
@@ -159,6 +159,33 @@ def main():
 Each branch of `parallel for` runs on its own thread with its own heap, so
 there is no shared mutable state to guard. All branches draw from one token
 budget, and results come back in input order.
+
+## Images
+
+Most of what people hand a model is a picture — a receipt, a screenshot, a
+scanned form. So an image is an ordinary value, not an integration:
+
+```python
+use fs
+use csv
+
+agent classify(path: str) -> Row:
+    match fs.image(path):
+        case Ok(picture):
+            r: Receipt = analyze(picture, "read this receipt", model="vision")
+            ...
+
+def main():
+    match fs.glob("dataset/*.png"):
+        case Ok(paths):
+            rows = parallel for p in paths:
+                return classify(p)
+```
+
+No base64, no hand-built request body, no sidecar. The type comes from the
+file's magic bytes rather than its extension, `model="vision"` names a role
+that `kora.toml` fills, and the cassette is keyed on the image bytes — so
+editing a receipt re-asks the model while an untouched one replays for free.
 
 ## Classified data
 
@@ -253,7 +280,9 @@ defect rather than reimplementing it:
 - **`sql`** — parameters only. A value from outside cannot become query text
   at all, so injection is unavailable rather than discouraged
 - **`fs`** — writes are atomic (temp + rename), missing files name the path,
-  and `..` in a path is refused
+  and `..` in a path is refused; `fs.glob` and `fs.list` are sorted, because
+  filesystem order differs between machines and an agent program fans that
+  list out across threads
 - **`env`** — a variable whose name looks like a credential comes back
   `classified`, so it cannot reach a log line by accident
 - **`re`** — linear-time engine, so `(a+)+$` against hostile input answers
@@ -457,8 +486,8 @@ Early development, pre-alpha, built for personal use first. Everything
 documented here works and is covered by tests; the test suite never touches
 the network.
 
-Not built yet: classes, list comprehensions, a package manager, and
-`try`/`except`. See
+Not built yet: classes, list comprehensions, a package manager, documents
+(PDF) as values, and `try`/`except`. See
 [DECISIONS.md](DECISIONS.md) for what is planned and what is deliberately
 excluded.
 
@@ -476,6 +505,7 @@ crates/kora-python    Python sidecar worker
 crates/kora-cli       the `kora` binary
 editors/vscode        VS Code extension
 examples/             runnable .ko programs
+benches/              performance benchmarks and their baseline
 docs/                 language, stdlib, and CLI references
 ```
 
@@ -496,6 +526,23 @@ cargo test --workspace
 python3 scripts/check_docs.py     # the docs still describe the language
 kora check examples/*.ko
 ```
+
+## Performance
+
+The interpreter is a tree walker today; a bytecode VM is the next stage. That
+is a published number, not an opinion:
+
+```bash
+cargo build --release -p kora-cli
+python3 scripts/bench.py                    # measure this build
+python3 scripts/bench.py --against main     # A/B, same machine, same run
+```
+
+Twelve programs cover arithmetic, calls, collections, strings, the stdlib
+modules, `parallel for` against its sequential twin, and `--durable` against
+an unjournaled run. CI compares every pull request against its base commit on
+one runner and fails a benchmark more than 1.25x slower. Current numbers and
+how to read them: [benches/README.md](benches/README.md).
 
 ## License
 

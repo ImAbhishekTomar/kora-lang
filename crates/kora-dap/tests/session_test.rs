@@ -336,3 +336,52 @@ fn an_unreadable_program_is_reported_rather_than_hanging() {
         .collect();
     assert!(stderr.contains("cannot read"), "{stderr}");
 }
+
+/// An image in the variables pane shows what a person can act on -- where it
+/// came from, what it is, how big it is -- and expands to those parts. A wall
+/// of base64 in a debugger is worse than nothing.
+#[test]
+fn an_image_expands_to_its_parts_and_never_its_bytes() {
+    let scratch = Scratch::new("image");
+    let mut png = b"\x89PNG\r\n\x1a\n".to_vec();
+    png.extend_from_slice(&[0u8; 64]);
+    std::fs::write(scratch.0.join("receipt.png"), png).unwrap();
+    let image_path = scratch
+        .0
+        .join("receipt.png")
+        .to_string_lossy()
+        .replace('\\', "\\\\");
+
+    let source = format!(
+        "use fs\n\ndef main():\n    match fs.image(\"{image_path}\"):\n        case Ok(picture):\n            print(\"loaded\")\n        case Err(why):\n            print(why)\n"
+    );
+    let path = scratch.write("prog.ko", &source);
+
+    let messages = session(&path, &[6], false, |_stopped, queue| {
+        let _ = queue.send(request(101, "scopes", json!({ "frameId": 1 })));
+        let _ = queue.send(request(
+            102,
+            "variables",
+            json!({ "variablesReference": 1 }),
+        ));
+        let _ = queue.send(request(103, "continue", json!({ "threadId": 1 })));
+    });
+
+    let variables = responses(&messages, "variables");
+    let picture = variables[0]["body"]["variables"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|v| v["name"] == "picture")
+        .expect("the bound image should be a local");
+
+    // Unverified, not classified: a file came from outside the program, but
+    // it is not a secret. The debugger names the right half of the label.
+    assert_eq!(picture["type"], json!("unverified image"));
+    let shown = picture["value"].as_str().unwrap();
+    assert!(shown.starts_with("<image "), "got: {shown}");
+    assert!(shown.contains("image/png"), "got: {shown}");
+    assert!(shown.contains("72 bytes"), "got: {shown}");
+    // Expandable, so the parts are one click away.
+    assert_ne!(picture["variablesReference"], json!(0));
+}

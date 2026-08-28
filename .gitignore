@@ -18,6 +18,8 @@
 # Runtime-generated artifacts
 /cassettes/
 *.trace
+# `05_stdlib.ko` writes this next to the working directory when it runs
+/greeting.txt
 # Durable run journals
 .kora/
 .vercel

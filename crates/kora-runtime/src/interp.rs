@@ -21,6 +21,7 @@ use crate::journal::{self, Effect, Journal, Lookup, PendingQuestion};
 use crate::label::{DeclassifySite, Label, SinkPolicy};
 use crate::modules::{self, ModuleId, ModuleSpace};
 use crate::portable::Portable;
+use crate::stdlib::require_verified;
 use crate::telemetry::Tracer;
 use crate::value::Value;
 
@@ -1939,12 +1940,12 @@ impl Interpreter {
             .with_hint("example: `result: Insight = analyze(rows, \"find anomalies\")`"));
         }
         for (name, arg) in kwargs {
-            if name != "tools" {
+            if name != "tools" && name != "model" {
                 return Err(RuntimeError::new(
                     format!("analyze() has no keyword argument `{name}`"),
                     arg.span,
                 )
-                .with_hint("the only keyword argument is `tools=[...]`"));
+                .with_hint("the keyword arguments are `tools=[...]` and `model=\"name\"`"));
             }
         }
 
@@ -2064,13 +2065,28 @@ impl Interpreter {
         let data_json = value_to_json(data.unlabeled());
         let data_text = serde_json::to_string(&data_json).unwrap_or_else(|_| "null".to_string());
 
-        let model = self
-            .config
-            .default_model()
-            .map_err(|e| RuntimeError::new(e.message, span))?;
+        // Images ride alongside the JSON. They are part of the question, so
+        // they are part of the cassette key too: the same prompt over a
+        // different picture is a different call.
+        let mut images = Vec::new();
+        collect_images(&data, &mut images);
+        let media_key = cassette::media_key(
+            &images
+                .iter()
+                .map(|i| (i.mime.as_str(), i.bytes.as_slice()))
+                .collect::<Vec<_>>(),
+        );
+
+        let model = match kwargs.iter().find(|(n, _)| n == "model") {
+            Some((_, arg)) => self.named_model(arg, scope)?,
+            Option::None => self
+                .config
+                .default_model()
+                .map_err(|e| RuntimeError::new(e.message, span))?,
+        };
         let model_label = format!("{:?}:{}", model.provider, model.model).to_lowercase();
         let site = format!("{}:{}", self.program_name, span.line);
-        let key = cassette::key_for(&site, &model_label, &prompt, &data_text);
+        let key = cassette::key_for(&site, &model_label, &prompt, &data_text, &media_key);
 
         // Budget check before spending: an exhausted budget stops the call
         // rather than discovering the overrun afterwards. Exhaustion is a
@@ -2117,6 +2133,7 @@ impl Interpreter {
             &model,
             &prompt,
             &data_text,
+            &images,
             &schema,
             &tools,
             &tool_funcs,
@@ -2135,12 +2152,58 @@ impl Interpreter {
                     model: model_label,
                     prompt,
                     data: data_text,
+                    media: media_key,
                     outcome: record_from_outcome(&outcome),
                 });
             }
         }
 
         self.outcome_to_value(outcome, &type_name, &schema, span)
+    }
+
+    /// Resolve `model="name"` against `[models]` in kora.toml.
+    ///
+    /// A *name* from the config, never a provider spec. A program says which
+    /// role it needs — `vision`, `smart`, `cheap` — and the config says which
+    /// model fills it. Accepting `"openai:gpt-4o"` here would put a vendor's
+    /// model name in source files, which is how a program ends up needing an
+    /// environment variable to choose between two providers.
+    fn named_model(
+        &mut self,
+        arg: &Expr,
+        scope: &mut Scope,
+    ) -> Result<kora_models::ModelConfig, RuntimeError> {
+        let value = self.eval(arg, scope)?;
+        // The model is a destination. A name that came from outside the
+        // program — model output, a file, an HTTP body — could redirect the
+        // call to somewhere the program never intended.
+        require_verified(&value, "analyze", "a model name", arg.span)?;
+        let Value::Str(name) = value.unlabeled() else {
+            return Err(RuntimeError::new(
+                format!(
+                    "analyze(model=...) must be a string, got {}",
+                    value.type_name()
+                ),
+                arg.span,
+            ));
+        };
+        if !self.config.models.contains_key(name.as_str()) {
+            let mut known: Vec<&str> = self.config.models.keys().map(String::as_str).collect();
+            known.sort();
+            let hint = if known.is_empty() {
+                "add one to kora.toml, e.g. `[models] vision = \"local:gemma4:12b\"`".to_string()
+            } else {
+                format!("kora.toml declares: {}", known.join(", "))
+            };
+            return Err(RuntimeError::new(
+                format!("no model named `{name}` in kora.toml"),
+                arg.span,
+            )
+            .with_hint(hint));
+        }
+        self.config
+            .resolve_model(name)
+            .map_err(|e| RuntimeError::new(e.message, arg.span))
     }
 
     /// Build the model schema from a Kora `type` declaration.
@@ -2301,6 +2364,48 @@ fn outcome_from_record(record: RecordedOutcome) -> AnalyzeOutcome {
     }
 }
 
+/// Every image reachable from `value`, in the order the program wrote them.
+///
+/// Images are pulled out of the data rather than passed separately so that
+/// `analyze({"front": front, "back": back}, ...)` works: the model sees the
+/// structure in the JSON and the pixels in the same request.
+fn collect_images(value: &Value, out: &mut Vec<Rc<crate::media::Image>>) {
+    match value {
+        Value::Image(image) => out.push(image.clone()),
+        Value::List(items) => {
+            for item in items.borrow().iter() {
+                collect_images(item, out);
+            }
+        }
+        // Dict and object fields are visited in name order, so the images
+        // arrive in the same order on every run. A HashMap's own order is
+        // not stable, and an unstable order would change the cassette key.
+        Value::Dict(map) => {
+            let map = map.borrow();
+            let mut names: Vec<&String> = map.keys().collect();
+            names.sort();
+            for name in names {
+                collect_images(&map[name], out);
+            }
+        }
+        Value::Object { fields, .. } => {
+            let fields = fields.borrow();
+            let mut names: Vec<&String> = fields.keys().collect();
+            names.sort();
+            for name in names {
+                collect_images(&fields[name], out);
+            }
+        }
+        Value::Variant { payload, .. } => {
+            for item in payload {
+                collect_images(item, out);
+            }
+        }
+        Value::Labeled { inner, .. } => collect_images(inner, out),
+        _ => {}
+    }
+}
+
 /// Kora value -> JSON, for sending data to a model.
 fn value_to_json(value: &Value) -> serde_json::Value {
     use serde_json::Value as J;
@@ -2338,6 +2443,12 @@ fn value_to_json(value: &Value) -> serde_json::Value {
                 J::Object(obj)
             }
         }
+        // The pixels travel beside the JSON, not inside it. The marker holds
+        // the image's place in the structure -- the Nth marker is the Nth
+        // image in the request -- and deliberately carries neither the path
+        // nor the size: the data text is part of the cassette key, and a key
+        // that moves when a file is renamed would miss every recording.
+        Value::Image(_) => J::String("<image>".to_string()),
         Value::Func { def, .. } => J::String(format!("<function {}>", def.name)),
         Value::Builtin(name) => J::String(format!("<builtin {name}>")),
         Value::Module { name } => J::String(format!("<module {name}>")),
@@ -2667,6 +2778,7 @@ impl Interpreter {
         model: &kora_models::ModelConfig,
         prompt: &str,
         data_text: &str,
+        images: &[Rc<crate::media::Image>],
         schema: &Schema,
         tools: &[ToolSpec],
         tool_funcs: &[ToolHandle],
@@ -2676,6 +2788,15 @@ impl Interpreter {
         // forever when no `max_steps` budget was declared.
         const MAX_TURNS: usize = 12;
         let mut history: Vec<ToolExchange> = Vec::new();
+        // Built once: the tool loop re-sends the same pictures each turn, and
+        // a receipt scan is megabytes.
+        let parts: Vec<kora_models::ImagePart> = images
+            .iter()
+            .map(|i| kora_models::ImagePart {
+                mime: i.mime.clone(),
+                bytes: i.bytes.clone(),
+            })
+            .collect();
 
         for _ in 0..MAX_TURNS {
             if let Some(meter) = self.budget.check() {
@@ -2687,6 +2808,7 @@ impl Interpreter {
             let request = AnalyzeRequest {
                 prompt: prompt.to_string(),
                 data_json: data_text.to_string(),
+                images: parts.clone(),
                 schema: schema.clone(),
                 tools: tools.to_vec(),
                 tool_history: history.clone(),

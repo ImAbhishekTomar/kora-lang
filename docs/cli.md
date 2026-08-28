@@ -144,6 +144,9 @@ optional.
 [models]
 default = "local:qwen3:8b"          # Ollama
 smart   = "openai:gpt-4o"           # needs OPENAI_API_KEY
+vision  = "local:gemma4:12b"        # named by `analyze(..., model="vision")`
+
+timeout_secs = 600                  # one model call; 0 is clamped, not honoured
 
 [models.openai]
 max_output_tokens = 4096            # bounds worst-case budget reservation

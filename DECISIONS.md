@@ -93,7 +93,24 @@ design changes and should be deliberate.
 - Providers: OpenAI (API key) + Ollama (localhost HTTP) from Phase 2.
 - `local_model` sink = Ollama. In-process GPU inference (llama.cpp/candle) is
   parked (Phase 7, optional — measure first).
-- Model choice/config: call-site > block > agent > main > kora.toml.
+- Model choice/config: call-site > block > agent > main > kora.toml. The
+  call-site level is `analyze(..., model="vision")`, and it takes a *name*
+  from `[models]`, never a provider spec — a vendor's model name in a source
+  file is how a program ends up routing on an environment variable.
+- **Images are values, not an integration.** `fs.image` loads one, `analyze`
+  takes it, and it crosses a `parallel for` boundary like anything else. An
+  agent-first language that can only read text cannot look at a receipt, a
+  screenshot, or a scanned form, which is most of the work people actually
+  hand a model. Kept deliberately narrow: raster images only (PNG, JPEG, GIF,
+  WebP), no audio, no video, and no PDF — a document needs page extraction,
+  which is a different problem wearing the same coat.
+- The pixels ride beside the JSON, not inside it. The data argument keeps an
+  `<image>` marker in each image's place, so a cassette key does not move when
+  a file is renamed, and a base64 blob never reaches a log line.
+- A model call's timeout is `[models] timeout_secs`, not a constant: a local
+  vision model reading a 900px receipt runs minutes past what a text call
+  needs, and a timeout that fires on ordinary work teaches people to disable
+  it.
 
 ## Security labels
 
@@ -165,6 +182,15 @@ design changes and should be deliberate.
 
 - Stage 1: tree-walking interpreter. Stage 2: bytecode VM. Stage 3 (maybe
   never): cranelift JIT. Native codegen is NOT on the critical path.
+- **Every stage is measured before it is left.** `benches/` holds twelve
+  programs and `scripts/bench.py` runs them; CI A/Bs a pull request against
+  its base commit on one machine and fails above 1.25x. The set exists so the
+  cost of the current stage is a published number rather than an opinion, and
+  so a feature that quietly taxes the hot path is caught by the branch that
+  added it.
+- The pairs in that set (`sequential`/`parallel`, `durable_off`/`durable_on`)
+  are deliberate: the price of a guarantee is only legible next to a run
+  without it.
 
 ## Ecosystem strategy
 
@@ -203,7 +229,7 @@ Per module, the specific defect being fixed:
 | `json` | parses to untyped `Any`; errors say "line 1 col 4318" | parses into a declared type; errors name the path: `$.users[2].email: expected str, got int` |
 | `csv` | everything is a string, or types are guessed and zip codes lose leading zeros; ragged rows pass silently | declared schema, no guessing; ragged or mistyped rows are errors naming row and column; BOM handled |
 | `sql` | string interpolation, therefore injection | parameters only; an `unverified` value cannot become query text at all |
-| `fs` | path traversal from untrusted input; silent overwrite; partial writes on crash | paths from unverified data are refused; writes are atomic (temp + rename); overwrite is explicit |
+| `fs` | path traversal from untrusted input; silent overwrite; partial writes on crash; `listdir`/`glob` return filesystem order, which differs per machine; `mimetypes` trusts the extension | paths from unverified data are refused; writes are atomic (temp + rename); overwrite is explicit; listings are sorted and return full paths; `fs.image` reads the type from the magic bytes |
 | `time` | naive datetimes with no zone, then DST arithmetic bugs | every instant is zone-aware; there is no naive type; `now()` is journaled |
 | `re` | catastrophic backtracking (ReDoS) | linear-time engine, no backtracking to exploit |
 
@@ -222,7 +248,7 @@ modules and their backing crates:
 | `time` | `chrono` / `jiff` | better |
 | `re` | `regex` | no catastrophic backtracking |
 | `s3`, `aws` | `aws-sdk-rust` | official |
-| `pdf` | `lopdf`, `pdf-extract` | weaker than PyPDF |
+| `pdf` | `lopdf`, `pdf-extract` | weaker than PyPDF; would make documents values the way images already are |
 | `search` | `tantivy` | Lucene-class |
 
 Known gaps: scipy, sklearn, matplotlib, torch/transformers, and niche SaaS
@@ -293,8 +319,8 @@ components, both deliberately deferred until there is a reason.
 ## Status
 
 Phases 0 through 6 are complete, as are the standard library, MCP
-integration, and the Python sidecar. What remains is a package manager and
-WASM components — see the ecosystem strategy above.
+integration, the Python sidecar, and images as values. What remains is a
+package manager and WASM components — see the ecosystem strategy above.
 
 Reference documentation lives in [docs/](docs): the
 [language](docs/language.md), the [standard library](docs/stdlib.md), and the
@@ -318,6 +344,7 @@ Ecosystem work, sequenced alongside the phases above:
   **done**
 - MCP integration (`use mcp <server> as <alias>`) — **done**
 - Python sidecar (`use python <module> as <alias>`) — **done**
+- Images as values (`fs.image`, multimodal `analyze`, `fs.glob`) — **done**
 - Kora package manager + WASM components — later
 
 Each phase ends with a runnable demo program. Demo programs live in

@@ -159,12 +159,18 @@ safe path. Rows come back `unverified`.
 
 **What everyone else gets wrong.** A crash during `write()` leaves a truncated
 file and the original is gone. `io` errors omit the path, which is the first
-thing you want. And a path built from untrusted data is how traversal happens.
+thing you want. A path built from untrusted data is how traversal happens.
+And `os.listdir` and `glob.glob` hand back whatever order the filesystem
+stored, which differs between machines — so a program that fans a listing out
+across threads does its work in a different sequence on every host.
 
 | | |
 |---|---|
 | `fs.read(path)` | `Ok(text)` — `unverified` |
 | `fs.lines(path)` | `Ok(list)` — `unverified` |
+| `fs.image(path)` | `Ok(image)` — `unverified` |
+| `fs.list(dir)` | `Ok(list of paths)` — sorted |
+| `fs.glob(pattern)` | `Ok(list of paths)` — sorted |
 | `fs.write(path, text)` | `Ok(None)` — atomic |
 | `fs.append(path, text)` | `Ok(None)` |
 | `fs.exists(path)` | `bool` |
@@ -173,6 +179,35 @@ Writes go to a temporary file and are renamed, so a reader sees the old
 contents or the new ones, never a half-written mix. Paths containing `..` are
 refused rather than normalised, and a path from outside the program is refused
 outright. Errors name the path: `no such file: config.txt`.
+
+```python
+match fs.glob("dataset/*.png"):
+    case Ok(paths):
+        rows = parallel for p in paths:
+            return classify(p)
+    case Err(why):
+        print(why)
+```
+
+`*` and `?` match within one path component, `**` matches any run of
+directories. Dotfiles are only matched when the pattern asks for one, so `*`
+does not sweep up `.git`. Symlinked directories are not followed under `**`,
+since a link to an ancestor makes the walk infinite. No matches is an empty
+list, not an error.
+
+Both listings are **sorted**, and both return full paths rather than bare
+names — a name alone has to be re-joined by hand, and forgetting to is how a
+loop ends up reading the wrong directory. Unlike file *contents*, listed
+paths are verified: the program named the directory and the shape of the
+names, and every result was matched against it, which is the same narrowing
+that lifts `unverified` elsewhere.
+
+`fs.image` reads PNG, JPEG, GIF, and WebP. The type comes from the file's
+magic bytes, not its extension — `mimetypes.guess_type` trusts the filename,
+so a JPEG named `.png` reaches the provider mislabelled and returns an opaque
+`400`. Files above 20 MB are refused at the call site, where the error can
+name the file, rather than at the provider. See
+[Images](language.md#images) for what an image does next.
 
 ---
 
@@ -235,7 +270,8 @@ A bad pattern is `Err`, not a crash, since patterns come from configuration.
 
 ## Not built yet
 
-`polars`-backed dataframes, S3, PDF, full-text search, and Postgres. See the
+`polars`-backed dataframes, S3, PDF, full-text search, and Postgres. Images
+are in (`fs.image`); documents are not. See the
 ecosystem strategy in [DECISIONS.md](../DECISIONS.md) for what comes next —
 MCP integration is the highest-leverage item, since it inherits an existing
 ecosystem of tools rather than adding one binding at a time.

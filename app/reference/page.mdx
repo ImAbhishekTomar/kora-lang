@@ -207,7 +207,7 @@ values(user)
 
 ### `analyze(data, prompt)`
 
-Asks the configured model for a declared type. Add `tools=[...]` when the call needs tools.
+Asks the configured model for a declared type. Add `tools=[...]` when the call needs tools, and `model="name"` to use a model other than the default.
 
 ```kora
 type Label:
@@ -215,6 +215,14 @@ type Label:
 
 label: Label = analyze("a green apple", "give this a short label")
 ```
+
+`model=` takes a name declared under `[models]` in `kora.toml`, not a provider spec. The program names a role — `vision`, `smart`, `cheap` — and the config decides which model fills it.
+
+```kora
+receipt: Receipt = analyze(picture, "read this receipt", model="vision")
+```
+
+The data argument may contain images. They are sent alongside the JSON, in the order they appear.
 
 See [Typed model calls](/model-calls) for provider setup and replay.
 
@@ -360,6 +368,21 @@ people = csv.parse("name,age\nAda,36", Person)
 ### `fs`
 
 `fs.read(path)`, `fs.lines(path)`, `fs.write(path, text)`, `fs.append(path, text)`, and `fs.exists(path)` cover basic file work. Reads and writes use result values.
+
+`fs.image(path)` loads a PNG, JPEG, GIF, or WebP as a value you can hand to `analyze`. The type is read from the file's magic bytes, not its extension.
+
+`fs.glob(pattern)` and `fs.list(dir)` return sorted lists of full paths. `*` and `?` match inside one path component, `**` matches any run of directories, and dotfiles are skipped unless the pattern asks for one.
+
+```kora
+use fs
+
+match fs.glob("dataset/*.png"):
+    case Ok(paths):
+        rows = parallel for p in paths:
+            return classify(p)
+    case Err(why):
+        print(why)
+```
 
 ### `http`
 

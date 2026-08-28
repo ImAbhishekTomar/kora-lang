@@ -211,7 +211,12 @@ const MODULES: &[(&str, &[&str])] = &[
     ("http", &["get", "post"]),
     ("sql", &["query", "execute"]),
     ("env", &["get", "has"]),
-    ("fs", &["read", "write", "append", "exists", "lines"]),
+    (
+        "fs",
+        &[
+            "read", "write", "append", "exists", "lines", "image", "list", "glob",
+        ],
+    ),
     ("time", &["now", "format", "elapsed"]),
     ("re", &["matches", "find", "find_all", "replace", "split"]),
 ];

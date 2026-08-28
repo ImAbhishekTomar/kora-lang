@@ -18,6 +18,10 @@ pub struct Config {
     /// Per-provider settings.
     pub openai_max_output_tokens: Option<u32>,
     pub local_endpoint: Option<String>,
+    /// `[models] timeout_secs` — how long one model call may take. A vision
+    /// call on a local model runs far longer than a text one, so this is a
+    /// setting rather than a constant.
+    pub model_timeout_secs: Option<u64>,
     /// Which sinks may receive which labels, from `[sinks]`.
     pub sinks: SinkPolicy,
     /// `[http] allow_private` — permit loopback and private address ranges.
@@ -169,6 +173,11 @@ impl Config {
                     toml::Value::String(spec) => {
                         config.models.insert(key.clone(), spec.clone());
                     }
+                    // `timeout_secs = 900`, clamped like the http one: a
+                    // zero timeout is how "wait forever" sneaks back in.
+                    toml::Value::Integer(secs) if key == "timeout_secs" => {
+                        config.model_timeout_secs = Some((*secs).clamp(1, 3600) as u64);
+                    }
                     // `[models.openai]` / `[models.local]` sub-tables
                     toml::Value::Table(table) => {
                         if key == "openai" {
@@ -199,6 +208,9 @@ impl Config {
             .map(String::as_str)
             .unwrap_or(reference);
         let mut model = kora_models::parse_model_spec(spec)?;
+        if let Some(secs) = self.model_timeout_secs {
+            model.timeout_secs = secs;
+        }
         match model.provider {
             kora_models::Provider::OpenAI => {
                 if let Some(max) = self.openai_max_output_tokens {
@@ -249,6 +261,32 @@ program_max_tokens = 2_000_000
         assert_eq!(c.models.get("smart").unwrap(), "openai:gpt-4o");
         assert_eq!(c.openai_max_output_tokens, Some(2048));
         assert_eq!(c.local_endpoint.as_deref(), Some("http://box:11434"));
+    }
+
+    /// A vision call on a local model runs far past the text-only default,
+    /// and a timeout that fires on ordinary work is worse than no default.
+    #[test]
+    fn model_timeout_is_configurable_and_clamped() {
+        let c = Config::parse("[models]\ndefault = \"local:m\"\ntimeout_secs = 900\n").unwrap();
+        assert_eq!(c.model_timeout_secs, Some(900));
+        assert_eq!(c.default_model().unwrap().timeout_secs, 900);
+
+        // `timeout_secs` is a setting, not a model alias.
+        assert!(!c.models.contains_key("timeout_secs"));
+
+        // Zero is how "wait forever" sneaks back in.
+        let zero = Config::parse("[models]\ndefault = \"local:m\"\ntimeout_secs = 0\n").unwrap();
+        assert_eq!(zero.model_timeout_secs, Some(1));
+    }
+
+    #[test]
+    fn the_default_timeout_survives_an_unset_config() {
+        let c = Config::parse(SAMPLE).unwrap();
+        assert_eq!(c.model_timeout_secs, None);
+        assert_eq!(
+            c.default_model().unwrap().timeout_secs,
+            kora_models::DEFAULT_TIMEOUT_SECS
+        );
     }
 
     #[test]

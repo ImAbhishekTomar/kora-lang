@@ -1,0 +1,48 @@
+{
+  "entries": [
+    {
+      "key": "781fc29c8b9484ca",
+      "site": "examples/12_receipt_images.ko:41",
+      "model": "ollama:gemma4:12b",
+      "prompt": "Read this expense receipt. Use ISO date YYYY-MM-DD. Choose one category: meals, travel, office, software, services, or other. Set needs_review when the total or the merchant is unclear, and say why in review_reason.",
+      "data": "\"<image>\"",
+      "media": "image/png:ef826807fa672fbf",
+      "outcome": {
+        "kind": "ok",
+        "fields": {
+          "amount": 55.02,
+          "category": "meals",
+          "currency": "USD",
+          "merchant": "Hibachi Chinese Buffet",
+          "needs_review": false,
+          "purchase_date": "2019-12-19",
+          "review_reason": ""
+        },
+        "tokens_in": 1067,
+        "tokens_out": 68
+      }
+    },
+    {
+      "key": "907cefaf1d98cb83",
+      "site": "examples/12_receipt_images.ko:41",
+      "model": "ollama:gemma4:12b",
+      "prompt": "Read this expense receipt. Use ISO date YYYY-MM-DD. Choose one category: meals, travel, office, software, services, or other. Set needs_review when the total or the merchant is unclear, and say why in review_reason.",
+      "data": "\"<image>\"",
+      "media": "image/png:2af5365b6eb11930",
+      "outcome": {
+        "kind": "ok",
+        "fields": {
+          "amount": 41.29,
+          "category": "meals",
+          "currency": "EUR",
+          "merchant": "Fish & Chips Fast Foods",
+          "needs_review": false,
+          "purchase_date": "2020-12-01",
+          "review_reason": ""
+        },
+        "tokens_in": 3300,
+        "tokens_out": 69
+      }
+    }
+  ]
+}

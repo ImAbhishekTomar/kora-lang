@@ -91,10 +91,19 @@ impl Arena {
     fn add(&mut self, name: &str, value: &Value, depth: usize) -> usize {
         // A label is worth seeing in a debugger: it is the difference between
         // a value that may reach a model and one that may not.
-        let classified = !value.label().is_plain();
+        //
+        // The two directions are named separately. `classified` is
+        // confidentiality — this must not leave; `unverified` is integrity —
+        // this came from outside and must not reach a sink. Showing an
+        // `fs.read` result as "classified" would name the wrong half, and a
+        // value can carry both.
+        let label = value.label();
         let inner = value.unlabeled();
         let mut type_name = inner.type_name();
-        if classified {
+        if label.is_unverified() {
+            type_name = format!("unverified {type_name}");
+        }
+        if label.is_classified() {
             type_name = format!("classified {type_name}");
         }
 
@@ -150,6 +159,18 @@ impl Arena {
                 .enumerate()
                 .map(|(i, v)| self.add(&i.to_string(), v, depth))
                 .collect(),
+            // An image expands to what a person can act on -- where it came
+            // from, what it is, how big it is. Never the bytes.
+            Value::Image(image) => {
+                let source = Value::Str(std::rc::Rc::new(image.source.clone()));
+                let mime = Value::Str(std::rc::Rc::new(image.mime.clone()));
+                let size = Value::Int(image.bytes.len() as i64);
+                vec![
+                    self.add("source", &source, depth),
+                    self.add("mime", &mime, depth),
+                    self.add("bytes", &size, depth),
+                ]
+            }
             _ => Vec::new(),
         }
     }

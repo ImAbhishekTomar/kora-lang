@@ -12,6 +12,7 @@ use std::rc::Rc;
 use kora_syntax::ast::FuncDef;
 
 use crate::label::Label;
+use crate::media::Image;
 use crate::modules::ModuleId;
 use crate::value::Value;
 
@@ -40,6 +41,9 @@ pub enum Portable {
         home: ModuleId,
     },
     Builtin(&'static str),
+    /// Images cross by copy like everything else. A worker classifying its
+    /// own receipt needs the bytes, not a handle into another agent's heap.
+    Image(Image),
     Module(String),
     UserModule {
         id: ModuleId,
@@ -91,6 +95,7 @@ impl Portable {
                 home: *home,
             },
             Value::Builtin(name) => Portable::Builtin(name),
+            Value::Image(image) => Portable::Image((**image).clone()),
             Value::Module { name } => Portable::Module(name.to_string()),
             Value::UserModule { id, alias } => Portable::UserModule {
                 id: *id,
@@ -146,6 +151,7 @@ impl Portable {
                 home,
             },
             Portable::Builtin(name) => Value::Builtin(name),
+            Portable::Image(image) => Value::Image(Rc::new(image)),
             Portable::UserModule { id, alias } => Value::UserModule {
                 id,
                 alias: Rc::new(alias),
@@ -226,6 +232,21 @@ mod tests {
         match copy {
             Value::List(items) => assert_eq!(items.borrow().len(), 1),
             other => panic!("expected list, got {other:?}"),
+        }
+    }
+
+    /// An image must survive the copy boundary intact: a worker classifying
+    /// its own receipt needs the bytes, not a truncated summary.
+    #[test]
+    fn images_survive_the_copy_boundary() {
+        let image = Image::detect(b"\x89PNG\r\n\x1a\n\x00\x01\x02".to_vec(), "a.png").unwrap();
+        let value = Value::Image(Rc::new(image.clone()));
+        match round_trip(value) {
+            Value::Image(copied) => {
+                assert_eq!(*copied, image);
+                assert_eq!(copied.bytes.len(), 11);
+            }
+            other => panic!("expected an image, got {other:?}"),
         }
     }
 

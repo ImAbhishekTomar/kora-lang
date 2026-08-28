@@ -31,7 +31,7 @@ impl Drop for Scratch {
     }
 }
 
-const CONFIG: &str = "[models]\ndefault = \"local:test-model\"\n";
+const CONFIG: &str = "[models]\ndefault = \"local:test-model\"\nvision = \"local:test-vision\"\n";
 
 /// Run `source`, serving analyze calls from `entries`.
 fn run_with_cassette(name: &str, source: &str, entries: Vec<Entry>) -> Result<Vec<String>, String> {
@@ -69,14 +69,28 @@ fn entry_for(
     data: &str,
     outcome: RecordedOutcome,
 ) -> Entry {
+    entry_for_media(program_path, line, prompt, data, "", outcome)
+}
+
+/// `entry_for` for a call that also sent images: `media` is the fingerprint
+/// of those images, which is part of the key.
+fn entry_for_media(
+    program_path: &str,
+    line: u32,
+    prompt: &str,
+    data: &str,
+    media: &str,
+    outcome: RecordedOutcome,
+) -> Entry {
     let site = format!("{program_path}:{line}");
     let model = "ollama:test-model".to_string();
     Entry {
-        key: kora_runtime::cassette::key_for(&site, &model, prompt, data),
+        key: kora_runtime::cassette::key_for(&site, &model, prompt, data, media),
         site,
         model,
         prompt: prompt.to_string(),
         data: data.to_string(),
+        media: media.to_string(),
         outcome,
     }
 }
@@ -333,4 +347,167 @@ def main():
 
     assert_eq!(interp.output, vec!["saw a", "saw b", "saw c"]);
     assert_eq!(interp.model_calls, 0, "replay must not call a provider");
+}
+
+// --- images ---
+
+/// A minimal but real PNG header, so `fs.image` accepts it.
+fn png_bytes(tail: u8) -> Vec<u8> {
+    let mut bytes = b"\x89PNG\r\n\x1a\n".to_vec();
+    bytes.extend_from_slice(&[tail; 16]);
+    bytes
+}
+
+/// A program that loads one image and classifies it, plus the cassette entry
+/// that serves the call. Written to `dir` so the image and the program share
+/// a directory.
+fn image_program(path: &str) -> String {
+    format!(
+        r#"use fs
+
+type Receipt:
+    merchant: str
+    amount: float
+
+def main():
+    match fs.image("{path}"):
+        case Ok(picture):
+            receipt: Receipt = analyze(picture, "read this receipt")
+            match receipt:
+                case Ok(r):
+                    print(f"{{r.merchant}} {{r.amount}}")
+                case Uncertain(why):
+                    print(f"uncertain: {{why}}")
+        case Err(why):
+            print(f"could not read: {{why}}")
+"#
+    )
+}
+
+#[test]
+fn an_image_reaches_the_model_and_replays_from_a_cassette() {
+    let scratch = Scratch::new("analyze-image");
+    let image_path = scratch.0.join("receipt.png");
+    std::fs::write(&image_path, png_bytes(1)).unwrap();
+    let source = image_program(&image_path.to_string_lossy().replace('\\', "\\\\"));
+    let program_path = scratch.0.join("prog.ko").to_string_lossy().to_string();
+
+    // The data argument is the image alone, so the JSON the model sees is
+    // just the marker; the pixels ride beside it.
+    let media = kora_runtime::cassette::media_key(&[("image/png", &png_bytes(1))]);
+    let entry = entry_for_media(
+        &program_path,
+        10,
+        "read this receipt",
+        "\"<image>\"",
+        &media,
+        ok_fields(&[
+            ("merchant", serde_json::json!("Blue Bottle")),
+            ("amount", serde_json::json!(12.5)),
+        ]),
+    );
+
+    let out = run_with_cassette("analyze-image", &source, vec![entry]).unwrap();
+    assert_eq!(out, vec!["Blue Bottle 12.5"]);
+}
+
+/// The cassette must follow the picture. Editing the image behind an
+/// unchanged path is a different question, and replaying the old answer for
+/// it would be silently wrong.
+#[test]
+fn editing_the_image_misses_the_cassette() {
+    let scratch = Scratch::new("analyze-image-edited");
+    let image_path = scratch.0.join("receipt.png");
+    std::fs::write(&image_path, png_bytes(2)).unwrap();
+    let source = image_program(&image_path.to_string_lossy().replace('\\', "\\\\"));
+    let program_path = scratch.0.join("prog.ko").to_string_lossy().to_string();
+
+    // Recorded against a *different* picture at the same path.
+    let media = kora_runtime::cassette::media_key(&[("image/png", &png_bytes(9))]);
+    let entry = entry_for_media(
+        &program_path,
+        10,
+        "read this receipt",
+        "\"<image>\"",
+        &media,
+        ok_fields(&[
+            ("merchant", serde_json::json!("Stale")),
+            ("amount", serde_json::json!(1.0)),
+        ]),
+    );
+
+    let err = run_with_cassette("analyze-image-edited", &source, vec![entry]).unwrap_err();
+    assert!(err.contains("no recorded model call"), "got: {err}");
+}
+
+// --- choosing a model per call ---
+
+/// A program names a *role*; kora.toml says which model fills it. Without
+/// this, a vision call and a text call cannot share one program, which is
+/// what forces model routing out into environment variables.
+#[test]
+fn a_call_can_name_a_model_from_the_config() {
+    let scratch = Scratch::new("model-kwarg");
+    let source = r#"type Insight:
+    summary: str
+
+def main():
+    result: Insight = analyze("data", "summarize", model="vision")
+    match result:
+        case Ok(i):
+            print(i.summary)
+"#;
+    let program_path = scratch.0.join("prog.ko").to_string_lossy().to_string();
+    let site = format!("{program_path}:5");
+    let model = "ollama:test-vision".to_string();
+    let entry = Entry {
+        key: kora_runtime::cassette::key_for(&site, &model, "summarize", "\"data\"", ""),
+        site,
+        model,
+        prompt: "summarize".into(),
+        data: "\"data\"".into(),
+        media: String::new(),
+        outcome: ok_fields(&[("summary", serde_json::json!("looked at it"))]),
+    };
+
+    let out = run_with_cassette("model-kwarg", source, vec![entry]).unwrap();
+    assert_eq!(out, vec!["looked at it"]);
+}
+
+#[test]
+fn an_unknown_model_name_lists_the_configured_ones() {
+    let source = r#"type Insight:
+    summary: str
+
+def main():
+    result: Insight = analyze("data", "summarize", model="gpt-9")
+"#;
+    let err = run_with_cassette("model-unknown", source, Vec::new()).unwrap_err();
+    assert!(err.contains("no model named `gpt-9`"), "got: {err}");
+}
+
+/// A model name that came from outside could redirect the call to a
+/// destination the program never chose.
+#[test]
+fn a_model_name_from_outside_the_program_is_refused() {
+    let data = std::env::temp_dir().join(format!("kora-model-name-{}.txt", std::process::id()));
+    std::fs::write(&data, "gpt-9").unwrap();
+    let path = data.to_string_lossy().replace('\\', "\\\\");
+    let source = format!(
+        r#"use fs
+
+type Insight:
+    summary: str
+
+def main():
+    match fs.read("{path}"):
+        case Ok(name):
+            result: Insight = analyze("data", "summarize", model=name)
+        case Err(why):
+            print(why)
+"#
+    );
+    let err = run_with_cassette("model-unverified", &source, Vec::new()).unwrap_err();
+    std::fs::remove_file(&data).ok();
+    assert!(err.contains("came from outside"), "got: {err}");
 }
