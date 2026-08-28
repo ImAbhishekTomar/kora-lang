@@ -66,12 +66,19 @@ jobs:
         run: cargo test --workspace --release --locked
 
   msrv:
-    name: Minimum supported Rust (1.85)
+    name: Minimum supported Rust
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - name: Install Rust 1.85
-        run: rustup toolchain install 1.85 --profile minimal && rustup default 1.85
+      # Read the floor from Cargo.toml, so the job and the manifest cannot
+      # disagree about what the minimum is.
+      - name: Install the declared minimum toolchain
+        run: |
+          set -euo pipefail
+          version=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)
+          echo "minimum supported Rust: $version"
+          rustup toolchain install "$version" --profile minimal
+          rustup default "$version"
       - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build --workspace --locked
