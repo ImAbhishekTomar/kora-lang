@@ -2,7 +2,7 @@
   "name": "kora-lang",
   "displayName": "Kora Language",
   "description": "Syntax highlighting, IntelliSense, and debugging for the Kora programming language (.ko)",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "publisher": "kora-lang",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -26,7 +26,9 @@
   ],
   "main": "./src/extension.js",
   "activationEvents": [
-    "onLanguage:kora"
+    "onLanguage:kora",
+    "onDebugResolve:kora",
+    "onDebugDynamicConfigurations:kora"
   ],
   "contributes": {
     "languages": [
