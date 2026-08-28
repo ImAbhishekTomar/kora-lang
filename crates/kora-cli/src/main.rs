@@ -19,6 +19,7 @@ usage:
   kora runs <file.ko>          list durable runs and their status
   kora answer <file.ko> <id> <text>
                                answer a suspended run and resume it
+  kora lsp                     run the language server (used by editors)
   kora --version               print version
 
 flags for `run`:
@@ -37,6 +38,14 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("run") => run_args(&args[1..]),
+        // Started by the editor over stdio, not by a person.
+        Some("lsp") => match kora_lsp::run() {
+            Ok(()) => ExitCode::SUCCESS,
+            Err(e) => {
+                eprintln!("kora lsp: {e}");
+                ExitCode::from(1)
+            }
+        },
         Some("test") => match args.get(1) {
             Some(path) => test_file(path),
             None => {

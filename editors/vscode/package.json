@@ -5,16 +5,27 @@
   "version": "0.0.1",
   "publisher": "kora-lang",
   "license": "MIT",
-  "engines": { "vscode": "^1.85.0" },
-  "categories": ["Programming Languages"],
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
   "main": "./src/extension.js",
-  "activationEvents": ["onLanguage:kora"],
+  "activationEvents": [
+    "onLanguage:kora"
+  ],
   "contributes": {
     "languages": [
       {
         "id": "kora",
-        "aliases": ["Kora", "kora"],
-        "extensions": [".ko"],
+        "aliases": [
+          "Kora",
+          "kora"
+        ],
+        "extensions": [
+          ".ko"
+        ],
         "configuration": "./language-configuration.json"
       }
     ],
@@ -30,12 +41,22 @@
         "command": "kora.runFile",
         "title": "Kora: Run Current File",
         "icon": "$(play)"
+      },
+      {
+        "command": "kora.testFile",
+        "title": "Kora: Test Current File",
+        "icon": "$(beaker)"
       }
     ],
     "menus": {
       "editor/title/run": [
         {
           "command": "kora.runFile",
+          "when": "resourceLangId == kora",
+          "group": "navigation"
+        },
+        {
+          "command": "kora.testFile",
           "when": "resourceLangId == kora",
           "group": "navigation"
         }
@@ -48,6 +69,19 @@
         "mac": "cmd+shift+r",
         "when": "resourceLangId == kora && editorTextFocus"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Kora",
+      "properties": {
+        "kora.serverPath": {
+          "type": "string",
+          "default": "kora",
+          "description": "Path to the kora binary that provides the language server."
+        }
+      }
+    }
+  },
+  "dependencies": {
+    "vscode-languageclient": "^9.0.1"
   }
 }

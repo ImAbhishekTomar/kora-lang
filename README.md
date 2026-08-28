@@ -228,6 +228,31 @@ site expected, so a mock that drifts from reality keeps passing. And the
 failure paths nobody tests today (`Uncertain`, `Exhausted`) are forceable,
 because they are ordinary values.
 
+## Editor support
+
+The VS Code extension in `editors/vscode` gives syntax highlighting, run and
+test buttons, and a language server providing:
+
+- **Diagnostics** as you type — parse errors, undefined names, undeclared
+  types, unknown modules and module functions, each with the same hint the
+  compiler would print
+- **Hover** — signatures and docstrings, including `classified` markers on
+  type fields
+- **Go to definition** for functions, agents, tools, and types
+- **Outline** — agents, tools, types, and tests, in file order
+- **Completion** — keywords, builtins, declared symbols, and module functions
+  after `json.`
+
+Install the binary, then link the extension:
+
+```bash
+cargo install --path crates/kora-cli
+ln -s "$PWD/editors/vscode" ~/.vscode/extensions/kora-lang
+```
+
+The editor and the compiler share one analysis pass, so their answers cannot
+disagree.
+
 ## Status
 
 Early development, pre-alpha. Built for personal use first. See
