@@ -50,7 +50,7 @@
       "name": "keyword.control.kora"
     },
     "kora-keywords": {
-      "match": "\\b(analyze|agent|tool|budget|parallel|classified|declassify|ask_human|test|mock)\\b",
+      "match": "\\b(analyze|agent|tool|budget|parallel|classified|declassify|ask_human|test|mock|assert|use)\\b",
       "name": "keyword.other.agent.kora"
     },
     "types": {

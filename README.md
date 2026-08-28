@@ -198,6 +198,36 @@ match fs.read(path):
     case Err(why):  print(why)
 ```
 
+## Testing
+
+```bash
+kora test examples/07_tests.ko
+```
+
+```python
+test "a high severity ticket routes to P1":
+    with mock analyze -> Ok(Ticket("high", "everything is down")):
+        result = triage("HELP")
+        assert result == "P1 everything is down", f"got: {result}"
+
+test "an uncertain result does not crash":
+    with mock analyze -> Uncertain("too vague"):
+        assert triage("hello?") == "needs a human: too vague"
+```
+
+Model calls replay from the cassette, so a suite costs nothing and gives the
+same answer every time. Mocks are checked against the declared result type:
+
+```
+error: the mock returns `Other`, but this call site declares `Ticket`
+error: the mock is missing field `summary`
+```
+
+An untyped mocking framework cannot catch that — it has no idea what the call
+site expected, so a mock that drifts from reality keeps passing. And the
+failure paths nobody tests today (`Uncertain`, `Exhausted`) are forceable,
+because they are ordinary values.
+
 ## Status
 
 Early development, pre-alpha. Built for personal use first. See

@@ -1,0 +1,55 @@
+# Testing: `kora test examples/07_tests.ko`
+#
+# Model calls replay from the cassette, so a suite costs nothing and gives
+# the same answer every time. Mocks are checked against the declared result
+# type, so a mock that drifts from reality fails instead of passing.
+
+type Ticket:
+    severity: str
+    summary: str
+
+def priority(severity: str) -> int:
+    if severity == "high":
+        return 1
+    if severity == "medium":
+        return 2
+    return 3
+
+agent triage(raw: str) -> str:
+    t: Ticket = analyze(raw, "classify this ticket")
+    match t:
+        case Ok(ticket):
+            p = priority(ticket.severity)
+            return f"P{p} {ticket.summary}"
+        case Uncertain(reason):
+            return f"needs a human: {reason}"
+        case Exhausted(meter):
+            return f"budget out of {meter}"
+
+test "priority maps severity levels":
+    assert priority("high") == 1
+    assert priority("medium") == 2
+    assert priority("anything else") == 3
+
+test "a high severity ticket routes to P1":
+    with mock analyze -> Ok(Ticket("high", "everything is down")):
+        result = triage("HELP")
+        assert result == "P1 everything is down", f"got: {result}"
+
+test "an uncertain result does not crash":
+    with mock analyze -> Uncertain("too vague"):
+        result = triage("hello?")
+        assert result == "needs a human: too vague"
+
+test "an exhausted budget is handled":
+    with mock analyze -> Exhausted("tokens"):
+        result = triage("anything")
+        assert result == "budget out of tokens"
+
+test "a mock of the wrong shape is rejected":
+    # Untyped mocking frameworks cannot catch this: they have no idea what
+    # the call site expected, so a drifted mock keeps passing.
+    #
+    #   with mock analyze -> Ok(Other(1)):
+    #     error: the mock returns `Other`, but this call site declares `Ticket`
+    assert True
