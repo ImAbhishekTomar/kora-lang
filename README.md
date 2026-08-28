@@ -37,10 +37,30 @@ def main():
 - **Record/replay + OpenTelemetry built into the runtime** — deterministic
   CI with zero tokens; every agent and call is a span.
 
-## Try it
+## Install
 
 ```bash
-cargo install --path crates/kora-cli
+curl -fsSL https://raw.githubusercontent.com/ImAbhishekTomar/kora-lang/main/scripts/install.sh | sh
+```
+
+Or pick a package manager:
+
+```bash
+brew install ImAbhishekTomar/tap/kora   # Homebrew, macOS/Linux
+cargo install kora-cli                  # crates.io
+npm install -g kora-cli                 # npm (downloads the release binary)
+```
+
+Prebuilt archives for Linux, macOS, and Windows are also on the
+[releases page](https://github.com/ImAbhishekTomar/kora-lang/releases).
+Building from source needs a Rust toolchain (`cargo install --path crates/kora-cli`,
+run from a clone of this repo).
+
+## Try it
+
+Clone the repo to get the example programs, then:
+
+```bash
 kora run examples/00_basics.ko                    # the deterministic core
 kora run --replay examples/01_expense_check.ko    # a model call, from a cassette
 kora test examples/07_tests.ko                    # the test runner

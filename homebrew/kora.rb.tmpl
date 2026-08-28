@@ -1,0 +1,36 @@
+class Kora < Formula
+  desc "Agent-first programming language"
+  homepage "https://github.com/ImAbhishekTomar/kora-lang"
+  version "__VERSION__"
+  license "MIT"
+
+  on_macos do
+    on_arm do
+      url "https://github.com/ImAbhishekTomar/kora-lang/releases/download/v__VERSION__/kora-__VERSION__-aarch64-apple-darwin.tar.gz"
+      sha256 "__SHA_MACOS_ARM64__"
+    end
+    on_intel do
+      url "https://github.com/ImAbhishekTomar/kora-lang/releases/download/v__VERSION__/kora-__VERSION__-x86_64-apple-darwin.tar.gz"
+      sha256 "__SHA_MACOS_X86_64__"
+    end
+  end
+
+  on_linux do
+    on_arm do
+      url "https://github.com/ImAbhishekTomar/kora-lang/releases/download/v__VERSION__/kora-__VERSION__-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "__SHA_LINUX_ARM64__"
+    end
+    on_intel do
+      url "https://github.com/ImAbhishekTomar/kora-lang/releases/download/v__VERSION__/kora-__VERSION__-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "__SHA_LINUX_X86_64__"
+    end
+  end
+
+  def install
+    bin.install "kora"
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/kora --version")
+  end
+end

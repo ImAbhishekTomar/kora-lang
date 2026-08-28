@@ -37,6 +37,16 @@ jobs:
             exit 1
           fi
           echo "releasing v$tag"
+      - name: Internal dependency versions match the workspace version
+        run: |
+          set -euo pipefail
+          crate=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          mismatches=$(grep -E '^kora-[a-z]+ = \{ path' Cargo.toml | grep -v "version = \"$crate\"" || true)
+          if [ -n "$mismatches" ]; then
+            echo "workspace.dependencies out of sync with workspace version $crate:" >&2
+            echo "$mismatches" >&2
+            exit 1
+          fi
 
   build:
     name: Build (${{ matrix.target }})
@@ -137,6 +147,12 @@ jobs:
           rm -f *.sha256
           cat SHA256SUMS
 
+      - name: Render Homebrew formula
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          scripts/render_formula.sh "$version" artifacts/SHA256SUMS > artifacts/kora.rb
+
       - uses: softprops/action-gh-release@v3
         with:
           files: artifacts/*
@@ -145,10 +161,106 @@ jobs:
           body: |
             ## Install
 
-            Download the archive for your platform below, or build from source:
-
             ```bash
-            cargo install --git https://github.com/${{ github.repository }} kora-cli
+            curl -fsSL https://raw.githubusercontent.com/${{ github.repository }}/main/scripts/install.sh | sh
             ```
 
+            Or download the archive for your platform below, build from source
+            (`cargo install --git https://github.com/${{ github.repository }} kora-cli`),
+            or drop `kora.rb` into a Homebrew tap.
+
             Verify a download against `SHA256SUMS`.
+
+      - name: Push to Homebrew tap
+        if: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/ImAbhishekTomar/homebrew-tap.git" tap
+          mkdir -p tap/Formula
+          cp artifacts/kora.rb tap/Formula/kora.rb
+          cd tap
+          git config user.name "kora-release-bot"
+          git config user.email "actions@github.com"
+          git add Formula/kora.rb
+          git diff --cached --quiet || git commit -m "kora ${version}"
+          git push
+
+      - name: Skip notice
+        if: ${{ secrets.HOMEBREW_TAP_TOKEN == '' }}
+        run: echo "::notice::HOMEBREW_TAP_TOKEN not set, skipped pushing the tap formula"
+
+  publish-crates-io:
+    name: Publish to crates.io
+    needs: verify
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust toolchain
+        run: rustup update stable && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Publish (dependency order)
+        if: ${{ secrets.CARGO_REGISTRY_TOKEN != '' }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+        run: |
+          set -euo pipefail
+          publish_or_skip() {
+            local crate="$1"
+            echo "== $crate =="
+            if output=$(cargo publish -p "$crate" --locked 2>&1); then
+              echo "$output"
+            else
+              echo "$output"
+              if echo "$output" | grep -qi "already exists\|already uploaded"; then
+                echo "$crate already published at this version, continuing"
+              else
+                echo "$crate publish failed" >&2
+                exit 1
+              fi
+            fi
+            sleep 15
+          }
+          for crate in kora-syntax kora-models kora-mcp kora-python kora-types kora-runtime kora-lsp kora-cli; do
+            publish_or_skip "$crate"
+          done
+
+      - name: Skip notice
+        if: ${{ secrets.CARGO_REGISTRY_TOKEN == '' }}
+        run: echo "::notice::CARGO_REGISTRY_TOKEN not set, skipped crates.io publish"
+
+  publish-npm:
+    name: Publish to npm
+    needs: publish
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    # Needed for --provenance: npm mints a signed attestation tying the
+    # published package to this exact workflow run via OIDC.
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: "https://registry.npmjs.org"
+
+      - name: Publish
+        if: ${{ secrets.NPM_TOKEN != '' }}
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: |
+          set -euo pipefail
+          version="${GITHUB_REF_NAME#v}"
+          cd npm
+          npm version --no-git-tag-version --allow-same-version "$version"
+          npm publish --access public --provenance
+
+      - name: Skip notice
+        if: ${{ secrets.NPM_TOKEN == '' }}
+        run: echo "::notice::NPM_TOKEN not set, skipped npm publish"

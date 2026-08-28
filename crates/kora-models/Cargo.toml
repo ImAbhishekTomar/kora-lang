@@ -4,8 +4,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-# Not published to crates.io: the crates depend on each other by path.
-publish = false
+repository.workspace = true
+description = "Model-provider clients with schema-constrained JSON output for Kora's analyze()"
 
 [dependencies]
 serde = { workspace = true }

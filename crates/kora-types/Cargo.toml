@@ -4,8 +4,8 @@ version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
-# Not published to crates.io: the crates depend on each other by path.
-publish = false
+repository.workspace = true
+description = "Name resolution and editor-facing checks for the Kora language"
 
 [dependencies]
 kora-syntax.workspace = true
