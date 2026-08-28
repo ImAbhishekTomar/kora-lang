@@ -32,6 +32,7 @@ jobs:
       - name: Commit and push formula
         env:
           VERSION: ${{ inputs.version }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
         run: |
           set -euo pipefail
           git -C tap config user.name "kora-release-bot"
@@ -41,5 +42,5 @@ jobs:
             echo "Formula is already current"
           else
             git -C tap commit -m "kora ${VERSION}"
-            git -C tap push
+            git -C tap -c "http.extraheader=AUTHORIZATION: bearer ${HOMEBREW_TAP_TOKEN}" push
           fi
