@@ -53,8 +53,14 @@ impl Scratch {
         Scratch(dir)
     }
 
+    /// A path safe to paste into Kora source.
+    ///
+    /// Windows paths contain backslashes, and a backslash starts an escape
+    /// sequence in a Kora string literal -- `C:\Users` reads as an unknown
+    /// escape `\U`. Escaping here keeps these tests honest on every platform
+    /// rather than only where paths happen to use forward slashes.
     fn path(&self, name: &str) -> String {
-        self.0.join(name).to_string_lossy().to_string()
+        self.0.join(name).to_string_lossy().replace('\\', "\\\\")
     }
 }
 
