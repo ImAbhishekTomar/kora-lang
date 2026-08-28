@@ -183,7 +183,7 @@ jobs:
         run: |
           set -euo pipefail
           version="${GITHUB_REF_NAME#v}"
-          git clone "https://x-access-token:${HOMEBREW_TAP_TOKEN}@github.com/ImAbhishekTomar/homebrew-tap.git" tap
+          git clone "https://github.com/ImAbhishekTomar/homebrew-tap.git" tap
           mkdir -p tap/Formula
           cp artifacts/kora.rb tap/Formula/kora.rb
           cd tap
@@ -191,7 +191,7 @@ jobs:
           git config user.email "actions@github.com"
           git add Formula/kora.rb
           git diff --cached --quiet || git commit -m "kora ${version}"
-          git push
+          git -c "http.extraheader=AUTHORIZATION: bearer ${HOMEBREW_TAP_TOKEN}" push
 
       - name: Skip notice
         if: env.HOMEBREW_TAP_TOKEN == ''
