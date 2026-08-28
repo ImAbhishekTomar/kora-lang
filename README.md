@@ -396,12 +396,16 @@ test buttons, a debugger, and a language server providing:
 - **Completion** — keywords, builtins, declared symbols, and module functions
   after `json.`
 
-Install the binary, then link the extension:
+Install the binary, then link the extension and restart VS Code — extension
+contributions are read once, at startup:
 
 ```bash
 cargo install --path crates/kora-cli
-ln -s "$PWD/editors/vscode" ~/.vscode/extensions/kora-lang
+ln -s "$PWD/editors/vscode" ~/.vscode/extensions/kora-lang.kora-lang-0.3.1
 ```
+
+Set `kora.serverPath` to an absolute path if the `kora` first on your `PATH` is
+an older release: `kora | grep "kora dap"` prints nothing when it cannot debug.
 
 The editor and the compiler share one analysis pass, so their answers cannot
 disagree.

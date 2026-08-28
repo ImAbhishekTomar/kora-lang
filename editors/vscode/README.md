@@ -13,17 +13,32 @@ Full editor support for [Kora](https://github.com/abhishektomar/kora-lang), the 
 
 ## Requirements
 
-The `kora` CLI must be on your `PATH` (or point `kora.serverPath` at it):
+The `kora` CLI provides the language server and the debug adapter, so the
+extension needs a binary it can run:
 
 ```bash
 cargo install --path crates/kora-cli
+```
+
+Check that the binary the extension will use is new enough to debug:
+
+```bash
+kora | grep "kora dap"
+```
+
+No output means the `kora` first on your `PATH` predates the debugger — a
+released build, say, while the feature is still unpublished. Point the
+extension at the one you just built rather than reordering your `PATH`:
+
+```json
+"kora.serverPath": "/absolute/path/to/.cargo/bin/kora"
 ```
 
 ## Settings
 
 | Setting | Description | Default |
 |---|---|---|
-| `kora.serverPath` | Path to the `kora` binary used for the language server | `kora` |
+| `kora.serverPath` | Path to the `kora` binary used for the language server and the debug adapter | `kora` |
 
 ## Debugging
 
@@ -58,6 +73,35 @@ Write one to pin the options:
 A breakpoint on a blank line or a comment moves to the next statement, and the
 gutter marker moves with it. Breakpoints inside a `parallel for` body do not
 fire: its branches run on worker threads with no debugger attached.
+
+## Troubleshooting
+
+**"You don't have an extension for debugging Kora"**, or the gutter refuses a
+breakpoint on a `.ko` file. VS Code reads an extension's contributions once, at
+startup, and this extension is what tells it that `.ko` files are debuggable.
+Quit VS Code completely — **Cmd/Ctrl+Q, not Reload Window** — and reopen. A
+reload does not rebuild that registry.
+
+**The debug session fails to start.** The adapter is `kora dap`. Run it by hand:
+
+```bash
+kora dap
+```
+
+It should sit waiting for protocol input rather than printing an error. If it
+reports an unknown command, the binary is older than the debugger — see
+Requirements above.
+
+**Installing from source.** Link the extension directory and name the link for
+the version in its `package.json`, so VS Code's extension scanner does not
+serve a manifest it cached under an older version:
+
+```bash
+ln -s "$PWD/editors/vscode" ~/.vscode/extensions/kora-lang.kora-lang-0.3.1
+```
+
+Restart VS Code after linking, and again after any change to `package.json`.
+Changes to `src/extension.js` alone need only a window reload.
 
 ## Commands
 

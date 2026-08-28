@@ -49,7 +49,12 @@ order:
   requests
 - `editors/vscode/syntaxes/kora.tmLanguage.json` — highlighting
 - `editors/vscode/package.json` — bump `version`; add keywords if the feature
-  is something people would search for
+  is something people would search for. A change here is only picked up when
+  VS Code restarts, and a dev install's symlink should be renamed to match the
+  new version or the extension scanner may serve the manifest it cached under
+  the old one. Test a manifest change with
+  `npx @vscode/vsce package --no-dependencies`, which runs the same validation
+  the release does
 - `editors/vscode/README.md` — the feature list is the marketplace page
 
 **Documentation** (all of it, every time)
