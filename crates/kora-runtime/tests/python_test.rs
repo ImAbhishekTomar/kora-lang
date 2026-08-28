@@ -165,8 +165,11 @@ def main():
         case Err(why):
             print(why)
 "#);
+    // The exception *type* is what crossed the boundary and what a program
+    // would branch on. The message is CPython's wording and differs between
+    // versions -- 3.13 says "math domain error", others say "expected a
+    // nonnegative input" -- so asserting on it tests CPython, not Kora.
     assert!(out[0].contains("ValueError"), "got: {}", out[0]);
-    assert!(out[0].contains("math domain error"), "got: {}", out[0]);
 }
 
 #[test]
