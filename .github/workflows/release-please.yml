@@ -53,9 +53,14 @@ jobs:
       - name: Sync Cargo.lock on the release branch
         if: steps.release.outputs.prs_created == 'true'
         env:
-          BRANCH: ${{ fromJSON(steps.release.outputs.prs)[0].headBranchName }}
+          # Passed as raw text and parsed in the shell. `fromJSON` here is
+          # evaluated while the workflow is parsed, before `if` is consulted,
+          # so an empty output would make the whole file invalid on every run
+          # that opens no pull request.
+          PRS: ${{ steps.release.outputs.prs }}
         run: |
           set -euo pipefail
+          BRANCH=$(echo "$PRS" | jq -r '.[0].headBranchName')
           git fetch origin "$BRANCH"
           git checkout "$BRANCH"
           # --workspace touches only the member versions; every third-party
