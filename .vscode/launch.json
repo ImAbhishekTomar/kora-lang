@@ -1,0 +1,32 @@
+{
+  // Debug configurations for this repository. Press F5 on a .ko file.
+  //
+  // The debug adapter is `kora dap`, from the same binary as the CLI. Point
+  // `kora.serverPath` at it if `kora` on your PATH is an older release.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "kora",
+      "request": "launch",
+      "name": "Debug the current Kora file",
+      "program": "${file}",
+      "stopOnEntry": false
+    },
+    {
+      // Model calls come from the committed cassettes, so stepping through
+      // agent code costs nothing and gives the same answer every time.
+      "type": "kora",
+      "request": "launch",
+      "name": "Debug the current Kora file (replay model calls)",
+      "program": "${file}",
+      "replay": true
+    },
+    {
+      "type": "kora",
+      "request": "launch",
+      "name": "Debug examples/10_modules.ko",
+      "program": "${workspaceFolder}/examples/10_modules.ko",
+      "stopOnEntry": true
+    }
+  ]
+}
