@@ -1,0 +1,9 @@
+CITY BEAN COFFEE
+Receipt 1842
+2026-08-28
+2 x Cappuccino       $9.00
+1 x Blueberry muffin  $4.50
+Subtotal             $13.50
+Tax                  $1.35
+Total                $14.85
+Paid with Visa ending 4242

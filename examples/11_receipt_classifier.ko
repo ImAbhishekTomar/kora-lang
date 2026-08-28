@@ -1,0 +1,39 @@
+# Expense receipt classifier.
+#
+# Put receipt text in examples/receipts/sample.txt, then run this file with a
+# live model or replay a cassette. The declared Receipt type makes the model
+# return structured data instead of loose text.
+
+use fs
+
+type Receipt:
+    merchant: str
+    amount: float
+    currency: str
+    purchase_date: str
+    category: str
+    needs_review: bool
+    review_reason: str
+
+def classify_receipt(text: str) -> str:
+    receipt: Receipt = analyze(
+        text,
+        "Extract this receipt. Use ISO date YYYY-MM-DD when a date is present. Choose one category: meals, travel, office, software, services, or other. Set needs_review to True when the amount or merchant is unclear, the receipt looks duplicated, or the purchase needs a person to check. Explain an approval concern briefly in review_reason."
+    )
+
+    match receipt:
+        case Ok(r):
+            if r.needs_review:
+                return f"REVIEW  {r.merchant}: {r.amount} {r.currency} ({r.category}) - {r.review_reason}"
+            return f"OK      {r.merchant}: {r.amount} {r.currency} ({r.category}) on {r.purchase_date}"
+        case Uncertain(reason):
+            return f"SKIP    could not classify receipt: {reason}"
+        case Exhausted(meter):
+            return f"SKIP    budget exhausted: {meter}"
+
+def main():
+    match fs.read("examples/receipts/sample.txt"):
+        case Ok(text):
+            print(classify_receipt(text))
+        case Err(reason):
+            print(f"Could not read receipt: {reason}")

@@ -19,11 +19,13 @@ no API key and no model installed.
 | [08_mcp.ko](08_mcp.ko) | a model calling tools from a real MCP server | `kora run` |
 | [09_python.ko](09_python.ko) | calling Python through the sidecar | `kora run` |
 | [10_modules.ko](10_modules.ko) | splitting a program across files | `kora run` |
+| [11_receipt_classifier.ko](11_receipt_classifier.ko) | reading a receipt and extracting a typed expense record | `kora run --replay` |
 
 ```bash
 kora run examples/00_basics.ko
 kora run --replay examples/03_salary_review.ko
 kora test examples/07_tests.ko
+kora run --replay examples/11_receipt_classifier.ko
 ```
 
 ## The module one

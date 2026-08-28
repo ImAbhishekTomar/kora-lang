@@ -1,0 +1,25 @@
+{
+  "entries": [
+    {
+      "key": "d87ef1f092feb058",
+      "site": "examples/11_receipt_classifier.ko:19",
+      "model": "ollama:qwen3:8b",
+      "prompt": "Extract this receipt. Use ISO date YYYY-MM-DD when a date is present. Choose one category: meals, travel, office, software, services, or other. Set needs_review to True when the amount or merchant is unclear, the receipt looks duplicated, or the purchase needs a person to check. Explain an approval concern briefly in review_reason.",
+      "data": "\"CITY BEAN COFFEE\\nReceipt 1842\\n2026-08-28\\n2 x Cappuccino       $9.00\\n1 x Blueberry muffin  $4.50\\nSubtotal             $13.50\\nTax                  $1.35\\nTotal                $14.85\\nPaid with Visa ending 4242\\n\"",
+      "outcome": {
+        "kind": "ok",
+        "fields": {
+          "amount": 14.85,
+          "category": "meals",
+          "currency": "USD",
+          "merchant": "CITY BEAN COFFEE",
+          "needs_review": false,
+          "purchase_date": "2026-08-28",
+          "review_reason": ""
+        },
+        "tokens_in": 770,
+        "tokens_out": 80
+      }
+    }
+  ]
+}
