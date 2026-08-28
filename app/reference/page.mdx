@@ -235,9 +235,9 @@ if tokens_remaining() < 1000:
     print("wrapping up")
 ```
 
-These are most useful inside an agent or a `with budget(...)` block. Budget blocks are currently part of the evolving runtime surface.
+These are most useful inside an agent or a `with budget(...)` block.
 
-### `ask_human(question, context)` — planned
+### `ask_human(question, context)`
 
 Pauses a durable workflow and waits for a human decision.
 
@@ -247,7 +247,7 @@ decision = ask_human("Approve this refund?", refund.reason)
 
 ## Agent constructs
 
-### `agent` — planned
+### `agent`
 
 Declares a model-using, suspendable unit of work.
 
@@ -257,7 +257,7 @@ agent triage(raw: str) -> Ticket:
     return analyze(raw, "classify this ticket")
 ```
 
-### `tool` — planned
+### `tool`
 
 Declares a callable a model can use. Its signature becomes the tool schema.
 
@@ -267,7 +267,7 @@ tool lookup_customer(email: str) -> Customer:
     return db.query("select * from customers where email = ?", email)
 ```
 
-### `parallel for` — planned
+### `parallel for`
 
 Fans work out and collects the results.
 
@@ -276,7 +276,7 @@ results = parallel for ticket in tickets:
     triage(ticket)
 ```
 
-### `with budget(...)` — planned
+### `with budget(...)`
 
 Places a nested spending fence around a block.
 
@@ -287,7 +287,7 @@ with budget(max_tokens = 5_000):
 
 ## Data safety
 
-### `classified` and `declassify` — planned
+### `classified` and `declassify`
 
 Sensitive values stay labeled. A scoped `declassify` names the only sink allowed to receive them.
 
@@ -386,7 +386,7 @@ rows = sql.query("app.db", "select * from users where id = ?", [user_id])
 
 `env.get(name)` reads an environment variable and `env.has(name)` checks whether it exists. Secret-looking names are classified automatically.
 
-### Python and MCP bridges — planned
+### Python and MCP bridges
 
 ```kora
 use python statistics as stats

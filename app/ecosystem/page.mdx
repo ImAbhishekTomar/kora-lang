@@ -5,32 +5,35 @@ description: The tools around Kora.
 
 # Ecosystem
 
-Kora is a language and a small set of tools around it. The goal is for setup to feel like one smooth experience.
+Kora is a language and a small set of tools around it. The goal is for setup to
+feel like one smooth experience.
 
 ## VS Code
 
-The first piece is here today:
+The published extension is available today:
 
 - `.ko` files are recognized as Kora.
 - Syntax gets colorized.
-- **Kora: Run Current File** runs the file from the editor.
+- **Kora: Run Current File** and **Kora: Test Current File** run commands from the editor.
+- IntelliSense includes diagnostics, completion, hover, symbols, and go-to-definition.
 
-It is in [`editors/vscode`](https://github.com/abhishektomar/kora-lang/tree/main/editors/vscode). IntelliSense, richer diagnostics, hover, and go-to-definition are on the way with the language server.
+[Install Kora Language from the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kora-lang.kora-lang), then install the CLI using [Homebrew, npm, a release archive, or source](/installation).
 
-## The one-click direction
+## The one-install direction
 
-The planned Kora VS Code extension will make the whole setup feel like one install:
+The extension and CLI work together as the Kora development environment:
 
 ```text
 Kora extension
-├── compiler + CLI
+├── compiler + CLI (installed separately)
 ├── IntelliSense
 ├── syntax colors + themes
 ├── .ko file icons
 └── run, replay, and project tools
 ```
 
-That means you can open a Kora project and start writing, without collecting five separate tools first.
+Open a Kora project, install the extension and CLI, and start writing without
+assembling separate syntax and language-server tools.
 
 ## Runtime pieces
 
@@ -45,4 +48,4 @@ The repository is organized into focused Rust crates:
 | `kora-lsp` | Language server foundation |
 | `kora-cli` | The `kora` command |
 
-You can browse the full [repository](https://github.com/abhishektomar/kora-lang) when you want to go deeper.
+You can browse the full [repository](https://github.com/ImAbhishekTomar/kora-lang) when you want to go deeper.

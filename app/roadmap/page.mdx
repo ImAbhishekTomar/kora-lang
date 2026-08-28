@@ -5,47 +5,51 @@ description: What is working now, and what is coming next.
 
 # Roadmap
 
-Kora is being built in small, runnable steps. Here is the honest snapshot.
+Kora is being built in small, runnable steps. This page separates the features
+available in release `0.0.2` from the work that remains.
 
 ## Working now
 
-The current repository includes the Python-like core, static types, good source errors, typed `analyze`, OpenAI and Ollama providers, record/replay cassettes, and VS Code basics.
+Release `0.0.2` includes:
+
+- Python-like syntax, static types, modules, imports, and source diagnostics.
+- `kora run`, `check`, `test`, `audit`, `trace`, and durable run commands.
+- Typed `analyze` calls with OpenAI and Ollama providers.
+- Record and replay cassettes for deterministic tests without model costs.
+- Agents, parallel work, lexical budgets, human pauses, and resumable runs.
+- Classified data, scoped `declassify`, sink policies, and audit output.
+- Native `json`, `csv`, `fs`, `http`, `sql`, `time`, `re`, and `env` modules.
+- Python sidecar and MCP tool integrations through project configuration.
+- VS Code syntax highlighting, file icons, language-server features, and run
+  and test commands.
 
 ## Coming next
 
-### Agents and parallel work
+### Stabilize the language surface
 
-Agents will be isolated, resumable units of execution. `parallel for` will fan work out without making every function `async`.
+The core execution model is now present. The next step is to stabilize syntax,
+diagnostics, configuration, and compatibility before calling the language
+production-ready.
 
-```kora
-results = parallel for ticket in tickets:
-    triage(ticket)
-```
+### Broader distribution
 
-### Budgets
+The CLI is available through Homebrew, npm, release archives, and source. The
+next distribution tasks are crates.io publication and Open VSX publication for
+VS Code-compatible editors.
 
-Budgets will be part of the language, not a comment in a dashboard:
+### Better editor workflows
 
-```kora
-agent triage(raw: str) -> Ticket:
-    budget: max_tokens = 20_000, max_steps = 5
-```
+The VS Code extension works today. Future releases can add richer refactoring,
+debugging views, project-aware configuration, and more complete code actions.
 
-### Safer data flow
+### More integrations
 
-Classified values will need a scoped, named declassification before they reach a model sink.
-
-```kora
-declassify emp.salary for local_model:
-    assessment: Assessment = analyze(emp.salary, "assess pay")
-```
-
-The compiler should make the unsafe path hard to miss.
-
-### Durability and human input
-
-An `ask_human(...)` call will pause a program safely and let it resume after approval, even after a restart.
+The Python and MCP bridges work as isolated integrations. More providers,
+authentication helpers, and standard-library capabilities can be added without
+changing the language's safety model.
 
 ## A note on status
 
-The later examples on this site describe the design direction. They are labeled here as upcoming because the corresponding phases are not all implemented yet.
+Kora is still pre-alpha. A feature listed as working is implemented in the
+current repository and release checks. A feature listed as coming next is a
+real direction, but its APIs may still change.
