@@ -376,8 +376,10 @@ use python statistics as stats
 use python os.path as pypath      # dotted names need an alias
 
 match stats.mean([1, 2, 3, 4]):
-    case Ok(m):      print(m)
-    case Err(why):   print(why)   # ValueError: math domain error
+    case Ok(m):
+        print(m)
+    case Err(why):
+        print(why)   # ValueError: math domain error
 ```
 
 Python runs in its own process. Values cross as JSON — data in, data out —

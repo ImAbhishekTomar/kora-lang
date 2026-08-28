@@ -26,13 +26,21 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --workspace --all-targets -- -D warnings
+      - name: Documentation builds
+        run: cargo doc --workspace --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      # A committed lockfile that does not match Cargo.toml makes builds
+      # irreproducible, and the failure shows up somewhere else entirely.
+      - name: Lockfile is current
+        run: cargo metadata --locked --format-version 1 > /dev/null
 
   test:
     name: Build and test (${{ matrix.os }})
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
+        os: [ubuntu-latest, macos-latest, windows-latest]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
@@ -40,6 +48,109 @@ jobs:
         run: rustup update stable && rustup default stable
       - uses: Swatinem/rust-cache@v2
       - name: Build
-        run: cargo build --workspace
+        run: cargo build --workspace --locked
       - name: Test
-        run: cargo test --workspace
+        run: cargo test --workspace --locked
+
+  # Optimised builds miss different bugs than debug ones: overflow checks are
+  # off, and timing-dependent code behaves differently.
+  release-mode:
+    name: Test in release mode
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust toolchain
+        run: rustup update stable && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Test
+        run: cargo test --workspace --release --locked
+
+  msrv:
+    name: Minimum supported Rust
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # Read the floor from Cargo.toml, so the job and the manifest cannot
+      # disagree about what the minimum is.
+      - name: Install the declared minimum toolchain
+        run: |
+          set -euo pipefail
+          version=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)
+          echo "minimum supported Rust: $version"
+          rustup toolchain install "$version" --profile minimal
+          rustup default "$version"
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --workspace --locked
+
+  audit:
+    name: Security advisories
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories bans licenses sources
+
+  # The language's own tests, run by the language. If `kora test` breaks, the
+  # Rust suite may still pass -- this is the end-to-end check that the tool
+  # people actually use still works.
+  kora-tests:
+    name: Kora test suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust toolchain
+        run: rustup update stable && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --locked
+      - name: Check every example
+        run: ./target/debug/kora check examples/*.ko
+      - name: Run the Kora test suite
+        run: ./target/debug/kora test examples/07_tests.ko
+
+  # Every example that does not need a live model or the network. These are
+  # cassette-backed, so they are deterministic and free -- and they catch the
+  # cassette going stale, which has broken the documented commands before.
+  examples:
+    name: Examples run
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust toolchain
+        run: rustup update stable && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --locked
+      - name: Deterministic examples
+        run: |
+          set -euo pipefail
+          ./target/debug/kora run examples/00_basics.ko
+          ./target/debug/kora run examples/05_stdlib.ko
+      - name: Cassette-backed examples replay without a model
+        run: |
+          set -euo pipefail
+          ./target/debug/kora run --replay examples/01_expense_check.ko
+          ./target/debug/kora run --replay examples/02_triage.ko
+          ./target/debug/kora run --replay examples/03_salary_review.ko
+      - name: Python sidecar
+        run: ./target/debug/kora run examples/09_python.ko
+
+  docs:
+    name: Documentation matches the language
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust toolchain
+        run: rustup update stable && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+      - name: Build
+        run: cargo build --locked
+      - name: Check the documentation
+        run: python3 scripts/check_docs.py
+      - name: Check external links
+        uses: lycheeverse/lychee-action@v2
+        with:
+          args: --no-progress --max-concurrency 4 README.md DECISIONS.md docs/ examples/README.md
+          fail: true

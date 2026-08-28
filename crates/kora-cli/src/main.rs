@@ -14,6 +14,8 @@ const USAGE: &str = "\
 usage:
   kora run <file.ko>           run a program
   kora <file.ko>               same as `kora run`
+  kora check <file.ko>...      parse and check without running
+    --syntax                   parse only; skip name resolution
   kora test <file.ko>          run the `test` blocks in a file
   kora audit <file.ko>         list every declassification site
   kora runs <file.ko>          list durable runs and their status
@@ -48,6 +50,19 @@ fn main() -> ExitCode {
                 ExitCode::from(1)
             }
         },
+        Some("check") => {
+            let syntax_only = args.iter().any(|a| a == "--syntax");
+            let paths: Vec<String> = args[1..]
+                .iter()
+                .filter(|a| !a.starts_with("--"))
+                .cloned()
+                .collect();
+            if paths.is_empty() {
+                eprintln!("usage: kora check [--syntax] <file.ko>...");
+                return ExitCode::from(2);
+            }
+            check_files(&paths, syntax_only)
+        }
         Some("test") => match args.get(1) {
             Some(path) => test_file(path),
             None => {
@@ -144,6 +159,64 @@ fn run_args(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     };
     run_file(path, mode, report, durable, resume, trace)
+}
+
+/// `kora check` — parse and check files without running them.
+///
+/// The same analysis the editor shows, as a command: useful in CI, and the
+/// only way to check a file that needs resources this machine does not have.
+fn check_files(paths: &[String], syntax_only: bool) -> ExitCode {
+    let mut problems = 0;
+    let mut checked = 0;
+
+    for path in paths {
+        let Ok(source) = std::fs::read_to_string(path) else {
+            eprintln!("error: cannot read `{path}`");
+            problems += 1;
+            continue;
+        };
+        checked += 1;
+
+        match kora_syntax::parse(&source) {
+            Err(e) => {
+                eprint!("{}", e.render(&source, path));
+                problems += 1;
+            }
+            Ok(program) if syntax_only => {
+                let _ = program;
+            }
+            Ok(program) => {
+                for d in kora_types::analyze(&program).diagnostics {
+                    let line = d.span.line as usize;
+                    let src_line = source.lines().nth(line.saturating_sub(1)).unwrap_or("");
+                    eprintln!("error: {}", d.message);
+                    eprintln!("  --> {path}:{line}:{}", d.span.col);
+                    eprintln!("   |");
+                    eprintln!(" {line} | {src_line}");
+                    if let Some(hint) = &d.hint {
+                        eprintln!("   = hint: {hint}");
+                    }
+                    eprintln!();
+                    problems += 1;
+                }
+            }
+        }
+    }
+
+    if problems == 0 {
+        println!(
+            "checked {checked} file{}: no problems",
+            if checked == 1 { "" } else { "s" }
+        );
+        ExitCode::SUCCESS
+    } else {
+        eprintln!(
+            "{problems} problem{} in {checked} file{}",
+            if problems == 1 { "" } else { "s" },
+            if checked == 1 { "" } else { "s" }
+        );
+        ExitCode::from(1)
+    }
 }
 
 /// `kora test` — run the `test` blocks in a file.

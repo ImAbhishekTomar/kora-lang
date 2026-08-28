@@ -178,7 +178,7 @@ has `tool` as a first-class construct, and an MCP server is a bag of tools, so
 the mapping is mechanical — one implementation, whole ecosystem inherited:
 
 ```python
-use mcp "github" as gh
+use mcp github as gh
 r: Report = analyze(issue, "triage this", tools=gh.tools)
 ```
 
@@ -191,9 +191,12 @@ Python process, data in / data out over IPC. No live object handles, no
 Python callbacks into Kora.
 
 ```python
-use python "pandas" as pd
-df = pd.read_csv("sales.csv")
-summary = pd.to_dict(pd.describe(df))
+use python statistics as stats
+match stats.mean(readings):
+    case Ok(m):
+        print(m)
+    case Err(why):
+        print(why)
 ```
 
 Chosen over embedded CPython (PyO3) because embedding would break three of the
