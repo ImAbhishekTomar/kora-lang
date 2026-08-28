@@ -1,7 +1,11 @@
 // Kora VS Code extension.
 //
-// Two jobs: run the current file, and start the language server that provides
-// diagnostics, hover, go-to-definition, outline, and completion.
+// Three jobs: run the current file, start the language server that provides
+// diagnostics, hover, go-to-definition, outline, and completion, and start the
+// debug adapter that provides breakpoints, stepping, and the variables pane.
+//
+// All three are the same binary — `kora lsp`, `kora dap`, `kora run` — so
+// there is one thing to install and one version to keep straight.
 
 const vscode = require("vscode");
 const { LanguageClient, TransportKind } = require("vscode-languageclient/node");
@@ -41,14 +45,78 @@ function activate(context) {
     });
   });
 
-  context.subscriptions.push(runFile, testFile);
+  const debugFile = vscode.commands.registerCommand("kora.debugFile", () => {
+    const editor = vscode.window.activeTextEditor;
+    if (!editor || !editor.document.fileName.endsWith(".ko")) {
+      vscode.window.showErrorMessage("Open a .ko file to debug it.");
+      return;
+    }
+    editor.document.save().then(() => {
+      vscode.debug.startDebugging(
+        vscode.workspace.getWorkspaceFolder(editor.document.uri),
+        {
+          type: "kora",
+          request: "launch",
+          name: "Debug current Kora file",
+          program: editor.document.fileName,
+        }
+      );
+    });
+  });
+
+  context.subscriptions.push(runFile, testFile, debugFile);
+  registerDebugging(context);
   startLanguageServer();
 }
 
+// The debug adapter is `kora dap` speaking DAP over stdio.
+//
+// The configuration provider is what makes F5 work on a .ko file with no
+// launch.json: without it VS Code asks the user to create one first, which is
+// a poor first five minutes.
+function registerDebugging(context) {
+  const factory = {
+    createDebugAdapterDescriptor() {
+      const command = koraPath();
+      return new vscode.DebugAdapterExecutable(command, ["dap"]);
+    },
+  };
+
+  const provider = {
+    resolveDebugConfiguration(folder, config) {
+      if (!config.type && !config.request && !config.name) {
+        const editor = vscode.window.activeTextEditor;
+        if (!editor || !editor.document.fileName.endsWith(".ko")) {
+          return vscode.window
+            .showInformationMessage("Open a .ko file to debug it.")
+            .then(() => undefined);
+        }
+        config.type = "kora";
+        config.request = "launch";
+        config.name = "Debug current Kora file";
+        config.program = editor.document.fileName;
+      }
+      if (!config.program) {
+        return vscode.window
+          .showErrorMessage("Set `program` in the launch configuration.")
+          .then(() => undefined);
+      }
+      return config;
+    },
+  };
+
+  context.subscriptions.push(
+    vscode.debug.registerDebugAdapterDescriptorFactory("kora", factory),
+    vscode.debug.registerDebugConfigurationProvider("kora", provider)
+  );
+}
+
+function koraPath() {
+  return vscode.workspace.getConfiguration("kora").get("serverPath", "kora");
+}
+
 function startLanguageServer() {
-  const command = vscode.workspace
-    .getConfiguration("kora")
-    .get("serverPath", "kora");
+  const command = koraPath();
 
   const serverOptions = {
     run: { command, args: ["lsp"], transport: TransportKind.stdio },
