@@ -17,6 +17,36 @@ reaches CI.
 So: when you add or change a construct, walk the whole list below and either
 update the item or say out loud why it needs nothing.
 
+## Package vs core compiler — decide out loud, every time
+
+Kora has two extension points: the compiler (this repo) and packages (see
+DECISIONS.md, ecosystem strategy). Every new feature request lands in one of
+them, never both, and the split is not a judgment call to make silently.
+
+**The test:** does it need a new *effect*? Effects are the things the
+checker and runtime already know about — `analyze`, the tool loop,
+`ask_human`, `declassify`, the clock, network, filesystem, subprocess,
+random.
+
+- Needs a new effect, or changes how an existing one is checked (schema
+  shape, label rules, budget accounting) → **core compiler change**. Walk
+  the checklist below.
+- Composes effects that already exist → **package**, full stop, even if it
+  would be more convenient to bolt onto the runtime.
+
+**Before writing code for any requested feature, state the classification
+and the one-line reason, unprompted.** This applies at every permission
+level, including full-approval/auto-accept modes — a fast "yes" from the
+harness is not a fast "yes" from the user on *what* is being built. One
+line is enough:
+
+> This is a package (composes `analyze` + `parallel for`, no new effect).
+> This needs a compiler change (new schema shape for `analyze` results).
+
+If genuinely ambiguous, say so and pick the smaller-blast-radius reading
+(package over compiler) rather than asking, unless the ambiguity changes
+what gets built enough to need a decision from the user.
+
 ## Checklist for a language change
 
 Adding, changing, or removing syntax or semantics touches these, roughly in
