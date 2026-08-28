@@ -48,7 +48,7 @@ Or pick a package manager:
 ```bash
 brew install ImAbhishekTomar/tap/kora   # Homebrew, macOS/Linux
 cargo install kora-cli                  # crates.io
-npm install -g kora-cli                 # npm (downloads the release binary)
+npm install -g @abhishektomar/kora-cli  # npm (downloads the release binary)
 ```
 
 Prebuilt archives for Linux, macOS, and Windows are also on the
@@ -133,7 +133,8 @@ not GitHub, and killing the process mid-`ask_human` loses nothing.
 | [Standard library](docs/stdlib.md) | the eight modules and the defect each one fixes |
 | [CLI reference](docs/cli.md) | commands, flags, `kora.toml`, editor setup |
 | [DECISIONS.md](DECISIONS.md) | the frozen design and why each call was made |
-| [examples/](examples) | eight runnable programs, in order |
+| [AGENTS.md](AGENTS.md) | contributing: what a language change has to touch |
+| [examples/](examples) | eleven runnable programs, in order |
 
 ## Agents, tools, and budgets
 
@@ -282,6 +283,37 @@ match fs.read(path):
         print(why)
 ```
 
+## Splitting a program across files
+
+```python
+# lib/tax.ko
+RATE = 0.2
+
+def with_tax(amount: float) -> float:
+    return amount * (1.0 + RATE)
+```
+
+```python
+# main.ko
+use "./lib/tax.ko" as tax
+
+def main():
+    print(tax.with_tax(100.0))
+```
+
+A quoted path is a file, a bare word is a stdlib module, so the two can never
+be confused. Paths resolve relative to the file that writes them, not the
+working directory: a program is a directory, and it moves whole.
+
+Each file keeps its own top-level names, so importing a module can never
+change what the code inside it means. A file's top level runs once per run
+however many files import it. Cycles are an error with the chain that caused
+them, not a half-built module.
+
+Budgets, labels, and the journal cross file boundaries unchanged: an imported
+agent spends from the same budget, `classified` still propagates, and
+`kora audit` covers every imported file.
+
 ## MCP
 
 ```python
@@ -405,7 +437,7 @@ Early development, pre-alpha, built for personal use first. Everything
 documented here works and is covered by tests; the test suite never touches
 the network.
 
-Not built yet: classes, list comprehensions, multi-file programs, and
+Not built yet: classes, list comprehensions, a package manager, and
 `try`/`except`. See
 [DECISIONS.md](DECISIONS.md) for what is planned and what is deliberately
 excluded.

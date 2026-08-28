@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 // Downloads the kora release binary matching this package's version and the
-// current OS/arch, so `npm install kora-cli` gives a working `kora` on PATH
+// current OS/arch, so `npm install @abhishektomar/kora-cli` gives a working `kora` on PATH
 // without shipping every platform's binary in the npm tarball.
 "use strict";
 

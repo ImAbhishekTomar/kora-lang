@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   publish:
-    name: Publish kora-cli to npm
+    name: Publish @abhishektomar/kora-cli to npm
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
