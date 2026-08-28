@@ -1,0 +1,157 @@
+---
+title: Installation
+description: Install Kora through the route that fits your setup.
+---
+
+# Installation
+
+Kora `0.0.2` is available as a command-line tool, a VS Code extension, a
+Homebrew formula, an npm package, and downloadable release archives. Pick one
+route below. All routes install the same Kora version when you pin a release.
+
+## Quick install: Homebrew
+
+macOS and Linux users can install the CLI from the Kora tap:
+
+```bash
+brew tap ImAbhishekTomar/tap
+brew install imabhishektomar/tap/kora
+kora --version
+```
+
+To update later:
+
+```bash
+brew update
+brew upgrade kora
+```
+
+On Apple Silicon, run Homebrew in ARM mode if your terminal is running under
+Rosetta:
+
+```bash
+arch -arm64 brew install imabhishektomar/tap/kora
+```
+
+## Quick install: npm
+
+The npm package installs the correct release binary for macOS, Linux, or
+Windows:
+
+```bash
+npm install -g @abhishektomar/kora-cli
+kora --version
+```
+
+For a project-local install:
+
+```bash
+npm install --save-dev @abhishektomar/kora-cli
+npx kora --version
+```
+
+When using pnpm, pnpm may ask you to approve the package install script. This
+script is required because it downloads the platform-specific Kora binary:
+
+```bash
+pnpm add -D @abhishektomar/kora-cli
+pnpm approve-builds
+pnpm rebuild @abhishektomar/kora-cli
+pnpm exec kora --version
+```
+
+Select `@abhishektomar/kora-cli` in the approval prompt. The warning about
+deprecated subdependencies does not come from Kora's source code.
+
+## Install the VS Code extension
+
+Install [Kora Language from the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kora-lang.kora-lang).
+
+The extension provides `.ko` file recognition, syntax highlighting, Kora file
+icons, diagnostics, completion, hover information, go-to-definition, and run
+and test commands. Install the CLI separately using Homebrew, npm, a release
+archive, or source so the editor can run your programs.
+
+After installing both pieces:
+
+1. Open a Kora project in VS Code.
+2. Open a `.ko` file.
+3. Use the play button or the command palette command **Kora: Run Current File**.
+4. Set `kora.serverPath` if the `kora` executable is not on your `PATH`.
+
+## Download a release archive
+
+Open the [Kora releases page](https://github.com/ImAbhishekTomar/kora-lang/releases)
+and download the archive for your operating system and CPU. Releases currently
+include macOS Intel, macOS Apple Silicon, Linux x64, Linux ARM64, and Windows
+x64 builds. Each release includes `SHA256SUMS` for verification.
+
+For macOS or Linux, the installer script detects your platform and verifies the
+archive checksum:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ImAbhishekTomar/kora-lang/main/scripts/install.sh | sh
+kora --version
+```
+
+Pin a particular version or choose a custom installation directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/ImAbhishekTomar/kora-lang/main/scripts/install.sh | KORA_VERSION=0.0.2 sh
+curl -fsSL https://raw.githubusercontent.com/ImAbhishekTomar/kora-lang/main/scripts/install.sh | KORA_INSTALL_DIR="$HOME/.local/bin" sh
+```
+
+The default directory is `~/.local/bin`. Add it to your `PATH` if the installer
+reports that it is not already there.
+
+## Build from source
+
+Install Rust and Cargo, then build the CLI from the repository:
+
+```bash
+git clone https://github.com/ImAbhishekTomar/kora-lang.git
+cd kora-lang
+cargo build --release --locked
+./target/release/kora --version
+```
+
+Run directly from the source tree while developing Kora:
+
+```bash
+cargo run -- run examples/00_basics.ko
+```
+
+## Verify your installation
+
+```bash
+kora --version
+kora check examples/00_basics.ko
+kora run examples/00_basics.ko
+```
+
+The deterministic examples run without an API key. Programs using model calls
+need the provider configuration described below.
+
+## Model setup
+
+The deterministic core works without a model. For `analyze`, choose OpenAI or a local Ollama model in `kora.toml`:
+
+```toml
+[models]
+default = "local:llama3.2:latest"
+smart = "openai:gpt-4o"
+
+[models.local]
+endpoint = "http://localhost:11434"
+```
+
+For OpenAI, export `OPENAI_API_KEY`. For Ollama, start Ollama locally and make sure the selected model is available.
+
+## First run
+
+```bash
+./target/debug/kora run examples/00_basics.ko
+./target/debug/kora run --replay examples/01_expense_check.ko
+```
+
+Read [Start here](/start-here) for the short guided path, or open the [KORA Language Reference](/reference) when you want the full surface. To read documentation for an older release, use [Docs versions](/versions).

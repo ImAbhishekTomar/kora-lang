@@ -1,0 +1,29 @@
+:root {
+  --kora-ink: #102820;
+  --kora-muted: #60756d;
+  --kora-teal: #159a7c;
+  --kora-lime: #c8f36b;
+  --kora-paper: #f7f8f3;
+}
+
+body { background: var(--kora-paper); }
+.dark body { background: #101916; }
+.brand { display: inline-flex; align-items: center; gap: .55rem; letter-spacing: -.04em; font-size: 1.15rem; font-weight: 760; }
+.brand-mark { width: 1.7rem; height: 1.7rem; display: grid; place-items: center; border-radius: 7px; background: var(--kora-lime); color: #102820; font-size: 1.15rem; font-weight: 850; }
+.version-link { margin-right: .85rem; font-size: .85rem; font-weight: 650; text-decoration: none; }
+.hero-actions { display: flex; gap: .7rem; margin: 2rem 0 4rem; flex-wrap: wrap; }
+.button { display: inline-flex; gap: .75rem; align-items: center; border-radius: 999px; padding: .7rem 1.15rem; font-weight: 650; text-decoration: none !important; transition: transform .2s ease; }
+.button:hover { transform: translateY(-2px); }
+.button-primary { background: var(--kora-lime); color: var(--kora-ink) !important; }
+.button-quiet { border: 1px solid #cbd5cd; color: var(--kora-ink) !important; }
+.dark .button-quiet { border-color: #3b4a44; color: #edf3e9 !important; }
+.signal-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin: 0 0 4rem; }
+.signal-card { padding: 1.3rem; border: 1px solid #dfe6df; border-radius: 16px; background: rgba(255,255,255,.55); }
+.dark .signal-card { border-color: #2b3934; background: rgba(255,255,255,.035); }
+.signal-number { display: block; color: var(--kora-teal); font-size: .75rem; font-weight: 800; letter-spacing: .1em; margin-bottom: 2.7rem; }
+.signal-card strong { display: block; font-size: 1rem; margin-bottom: .4rem; }
+.signal-card p { color: var(--kora-muted); font-size: .92rem; line-height: 1.5; margin: 0; }
+.home-note { display: flex; gap: .9rem; align-items: flex-start; margin: 2.5rem 0; padding: 1rem 1.1rem; border-left: 3px solid var(--kora-teal); background: rgba(21,154,124,.08); font-size: .92rem; line-height: 1.55; }
+.home-note > span { color: var(--kora-teal); font-size: 1.2rem; }
+code { border-radius: 5px; }
+@media (max-width: 700px) { .signal-grid { grid-template-columns: 1fr; } .signal-number { margin-bottom: 1rem; } }

@@ -1,0 +1,36 @@
+---
+title: Documentation versions
+description: Choose documentation for the current release or an older Kora release.
+---
+
+# Documentation versions
+
+The main documentation describes the current development branch. Release
+documentation is kept with each tagged release so commands and language
+features can be matched to the version you installed.
+
+## Available versions
+
+| Version | Documentation | Release |
+| --- | --- | --- |
+| Latest | [Read the current documentation](/) | [main branch](https://github.com/ImAbhishekTomar/kora-lang/tree/main) |
+| `0.0.2` | [Read the `0.0.2` source snapshot](https://github.com/ImAbhishekTomar/kora-lang/tree/v0.0.2/app) | [Release `v0.0.2`](https://github.com/ImAbhishekTomar/kora-lang/releases/tag/v0.0.2) |
+| `0.0.1` | [Read the `0.0.1` source snapshot](https://github.com/ImAbhishekTomar/kora-lang/tree/v0.0.1/app) | [Release `v0.0.1`](https://github.com/ImAbhishekTomar/kora-lang/releases/tag/v0.0.1) |
+
+The release page contains the matching CLI archives, checksums, and VS Code
+extension package for that version. The source snapshot is useful when you
+need to check the exact documentation that shipped with a release.
+
+## Choose the version matching your CLI
+
+```bash
+kora --version
+```
+
+Then choose the same version above. If you installed with Homebrew, run
+`brew upgrade kora` to follow the latest formula. If you need an older version, use the
+matching release archive or npm version, for example:
+
+```bash
+npm install -g @abhishektomar/kora-cli@0.0.2
+```
