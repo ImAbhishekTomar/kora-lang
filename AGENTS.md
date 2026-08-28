@@ -48,11 +48,12 @@ order:
 - `crates/kora-dap/src/session.rs` — new launch options, capabilities, or
   requests
 - `editors/vscode/syntaxes/kora.tmLanguage.json` — highlighting
-- `editors/vscode/package.json` — bump `version`; add keywords if the feature
-  is something people would search for. A change here is only picked up when
-  VS Code restarts, and a dev install's symlink should be renamed to match the
-  new version or the extension scanner may serve the manifest it cached under
-  the old one. Test a manifest change with
+- `editors/vscode/package.json` — add keywords if the feature is something
+  people would search for. Do **not** hand-edit `version`: release-please owns
+  every version in the repository (see [Releasing](#releasing)). A change here
+  is only picked up when VS Code restarts, and a dev install's symlink should
+  be renamed to match the manifest version or the extension scanner may serve
+  the manifest it cached under the old one. Test a manifest change with
   `npx @vscode/vsce package --no-dependencies`, which runs the same validation
   the release does
 - `editors/vscode/README.md` — the feature list is the marketplace page
@@ -102,6 +103,35 @@ cargo build && python3 scripts/check_docs.py --kora ./target/debug/kora
 documented command and flag exists, and checks every internal link. It is the
 backstop for the rule above, not a replacement for it: it cannot tell that a
 feature is missing from a page, only that what is written is wrong.
+
+## Releasing
+
+Nobody picks a version number by hand. Every push to `main` is read as
+[Conventional Commits](https://www.conventionalcommits.org), and
+release-please keeps one open `chore: release` pull request holding the next
+version and the generated `CHANGELOG.md`:
+
+| commit prefix | effect on the version |
+|---|---|
+| `fix:` | patch — `0.1.0` to `0.1.1` |
+| `feat:` | minor — `0.1.0` to `0.2.0` |
+| `feat!:` or a `BREAKING CHANGE:` footer | major, and minor while below `1.0.0` |
+| `docs:`, `test:`, `chore:`, `ci:`, `refactor:` | none |
+
+So the commit message *is* the release decision, which is why the prefix is
+not decoration. Merging the release PR tags `vX.Y.Z`, and that tag is what
+`release.yml` already listens for — the build, the archives, Homebrew,
+crates.io, npm, and both extension marketplaces are unchanged.
+
+Four files carry a version, and all four move together in that PR:
+`Cargo.toml` (the workspace and every internal path dependency, marked with
+`# x-release-please-version`), `npm/package.json`, and
+`editors/vscode/package.json`. `release.yml` verifies the tag matches
+`Cargo.toml` and refuses to publish a mismatch, so a missed bump fails the
+release instead of shipping a wrong number.
+
+A release PR is a pull request like any other: if the version or the notes
+look wrong, say so there rather than tagging by hand.
 
 ## House style
 

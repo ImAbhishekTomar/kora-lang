@@ -1,0 +1,36 @@
+# Versions are derived from commit messages, not chosen by hand.
+#
+# Every push to main is read as Conventional Commits: a `feat` bumps the
+# minor, a `fix` the patch, a `!` or `BREAKING CHANGE` the major. The action
+# keeps one open "chore: release" pull request holding the bump and the
+# generated CHANGELOG. Merging that PR tags `vX.Y.Z`, and the tag is what
+# `release.yml` already listens for — so this workflow adds the deciding and
+# the changelog, and changes nothing about how a release is built.
+#
+# Why a pull request rather than tagging on every push: a release is a
+# decision, and the PR is where it gets made. The diff shows exactly which
+# version and which notes are about to ship, and nothing is published until
+# someone merges it.
+name: Release Please
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  release-please:
+    name: Maintain the release pull request
+    runs-on: ubuntu-latest
+    steps:
+      - uses: googleapis/release-please-action@v4
+        with:
+          config-file: release-please-config.json
+          manifest-file: .release-please-manifest.json
+          # The default GITHUB_TOKEN cannot trigger another workflow, so a
+          # tag it pushes would not start `release.yml`. A PAT with `repo`
+          # scope makes the tag look like a person pushed it.
+          token: ${{ secrets.RELEASE_PLEASE_TOKEN || secrets.GITHUB_TOKEN }}
