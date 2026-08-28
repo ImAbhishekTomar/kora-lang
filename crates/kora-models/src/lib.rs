@@ -17,7 +17,16 @@ pub use provider::parse_model_spec;
 pub struct Schema {
     pub type_name: String,
     /// Ordered field list.
-    pub fields: Vec<(String, FieldType)>,
+    pub fields: Vec<SchemaField>,
+}
+
+/// A model-visible field and its native Kora metadata.
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SchemaField {
+    pub name: String,
+    pub field_type: FieldType,
+    pub description: Option<String>,
+    pub pattern: Option<String>,
 }
 
 #[derive(Debug, Clone, serde::Serialize)]

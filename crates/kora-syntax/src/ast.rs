@@ -201,6 +201,16 @@ pub struct FieldDef {
     pub span: Span,
     /// `classified` marker on the field: values read from it carry the label.
     pub classified: bool,
+    /// Human-readable guidance and executable constraints for this field.
+    pub metadata: FieldMetadata,
+}
+
+/// Native field metadata. Both indented metadata and `@name(...)` syntax
+/// populate this structure, so they have identical behavior.
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct FieldMetadata {
+    pub description: Option<String>,
+    pub pattern: Option<String>,
 }
 
 /// Type annotations. Kept simple for Phase 1; grows with the checker.

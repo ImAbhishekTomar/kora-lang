@@ -3,6 +3,7 @@
 
 type Expense:
     merchant: str
+        description: "Merchant identifier from the source expense record"
     amount: float
     category: str
     policy_violation: bool

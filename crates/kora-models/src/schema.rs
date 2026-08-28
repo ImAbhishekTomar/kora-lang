@@ -1,6 +1,6 @@
 //! JSON schema generation and the prompt contract shared by all providers.
 
-use crate::{FieldType, Schema};
+use crate::{FieldType, Schema, SchemaField};
 use serde_json::{json, Value};
 
 /// Reserved field used for explicit refusal. The model puts a non-empty
@@ -15,9 +15,9 @@ pub const UNCERTAIN_KEY: &str = "__uncertain__";
 pub fn build_json_schema(schema: &Schema) -> Value {
     let mut properties = serde_json::Map::new();
     let mut required: Vec<Value> = Vec::new();
-    for (name, field_type) in &schema.fields {
-        properties.insert(name.clone(), field_type_schema(field_type));
-        required.push(Value::String(name.clone()));
+    for field in &schema.fields {
+        properties.insert(field.name.clone(), field_schema(field));
+        required.push(Value::String(field.name.clone()));
     }
     properties.insert(
         UNCERTAIN_KEY.to_string(),
@@ -35,14 +35,25 @@ pub fn build_json_schema(schema: &Schema) -> Value {
     })
 }
 
-fn field_type_schema(field_type: &FieldType) -> Value {
-    match field_type {
+fn field_schema(field: &SchemaField) -> Value {
+    let mut schema = match field.field_type {
         FieldType::Str => json!({"type": "string"}),
         FieldType::Int => json!({"type": "integer"}),
         FieldType::Float => json!({"type": "number"}),
         FieldType::Bool => json!({"type": "boolean"}),
         FieldType::ListOfStr => json!({"type": "array", "items": {"type": "string"}}),
+    };
+    let object = schema.as_object_mut().expect("field schemas are objects");
+    if let Some(description) = &field.description {
+        object.insert(
+            "description".to_string(),
+            Value::String(description.clone()),
+        );
     }
+    if let Some(pattern) = &field.pattern {
+        object.insert("pattern".to_string(), Value::String(pattern.clone()));
+    }
+    schema
 }
 
 /// System message explaining the output contract.
@@ -50,7 +61,16 @@ pub fn system_prompt(schema: &Schema) -> String {
     let field_list = schema
         .fields
         .iter()
-        .map(|(name, ft)| format!("- {name}: {}", ft.display_name()))
+        .map(|field| {
+            let mut line = format!("- {}: {}", field.name, field.field_type.display_name());
+            if let Some(description) = &field.description {
+                line.push_str(&format!(" - {description}"));
+            }
+            if let Some(pattern) = &field.pattern {
+                line.push_str(&format!(" (must match /{pattern}/)"));
+            }
+            line
+        })
         .collect::<Vec<_>>()
         .join("\n");
     format!(
@@ -83,11 +103,36 @@ mod tests {
         Schema {
             type_name: "Expense".to_string(),
             fields: vec![
-                ("merchant".to_string(), FieldType::Str),
-                ("amount_cents".to_string(), FieldType::Int),
-                ("confidence_notes".to_string(), FieldType::ListOfStr),
-                ("recurring".to_string(), FieldType::Bool),
-                ("tax_rate".to_string(), FieldType::Float),
+                SchemaField {
+                    name: "merchant".to_string(),
+                    field_type: FieldType::Str,
+                    description: Some("Merchant name".to_string()),
+                    pattern: Some("^[A-Za-z]+$".to_string()),
+                },
+                SchemaField {
+                    name: "amount_cents".to_string(),
+                    field_type: FieldType::Int,
+                    description: None,
+                    pattern: None,
+                },
+                SchemaField {
+                    name: "confidence_notes".to_string(),
+                    field_type: FieldType::ListOfStr,
+                    description: None,
+                    pattern: None,
+                },
+                SchemaField {
+                    name: "recurring".to_string(),
+                    field_type: FieldType::Bool,
+                    description: None,
+                    pattern: None,
+                },
+                SchemaField {
+                    name: "tax_rate".to_string(),
+                    field_type: FieldType::Float,
+                    description: None,
+                    pattern: None,
+                },
             ],
         }
     }
@@ -98,7 +143,7 @@ mod tests {
         let expected = json!({
             "type": "object",
             "properties": {
-                "merchant": {"type": "string"},
+                "merchant": {"type": "string", "description": "Merchant name", "pattern": "^[A-Za-z]+$"},
                 "amount_cents": {"type": "integer"},
                 "confidence_notes": {"type": "array", "items": {"type": "string"}},
                 "recurring": {"type": "boolean"},
@@ -131,7 +176,7 @@ mod tests {
         let prompt = system_prompt(&sample_schema());
         assert!(prompt.contains("Expense"));
         assert!(prompt.contains(UNCERTAIN_KEY));
-        assert!(prompt.contains("merchant: string"));
+        assert!(prompt.contains("merchant: string - Merchant name (must match /^[A-Za-z]+$/)"));
         assert!(prompt.contains("amount_cents: integer"));
     }
 

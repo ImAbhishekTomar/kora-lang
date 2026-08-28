@@ -135,6 +135,29 @@ print(c.n)
 }
 
 #[test]
+fn field_metadata_validates_construction_and_assignment() {
+    let src = "\
+type Expense:
+    merchant: str
+        description: \"Exactly three uppercase characters\"
+        pattern: \"^[A-Z]{3}$\"
+
+e = Expense(\"ABC\")
+e.merchant = \"XYZ\"
+print(e.merchant)
+";
+    assert_eq!(run(src), vec!["XYZ"]);
+    assert!(
+        run_err("type E:\n    code: str @pattern(\"^[A-Z]{3}$\")\ne = E(\"bad\")\n")
+            .contains("must match pattern")
+    );
+    assert!(run_err(
+        "type E:\n    code: str @pattern(\"^[A-Z]{3}$\")\ne = E(\"ABC\")\ne.code = \"bad\"\n"
+    )
+    .contains("must match pattern"));
+}
+
+#[test]
 fn lists_dicts_slices() {
     let src = "\
 xs = [10, 20, 30, 40]

@@ -203,7 +203,14 @@ impl Checker<'_> {
                         .iter()
                         .map(|f| {
                             let marker = if f.classified { "classified " } else { "" };
-                            format!("    {marker}{}: {}", f.name, f.ty.display())
+                            let mut line = format!("    {marker}{}: {}", f.name, f.ty.display());
+                            if let Some(description) = &f.metadata.description {
+                                line.push_str(&format!(" @description({description:?})"));
+                            }
+                            if let Some(pattern) = &f.metadata.pattern {
+                                line.push_str(&format!(" @pattern({pattern:?})"));
+                            }
+                            line
                         })
                         .collect();
                     self.type_names.insert(name.clone());
@@ -368,6 +375,7 @@ impl Checker<'_> {
             StmtKind::TypeDef { fields, .. } => {
                 for field in fields {
                     self.check_type(&field.ty, field.span);
+                    self.check_field_metadata(field);
                 }
             }
             StmtKind::Return(Some(e)) => self.check_expr(e),
@@ -463,6 +471,31 @@ impl Checker<'_> {
                 Diagnostic::error(span, format!("`{name}` is not a declared type"))
                     .with_hint("declare it with `type Name:` and typed fields below"),
             );
+        }
+    }
+
+    fn check_field_metadata(&mut self, field: &FieldDef) {
+        let Some(pattern) = &field.metadata.pattern else {
+            return;
+        };
+        if field.ty.display() != "str" {
+            self.analysis.diagnostics.push(
+                Diagnostic::error(
+                    field.span,
+                    format!("field `{}` uses `pattern` but is not a `str`", field.name),
+                )
+                .with_hint("`pattern` is only valid on `str` fields"),
+            );
+            return;
+        }
+        if let Err(error) = regex::Regex::new(pattern) {
+            self.analysis.diagnostics.push(Diagnostic::error(
+                field.span,
+                format!(
+                    "field `{}` has an invalid pattern `{pattern}`: {error}",
+                    field.name
+                ),
+            ));
         }
     }
 
@@ -771,5 +804,22 @@ def main():
     fn tests_appear_in_the_outline() {
         let analysis = check("test \"it works\":\n    assert True\n");
         assert!(analysis.symbols.contains_key("test it works"));
+    }
+
+    #[test]
+    fn pattern_metadata_is_checked_and_exposed_in_hover() {
+        let valid = "type E:\n    code: str @description(\"Identifier\") @pattern(\"^[A-Z]+$\")\n";
+        let analysis = check(valid);
+        assert!(
+            analysis.diagnostics.is_empty(),
+            "{:?}",
+            analysis.diagnostics
+        );
+        assert!(analysis.symbols["E"]
+            .detail
+            .contains("@description(\"Identifier\")"));
+
+        let invalid = "type E:\n    count: int @pattern(\"[0-9]+\")\n";
+        assert!(messages(invalid)[0].contains("is not a `str`"));
     }
 }

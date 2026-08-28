@@ -1,8 +1,8 @@
 {
   "entries": [
     {
-      "key": "1ece8ae53042b560",
-      "site": "examples/01_expense_check.ko:18",
+      "key": "68d6915cc49a32af",
+      "site": "examples/01_expense_check.ko:19",
       "model": "ollama:qwen3:8b",
       "prompt": "extract the expense; policy_violation is True if a single meal is over $200",
       "data": "\"AWS invoice, $4200, cloud hosting for production\"",
@@ -10,17 +10,17 @@
         "kind": "ok",
         "fields": {
           "amount": 4200.0,
-          "category": "cloud hosting",
+          "category": "cloud hosting for production",
           "merchant": "AWS",
           "policy_violation": false
         },
-        "tokens_in": 487,
-        "tokens_out": 47
+        "tokens_in": 545,
+        "tokens_out": 49
       }
     },
     {
-      "key": "e4f97dd8f4686497",
-      "site": "examples/01_expense_check.ko:18",
+      "key": "a1166be129048c92",
+      "site": "examples/01_expense_check.ko:19",
       "model": "ollama:qwen3:8b",
       "prompt": "extract the expense; policy_violation is True if a single meal is over $200",
       "data": "\"Steakhouse dinner for 2, $680, client entertainment\"",
@@ -32,13 +32,13 @@
           "merchant": "Steakhouse",
           "policy_violation": true
         },
-        "tokens_in": 587,
+        "tokens_in": 994,
         "tokens_out": 48
       }
     },
     {
-      "key": "afb968fbb5ed6f79",
-      "site": "examples/01_expense_check.ko:18",
+      "key": "8ee9166aa48cdc9c",
+      "site": "examples/01_expense_check.ko:19",
       "model": "ollama:qwen3:8b",
       "prompt": "extract the expense; policy_violation is True if a single meal is over $200",
       "data": "\"Notebook and pens, $23, office supplies\"",
@@ -47,11 +47,11 @@
         "fields": {
           "amount": 23.0,
           "category": "office supplies",
-          "merchant": "Notebook and pens",
+          "merchant": "office supplies",
           "policy_violation": false
         },
-        "tokens_in": 544,
-        "tokens_out": 41
+        "tokens_in": 457,
+        "tokens_out": 39
       }
     }
   ]

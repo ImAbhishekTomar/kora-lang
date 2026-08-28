@@ -299,15 +299,25 @@ pub(crate) fn ureq_transport(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AnalyzeOutcome, FieldType, Schema};
+    use crate::{AnalyzeOutcome, FieldType, Schema, SchemaField};
     use std::cell::RefCell;
 
     fn schema() -> Schema {
         Schema {
             type_name: "Insight".into(),
             fields: vec![
-                ("summary".into(), FieldType::Str),
-                ("count".into(), FieldType::Int),
+                SchemaField {
+                    name: "summary".into(),
+                    field_type: FieldType::Str,
+                    description: None,
+                    pattern: None,
+                },
+                SchemaField {
+                    name: "count".into(),
+                    field_type: FieldType::Int,
+                    description: None,
+                    pattern: None,
+                },
             ],
         }
     }

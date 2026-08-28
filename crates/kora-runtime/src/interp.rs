@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use std::rc::Rc;
 
 use kora_models::{
-    AnalyzeOutcome, AnalyzeRequest, FieldType, Schema, Step, ToolExchange, ToolSpec,
+    AnalyzeOutcome, AnalyzeRequest, FieldType, Schema, SchemaField, Step, ToolExchange, ToolSpec,
 };
 use kora_syntax::ast::*;
 use kora_syntax::token::Span;
@@ -364,6 +364,9 @@ impl Interpreter {
                 Ok(Flow::Normal)
             }
             StmtKind::TypeDef { name, fields } => {
+                for field in fields {
+                    self.validate_field_metadata(field)?;
+                }
                 self.types.insert(name.clone(), fields.clone());
                 Ok(Flow::Normal)
             }
@@ -609,8 +612,15 @@ impl Interpreter {
             }
             ExprKind::Attr { object, name } => {
                 let obj = self.eval(object, scope)?;
-                match obj {
-                    Value::Object { fields, .. } => {
+                match obj.unlabeled() {
+                    Value::Object { type_name, fields } => {
+                        if let Some(field) = self
+                            .types
+                            .get(type_name.as_str())
+                            .and_then(|declared| declared.iter().find(|field| field.name == *name))
+                        {
+                            self.validate_field_value(field, &value, target.span)?;
+                        }
                         fields.borrow_mut().insert(name.clone(), value);
                         Ok(())
                     }
@@ -681,6 +691,52 @@ impl Interpreter {
         } else {
             Err(RuntimeError::new(
                 format!("expected `{}`, got `{}`", ty.display(), actual),
+                span,
+            ))
+        }
+    }
+
+    fn validate_field_metadata(&self, field: &FieldDef) -> Result<(), RuntimeError> {
+        let Some(pattern) = &field.metadata.pattern else {
+            return Ok(());
+        };
+        if field.ty.display() != "str" {
+            return Err(RuntimeError::new(
+                format!("field `{}` uses `pattern` but is not a `str`", field.name),
+                field.span,
+            )
+            .with_hint("`pattern` is only valid on `str` fields"));
+        }
+        regex::Regex::new(pattern).map_err(|error| {
+            RuntimeError::new(
+                format!(
+                    "field `{}` has an invalid pattern `{pattern}`: {error}",
+                    field.name
+                ),
+                field.span,
+            )
+        })?;
+        Ok(())
+    }
+
+    fn validate_field_value(
+        &self,
+        field: &FieldDef,
+        value: &Value,
+        span: Span,
+    ) -> Result<(), RuntimeError> {
+        let Some(pattern) = &field.metadata.pattern else {
+            return Ok(());
+        };
+        let Value::Str(text) = value.unlabeled() else {
+            return Ok(());
+        };
+        let regex = regex::Regex::new(pattern).expect("validated when the type is declared");
+        if regex.is_match(text) {
+            Ok(())
+        } else {
+            Err(RuntimeError::new(
+                format!("field `{}` must match pattern `{pattern}`", field.name),
                 span,
             ))
         }
@@ -1064,6 +1120,7 @@ impl Interpreter {
         }
         let mut map = HashMap::new();
         for (fd, v) in fields.iter().zip(args) {
+            self.validate_field_value(fd, &v, span)?;
             map.insert(fd.name.clone(), v);
         }
         Ok(Value::Object {
@@ -1949,7 +2006,12 @@ impl Interpreter {
                     ));
                 }
             };
-            out.push((field.name.clone(), ft));
+            out.push(SchemaField {
+                name: field.name.clone(),
+                field_type: ft,
+                description: field.metadata.description.clone(),
+                pattern: field.metadata.pattern.clone(),
+            });
         }
         Ok(Schema {
             type_name: type_name.to_string(),
@@ -1975,11 +2037,14 @@ impl Interpreter {
                 self.tokens_out += tokens_out;
                 self.budget.charge_call(tokens_in, tokens_out);
                 let mut fields = HashMap::new();
-                for (name, _) in &schema.fields {
-                    let raw = fields_json.get(name).ok_or_else(|| {
-                        RuntimeError::new(format!("model result is missing field `{name}`"), span)
+                for field in &schema.fields {
+                    let raw = fields_json.get(&field.name).ok_or_else(|| {
+                        RuntimeError::new(
+                            format!("model result is missing field `{}`", field.name),
+                            span,
+                        )
                     })?;
-                    fields.insert(name.clone(), json_to_value(raw));
+                    fields.insert(field.name.clone(), json_to_value(raw));
                 }
                 Ok(Value::Variant {
                     tag: Rc::new("Ok".to_string()),

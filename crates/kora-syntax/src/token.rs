@@ -100,6 +100,7 @@ pub enum TokenKind {
     Comma,
     Colon,
     Dot,
+    At,
 
     // Layout
     Newline,
@@ -175,6 +176,7 @@ impl fmt::Display for TokenKind {
             Comma => write!(f, ","),
             Colon => write!(f, ":"),
             Dot => write!(f, "."),
+            At => write!(f, "@"),
             Newline => write!(f, "newline"),
             Indent => write!(f, "indent"),
             Dedent => write!(f, "dedent"),

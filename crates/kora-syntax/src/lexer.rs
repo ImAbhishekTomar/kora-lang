@@ -429,6 +429,7 @@ impl<'a> Lexer<'a> {
             (b',', _) => (Comma, 1),
             (b':', _) => (Colon, 1),
             (b'.', _) => (Dot, 1),
+            (b'@', _) => (At, 1),
             _ => {
                 return Err(SyntaxError::new(
                     format!("unexpected character `{}`", c as char),
