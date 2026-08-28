@@ -20,9 +20,12 @@ kora-syntax = { path = "crates/kora-syntax" }
 kora-types = { path = "crates/kora-types" }
 kora-runtime = { path = "crates/kora-runtime" }
 kora-models = { path = "crates/kora-models" }
+kora-lsp = { path = "crates/kora-lsp" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "2", features = ["json"] }
 toml = "0.8"
 regex = "1"
+lsp-server = "0.7"
+lsp-types = "0.95"
 rusqlite = { version = "0.32", features = ["bundled"] }
