@@ -45,6 +45,10 @@ pub enum Value {
     TypeRef {
         name: Rc<String>,
     },
+    /// A Python module reached through the sidecar worker.
+    PyModule {
+        module: Rc<String>,
+    },
     /// A connected MCP server, from `use mcp github as gh`.
     McpServer {
         alias: Rc<String>,
@@ -81,6 +85,7 @@ impl Value {
             Value::Variant { tag, .. } => tag.as_str().into(),
             Value::Module { name } => format!("module {name}"),
             Value::TypeRef { name } => format!("type {name}"),
+            Value::PyModule { module } => format!("python module {module}"),
             Value::McpServer { alias } => format!("mcp server {alias}"),
             Value::McpTool { server, name } => format!("tool {server}.{name}"),
             Value::Labeled { inner, .. } => inner.type_name(),
@@ -138,7 +143,8 @@ impl Value {
             | Value::Module { .. }
             | Value::TypeRef { .. }
             | Value::McpServer { .. }
-            | Value::McpTool { .. } => true,
+            | Value::McpTool { .. }
+            | Value::PyModule { .. } => true,
             Value::Labeled { inner, .. } => inner.truthy(),
         }
     }
@@ -254,6 +260,7 @@ impl fmt::Display for Value {
             }
             Value::Module { name } => write!(f, "<module {name}>"),
             Value::TypeRef { name } => write!(f, "<type {name}>"),
+            Value::PyModule { module } => write!(f, "<python module {module}>"),
             Value::McpServer { alias } => write!(f, "<mcp server {alias}>"),
             Value::McpTool { server, name } => write!(f, "<tool {server}.{name}>"),
             // Printing is a local action, not an export, so the value shows

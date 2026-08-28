@@ -156,6 +156,10 @@ pub struct Interpreter {
     /// Connected MCP servers, by configured name. Shared so parallel branches
     /// reuse one connection rather than spawning a process per agent.
     pub mcp: Arc<Mutex<HashMap<String, kora_mcp::Server>>>,
+    /// The Python sidecar, started on first use and shared thereafter. One
+    /// worker per run rather than one per call, since starting an
+    /// interpreter is the expensive part.
+    pub python: Arc<Mutex<Option<kora_python::Worker>>>,
 }
 
 /// Tags a program may construct directly: the outcomes of a model call and
@@ -222,6 +226,7 @@ impl Interpreter {
             tracer: Arc::new(Tracer::disabled()),
             parent_span: Option::None,
             mcp: Arc::new(Mutex::new(HashMap::new())),
+            python: Arc::new(Mutex::new(Option::None)),
         }
     }
 
@@ -405,6 +410,14 @@ impl Interpreter {
                 let outcome = self.exec_block(body, scope);
                 self.mocked_analyze.pop();
                 outcome
+            }
+            StmtKind::UsePython { module, alias } => {
+                let value = Value::PyModule {
+                    module: Rc::new(module.clone()),
+                };
+                scope.insert(alias.clone(), value.clone());
+                self.globals.insert(alias.clone(), value);
+                Ok(Flow::Normal)
             }
             StmtKind::UseMcp { server, alias } => {
                 self.connect_mcp(server, stmt.span)?;
@@ -936,6 +949,15 @@ impl Interpreter {
                     }
                     // `json.parse(...)` and friends: a module member call.
                     ExprKind::Attr { object, name } => {
+                        // `stats.mean(xs)`: a call into the Python sidecar.
+                        if let ExprKind::Name(alias) = &object.kind {
+                            if let Ok(Value::PyModule { module }) =
+                                self.lookup(alias, scope, object.span)
+                            {
+                                let module = module.to_string();
+                                return self.call_python(&module, name, arg_vals, expr.span);
+                            }
+                        }
                         if let ExprKind::Name(module_alias) = &object.kind {
                             if let Ok(Value::Module { name: module_name }) =
                                 self.lookup(module_alias, scope, object.span)
@@ -2072,6 +2094,7 @@ fn value_to_json(value: &Value) -> serde_json::Value {
         Value::Module { name } => J::String(format!("<module {name}>")),
         Value::TypeRef { name } => J::String(format!("<type {name}>")),
         Value::McpServer { alias } => J::String(format!("<mcp server {alias}>")),
+        Value::PyModule { module } => J::String(format!("<python module {module}>")),
         Value::McpTool { server, name } => J::String(format!("<tool {server}.{name}>")),
         // Serialization is only reached after a label check has passed, so
         // the wrapper is transparent here.
@@ -3215,5 +3238,93 @@ impl Interpreter {
     /// would otherwise need external resources.
     pub fn bind_global(&mut self, name: &str, value: Value) {
         self.globals.insert(name.to_string(), value);
+    }
+}
+
+/// The Python sidecar.
+impl Interpreter {
+    /// Call `module.function(...)` in the worker, starting it if needed.
+    fn call_python(
+        &mut self,
+        module: &str,
+        function: &str,
+        args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, RuntimeError> {
+        // Python is a separate process, so it is a sink: a secret released to
+        // a model has not been released to Python.
+        for arg in &args {
+            if self.deep_label(arg).is_classified() && !arg.label().may_reach("python") {
+                return Err(RuntimeError::new(
+                    "classified data cannot reach Python (no declassify in scope)",
+                    span,
+                )
+                .with_hint(
+                    "Python runs in its own process, so it is its own sink: wrap it in `declassify <value> for python:` and allow that sink in kora.toml",
+                ));
+            }
+        }
+
+        let encoded: Vec<serde_json::Value> =
+            args.iter().map(|v| value_to_json(v.unlabeled())).collect();
+
+        // A call into Python is nondeterministic as far as the journal is
+        // concerned, so a durable run replays it rather than repeating it.
+        let site = format!("{}:{}#python", self.program_name, span.line);
+        if let Some(recorded) = self.journal_lookup(&site, span)? {
+            return Ok(python_result_value(&recorded));
+        }
+
+        let mut worker = self.python.lock().unwrap_or_else(|e| e.into_inner());
+        if worker.is_none() {
+            *worker = Some(
+                kora_python::Worker::start(&self.config.python)
+                    .map_err(|e| RuntimeError::new(e.message, span))?,
+            );
+        }
+        let outcome = worker
+            .as_mut()
+            .expect("just started")
+            .call(module, function, encoded)
+            .map_err(|e| RuntimeError::new(e.message, span))?;
+        drop(worker);
+
+        let encoded_result = match &outcome {
+            Ok(value) => serde_json::json!({ "ok": true, "result": value }).to_string(),
+            Err(e) => serde_json::json!({ "ok": false, "error": e.message }).to_string(),
+        };
+        self.journal_record(&site, "python", &encoded_result, span)?;
+
+        Ok(python_result_value(&encoded_result))
+    }
+}
+
+/// Turn a recorded or fresh Python outcome into `Ok(value)` / `Err(reason)`.
+///
+/// Everything Python returns is `unverified`: it came from outside.
+fn python_result_value(encoded: &str) -> Value {
+    let parsed: serde_json::Value =
+        serde_json::from_str(encoded).unwrap_or(serde_json::Value::Null);
+    if parsed
+        .get("ok")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false)
+    {
+        let inner = parsed
+            .get("result")
+            .cloned()
+            .unwrap_or(serde_json::Value::Null);
+        return Value::Variant {
+            tag: Rc::new("Ok".to_string()),
+            payload: vec![json_to_value(&inner).with_label(Label::UNVERIFIED)],
+        };
+    }
+    let reason = parsed
+        .get("error")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("the Python call failed");
+    Value::Variant {
+        tag: Rc::new("Err".to_string()),
+        payload: vec![Value::Str(Rc::new(reason.to_string()))],
     }
 }

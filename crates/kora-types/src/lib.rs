@@ -215,6 +215,17 @@ impl Checker<'_> {
                         doc: None,
                     });
                 }
+                StmtKind::UsePython { module, alias } => {
+                    self.define_symbol(Symbol {
+                        name: alias.clone(),
+                        kind: SymbolKind::Module,
+                        span: stmt.span,
+                        detail: format!("use python {module}"),
+                        doc: Some(
+                            "A Python module, reached through the sidecar worker.".to_string(),
+                        ),
+                    });
+                }
                 StmtKind::UseMcp { server, alias } => {
                     self.define_symbol(Symbol {
                         name: alias.clone(),
@@ -397,6 +408,11 @@ impl Checker<'_> {
                 if let Some(m) = message {
                     self.check_expr(m);
                 }
+            }
+            StmtKind::UsePython { alias, .. } => {
+                // Which functions a Python module has is a runtime question,
+                // so the checker records the alias and stops there.
+                self.declare(alias);
             }
             StmtKind::UseMcp { alias, .. } => {
                 // Which servers exist is a runtime question: the checker

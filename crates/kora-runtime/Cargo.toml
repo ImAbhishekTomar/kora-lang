@@ -8,6 +8,7 @@ license.workspace = true
 kora-syntax.workspace = true
 kora-models.workspace = true
 kora-mcp.workspace = true
+kora-python.workspace = true
 serde = { workspace = true }
 serde_json = { workspace = true }
 toml = { workspace = true }
@@ -18,3 +19,4 @@ ureq = { workspace = true }
 [dev-dependencies]
 kora-types.workspace = true
 kora-mcp.workspace = true
+kora-python.workspace = true

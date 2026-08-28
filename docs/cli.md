@@ -114,6 +114,14 @@ openai      = { allow = ["internal"], deny = ["classified"] }
 allow_private = false               # loopback and private ranges refused
 timeout_secs = 30                   # 0 is clamped, not honoured
 
+[python]
+command = "python3"                 # or a virtualenv's interpreter
+
+[mcp.github]                        # how to launch a server
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+env = { GITHUB_PERSONAL_ACCESS_TOKEN = "$GITHUB_TOKEN" }
+
 [telemetry]
 exporter = "file"                   # "file" | "otlp" | omit for none
 path = ".kora/last.trace.json"

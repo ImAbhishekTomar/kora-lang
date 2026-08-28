@@ -234,6 +234,24 @@ out of source.
 A server runs in its own process, so it is a sink of its own. Releasing a
 secret to the model does not release it to the server.
 
+## Python
+
+```python
+use python statistics as stats
+
+match stats.mean(readings):
+    case Ok(m):     print(m)
+    case Err(why):  print(why)
+```
+
+The long-tail escape hatch, as a sidecar rather than an embed. Python runs in
+its own process and values cross as JSON, so Kora keeps no GIL, durable runs
+stay resumable, and labels stay meaningful. A Python exception is `Err`.
+
+Chosen over embedding CPython deliberately — see
+[DECISIONS.md](DECISIONS.md#ecosystem-strategy) for why embedding would break
+three of the four thesis pillars.
+
 ## Testing
 
 ```bash
@@ -320,8 +338,8 @@ Early development, pre-alpha, built for personal use first. Everything
 documented here works and is covered by tests; the test suite never touches
 the network.
 
-Not built yet: classes, list comprehensions, multi-file programs,
-`try`/`except`, and a Python bridge. See
+Not built yet: classes, list comprehensions, multi-file programs, and
+`try`/`except`. See
 [DECISIONS.md](DECISIONS.md) for what is planned and what is deliberately
 excluded.
 
@@ -334,6 +352,7 @@ crates/kora-runtime   interpreter, agents, budgets, labels, journal, stdlib
 crates/kora-models    OpenAI + Ollama clients, schema-constrained output
 crates/kora-lsp       language server (diagnostics, hover, definition)
 crates/kora-mcp       Model Context Protocol client
+crates/kora-python    Python sidecar worker
 crates/kora-cli       the `kora` binary
 editors/vscode        VS Code extension
 examples/             runnable .ko programs

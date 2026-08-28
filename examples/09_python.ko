@@ -1,0 +1,49 @@
+# Python, as a sidecar rather than an embed.
+#
+# Python runs in its own process. Values cross as JSON: data in, data out,
+# no live objects and no callbacks back into Kora. That boundary is what
+# keeps the rest of the language intact -- no GIL in Kora, durable runs still
+# resumable, and labels still meaningful.
+#
+# The cost, accepted knowingly: no `df.groupby().apply(lambda ...)`.
+#
+#   kora run examples/09_python.ko
+
+use python statistics as stats
+use python math
+use python os.path as pypath
+
+def main():
+    # Calls return Ok/Err like everything else fallible.
+    match stats.mean([1, 2, 3, 4]):
+        case Ok(m):
+            print(f"mean: {m}")
+        case Err(why):
+            print(f"failed: {why}")
+
+    # A Python exception is a value, not a crash.
+    match math.sqrt(-1):
+        case Ok(r):
+            print(f"sqrt: {r}")
+        case Err(why):
+            print(f"python raised: {why}")
+
+    # A missing function says what the module actually has.
+    match stats.nope([1]):
+        case Ok(r):
+            print("unreachable")
+        case Err(why):
+            print("missing function reported with suggestions")
+
+    # What Python returns came from outside, so it is unverified:
+    #
+    #   match pypath.expanduser("~/notes.txt"):
+    #       case Ok(path):
+    #           fs.read(path)     # error: a path that came from outside
+    #
+    # And Python is its own sink, so a secret released to a model has not
+    # been released to Python:
+    #
+    #   declassify salary as pay for local_model:
+    #       stats.mean([pay])     # error: classified data cannot reach Python
+    print("done")

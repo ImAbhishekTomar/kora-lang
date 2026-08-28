@@ -72,6 +72,7 @@ fn walk_stmt(stmt: &Stmt, file: &str, out: &mut Vec<DeclassifySite>) {
         | StmtKind::Continue
         | StmtKind::Use { .. }
         | StmtKind::UseMcp { .. }
+        | StmtKind::UsePython { .. }
         | StmtKind::Assert { .. }
         | StmtKind::Pass => {}
     }

@@ -28,6 +28,8 @@ pub struct Config {
     pub telemetry: crate::telemetry::Config,
     /// `[mcp.<name>]` server definitions: how to launch each one.
     pub mcp_servers: HashMap<String, kora_mcp::ServerConfig>,
+    /// `[python]` — which interpreter the sidecar uses.
+    pub python: kora_python::Config,
 }
 
 impl Config {
@@ -62,6 +64,11 @@ impl Config {
             http_timeout_secs: 30,
             ..Default::default()
         };
+        if let Some(section) = root.get("python").and_then(|v| v.as_table()) {
+            if let Some(command) = section.get("command").and_then(|v| v.as_str()) {
+                config.python.command = command.to_string();
+            }
+        }
         if let Some(servers) = root.get("mcp").and_then(|v| v.as_table()) {
             for (name, spec) in servers {
                 let Some(spec) = spec.as_table() else {

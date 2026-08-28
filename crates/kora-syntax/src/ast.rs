@@ -65,6 +65,13 @@ pub enum StmtKind {
         module: String,
         alias: String,
     },
+    /// `use python statistics as stats` — call into a Python module.
+    ///
+    /// Data in, data out: there are no live Python objects on this side.
+    UsePython {
+        module: String,
+        alias: String,
+    },
     /// `use mcp github as gh` — connect to a configured MCP server.
     ///
     /// The program names *which* server; how to launch it (command, args,

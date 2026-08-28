@@ -228,9 +228,9 @@ when something actually demands it (designed, not built speculatively).
 
 ## Status
 
-Phases 0 through 6 are complete, as are the standard library and MCP
-integration. What remains is a Python bridge and a package manager — see the
-ecosystem strategy above.
+Phases 0 through 6 are complete, as are the standard library, MCP
+integration, and the Python sidecar. What remains is a package manager and
+WASM components — see the ecosystem strategy above.
 
 Reference documentation lives in [docs/](docs): the
 [language](docs/language.md), the [standard library](docs/stdlib.md), and the
@@ -253,7 +253,7 @@ Ecosystem work, sequenced alongside the phases above:
 - Native stdlib: `json`, `fs`, `time`, `re`, `http`, `csv`, `sql`, `env` —
   **done**
 - MCP integration (`use mcp <server> as <alias>`) — **done**
-- Python sidecar (`use python "..."`) — on demand
+- Python sidecar (`use python <module> as <alias>`) — **done**
 - Kora package manager + WASM components — later
 
 Each phase ends with a runnable demo program. Demo programs live in

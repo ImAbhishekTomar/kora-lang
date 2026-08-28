@@ -17,6 +17,7 @@ no API key and no model installed.
 | [06_stdlib_safety.ko](06_stdlib_safety.ko) | `csv` and `http`, and the attacks that are refused | `kora run` |
 | [07_tests.ko](07_tests.ko) | `test` blocks and typed mocks | `kora test` |
 | [08_mcp.ko](08_mcp.ko) | a model calling tools from a real MCP server | `kora run` |
+| [09_python.ko](09_python.ko) | calling Python through the sidecar | `kora run` |
 
 ```bash
 kora run examples/00_basics.ko

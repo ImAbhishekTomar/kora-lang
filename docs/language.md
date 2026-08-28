@@ -369,6 +369,29 @@ declassify salary as pay for local_model:
 # error: classified data cannot reach MCP server `github`
 ```
 
+### Python
+
+```python
+use python statistics as stats
+use python os.path as pypath      # dotted names need an alias
+
+match stats.mean([1, 2, 3, 4]):
+    case Ok(m):      print(m)
+    case Err(why):   print(why)   # ValueError: math domain error
+```
+
+Python runs in its own process. Values cross as JSON — data in, data out —
+so there are no live Python objects on this side and no callbacks back into
+Kora. That boundary is what keeps the rest of the language intact: no GIL,
+durable runs still resumable, labels still meaningful.
+
+The cost, accepted knowingly: per-call serialization, and no
+`df.groupby().apply(lambda ...)`.
+
+A Python exception is `Err`, not a crash. Results are `unverified`. Python is
+its own sink, so a secret released to a model has not been released to
+Python. Set `[python] command` to point at a virtualenv's interpreter.
+
 ---
 
 ## Tests
