@@ -1,46 +1,50 @@
 {
   "entries": [
     {
-      "key": "c407c8773ac2098c",
+      "key": "bb8540dc19ea0a53",
       "site": "examples/02_triage.ko:23",
-      "model": "ollama:llama3.2:latest",
+      "model": "ollama:qwen3:8b",
+      "prompt": "classify this support ticket into severity (low/medium/high), product, and a one-line summary",
+      "data": "\"could you add a dark mode to the dashboard someday?\"",
+      "outcome": {
+        "kind": "ok",
+        "fields": {
+          "product": "dashboard",
+          "severity": "low",
+          "summary": "Request for dark mode feature addition"
+        },
+        "tokens_in": 303,
+        "tokens_out": 26
+      }
+    },
+    {
+      "key": "31d920f6f7afd3d1",
+      "site": "examples/02_triage.ko:23",
+      "model": "ollama:qwen3:8b",
       "prompt": "classify this support ticket into severity (low/medium/high), product, and a one-line summary",
       "data": "\"the checkout page returns a 500 for every card payment, nobody can buy anything\"",
       "outcome": {
         "kind": "ok",
         "fields": {
-          "product": "e-commerce",
+          "product": "E-Commerce Platform",
           "severity": "high",
-          "summary": "Checkout page returns 500 for every card payment"
+          "summary": "Checkout page returns 500 error for all card payments, preventing purchases"
         },
-        "tokens_in": 237,
-        "tokens_out": 35
+        "tokens_in": 503,
+        "tokens_out": 49
       }
     },
     {
-      "key": "6ed849cb7ddbd79a",
+      "key": "1c281bd116914f7d",
       "site": "examples/02_triage.ko:23",
-      "model": "ollama:llama3.2:latest",
-      "prompt": "classify this support ticket into severity (low/medium/high), product, and a one-line summary",
-      "data": "\"could you add a dark mode to the dashboard someday?\"",
-      "outcome": {
-        "kind": "uncertain",
-        "reason": "Insufficient data",
-        "tokens_in": 231,
-        "tokens_out": 36
-      }
-    },
-    {
-      "key": "ebc5de1c4447bc0c",
-      "site": "examples/02_triage.ko:23",
-      "model": "ollama:llama3.2:latest",
+      "model": "ollama:qwen3:8b",
       "prompt": "classify this support ticket into severity (low/medium/high), product, and a one-line summary",
       "data": "\"CSV export drops the last row when there are more than 1000 records\"",
       "outcome": {
         "kind": "uncertain",
-        "reason": "incomplete information",
-        "tokens_in": 236,
-        "tokens_out": 42
+        "reason": "Product not specified in data",
+        "tokens_in": 695,
+        "tokens_out": 51
       }
     }
   ]

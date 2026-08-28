@@ -226,6 +226,16 @@ when something actually demands it (designed, not built speculatively).
   binary, `unverified` labels (designed, waiting)
 - Public release: personal-use first; polish/marketing gloss lowest priority
 
+## Status
+
+Phases 0 through 6 are complete, as is the standard library. What remains is
+MCP integration, a Python bridge, and a package manager — see the ecosystem
+strategy above.
+
+Reference documentation lives in [docs/](docs): the
+[language](docs/language.md), the [standard library](docs/stdlib.md), and the
+[CLI](docs/cli.md). This file records *why*; those record *what*.
+
 ## Phases
 
 0. Freeze + skeleton (`kora --version`) — **done**

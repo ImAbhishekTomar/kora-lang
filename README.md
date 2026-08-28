@@ -40,18 +40,37 @@ def main():
 ## Try it
 
 ```bash
-cargo build
-./target/debug/kora run examples/00_basics.ko          # deterministic core
-./target/debug/kora run --replay examples/01_expense_check.ko   # model call, from cassette
+cargo install --path crates/kora-cli
+kora run examples/00_basics.ko                    # the deterministic core
+kora run --replay examples/01_expense_check.ko    # a model call, from a cassette
+kora test examples/07_tests.ko                    # the test runner
 ```
 
-Model calls need either an `OPENAI_API_KEY` or a running [Ollama](https://ollama.com).
-Point `[models] default` in `kora.toml` at whichever you have, then:
+Those work with no API key and no model running: the model calls replay from
+committed cassettes.
+
+To call a model for real you need either an `OPENAI_API_KEY` or a running
+[Ollama](https://ollama.com). Point `[models] default` in `kora.toml` at
+whichever you have:
 
 ```bash
-kora run --record --report examples/01_expense_check.ko   # call the model, save a cassette
-kora run --replay --report examples/01_expense_check.ko   # re-run free and deterministic
+kora run --record --report examples/01_expense_check.ko   # calls the model, saves a cassette
+kora run --replay --report examples/01_expense_check.ko   # free and deterministic
 ```
+
+Changing the configured model invalidates existing cassettes, since a
+cassette is keyed on the model as well as the prompt. Re-record with
+`--record`.
+
+## Documentation
+
+| | |
+|---|---|
+| [Language reference](docs/language.md) | syntax, semantics, and how it differs from Python |
+| [Standard library](docs/stdlib.md) | the eight modules and the defect each one fixes |
+| [CLI reference](docs/cli.md) | commands, flags, `kora.toml`, editor setup |
+| [DECISIONS.md](DECISIONS.md) | the frozen design and why each call was made |
+| [examples/](examples) | eight runnable programs, in order |
 
 ## Agents, tools, and budgets
 
@@ -280,26 +299,34 @@ cannot leak into an observability vendor by accident.
 
 ## Status
 
-Early development, pre-alpha. Built for personal use first. See
-[DECISIONS.md](DECISIONS.md) for the frozen design and phase plan.
+Early development, pre-alpha, built for personal use first. Everything
+documented here works and is covered by tests; the test suite never touches
+the network.
+
+Not built yet: classes, list comprehensions, multi-file programs,
+`try`/`except`, MCP integration, and a Python bridge. See
+[DECISIONS.md](DECISIONS.md) for what is planned and what is deliberately
+excluded.
 
 ## Layout
 
 ```
 crates/kora-syntax    lexer, parser, AST
-crates/kora-types     type checker + classified labels
-crates/kora-runtime   interpreter, agents, scheduler, budgets, cassettes
+crates/kora-types     name resolution and editor checks
+crates/kora-runtime   interpreter, agents, budgets, labels, journal, stdlib
 crates/kora-models    OpenAI + Ollama clients, schema-constrained output
-crates/kora-lsp       language server
+crates/kora-lsp       language server (diagnostics, hover, definition)
 crates/kora-cli       the `kora` binary
 editors/vscode        VS Code extension
-examples/             sample .ko programs
+examples/             runnable .ko programs
+docs/                 language, stdlib, and CLI references
 ```
 
 ## Build
 
 ```bash
 cargo build
+cargo test --workspace
 ./target/debug/kora --version
 ```
 
