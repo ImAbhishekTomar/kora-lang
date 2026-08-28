@@ -83,6 +83,15 @@ After installing both pieces:
 5. Set `kora.serverPath` if the `kora` executable is not on your `PATH`. The
    same setting points at the language server and the debug adapter.
 
+Quit and reopen VS Code after installing the extension. VS Code reads an
+extension's contributions once, at startup, so until it restarts the gutter
+will refuse breakpoints on `.ko` files and F5 will offer to find a Kora
+extension in the Marketplace. A window reload is not enough.
+
+Run `kora | grep "kora dap"` to confirm the binary the editor will use can
+debug. If it prints nothing, that `kora` predates the debugger — set
+`kora.serverPath` to an absolute path rather than reordering your `PATH`.
+
 ## Download a release archive
 
 Open the [Kora releases page](https://github.com/ImAbhishekTomar/kora-lang/releases)

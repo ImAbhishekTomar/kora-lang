@@ -193,8 +193,20 @@ docstrings, go-to-definition, an outline, completion, and run/test buttons.
 Set `kora.serverPath` if the binary is not on `PATH`.
 
 Press F5 on a `.ko` file to debug it — breakpoints in the gutter, the call
-stack, and a variables pane. No `launch.json` is needed for the common case;
-write one to pin the options:
+stack, and a variables pane.
+
+Two things catch people out, both of them VS Code's rules rather than Kora's:
+
+- **Quit and reopen VS Code after installing or updating the extension.**
+  Contributions are read once, at startup. Until that happens the gutter
+  refuses breakpoints on `.ko` files and F5 offers to find a Kora extension in
+  the Marketplace.
+- **Check the binary the editor will use has a `dap` subcommand.** Run
+  `kora | grep "kora dap"`. If it prints nothing, the `kora` first on your
+  `PATH` predates the debugger; set `kora.serverPath` to an absolute path
+  rather than reordering `PATH`.
+
+No `launch.json` is needed for the common case; write one to pin the options:
 
 ```json
 {
