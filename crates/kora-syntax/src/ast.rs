@@ -65,6 +65,14 @@ pub enum StmtKind {
         module: String,
         alias: String,
     },
+    /// `use mcp github as gh` — connect to a configured MCP server.
+    ///
+    /// The program names *which* server; how to launch it (command, args,
+    /// credentials) lives in kora.toml, so secrets stay out of source.
+    UseMcp {
+        server: String,
+        alias: String,
+    },
     /// `test "name":` — a test case, collected by `kora test`.
     Test {
         name: String,

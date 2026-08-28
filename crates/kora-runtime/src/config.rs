@@ -26,6 +26,8 @@ pub struct Config {
     pub http_timeout_secs: u64,
     /// `[telemetry]` settings.
     pub telemetry: crate::telemetry::Config,
+    /// `[mcp.<name>]` server definitions: how to launch each one.
+    pub mcp_servers: HashMap<String, kora_mcp::ServerConfig>,
 }
 
 impl Config {
@@ -60,6 +62,47 @@ impl Config {
             http_timeout_secs: 30,
             ..Default::default()
         };
+        if let Some(servers) = root.get("mcp").and_then(|v| v.as_table()) {
+            for (name, spec) in servers {
+                let Some(spec) = spec.as_table() else {
+                    continue;
+                };
+                let mut env = HashMap::new();
+                if let Some(table) = spec.get("env").and_then(|v| v.as_table()) {
+                    for (key, value) in table {
+                        if let Some(text) = value.as_str() {
+                            // `$VAR` reads from the environment, so a token
+                            // lives there rather than in a committed file.
+                            let resolved = match text.strip_prefix('$') {
+                                Some(var) => std::env::var(var).unwrap_or_default(),
+                                None => text.to_string(),
+                            };
+                            env.insert(key.clone(), resolved);
+                        }
+                    }
+                }
+                config.mcp_servers.insert(
+                    name.clone(),
+                    kora_mcp::ServerConfig {
+                        command: spec
+                            .get("command")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or_default()
+                            .to_string(),
+                        args: spec
+                            .get("args")
+                            .and_then(|v| v.as_array())
+                            .map(|a| {
+                                a.iter()
+                                    .filter_map(|v| v.as_str().map(str::to_string))
+                                    .collect()
+                            })
+                            .unwrap_or_default(),
+                        env,
+                    },
+                );
+            }
+        }
         if let Some(section) = root.get("telemetry").and_then(|v| v.as_table()) {
             let level = section
                 .get("level")

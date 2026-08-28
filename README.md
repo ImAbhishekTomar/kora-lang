@@ -217,6 +217,23 @@ match fs.read(path):
     case Err(why):  print(why)
 ```
 
+## MCP
+
+```python
+use mcp github as gh
+
+t: Ticket = analyze(issue, "triage this", tools=gh.tools)
+```
+
+Kora already has `tool` as a first-class construct, and an MCP server is a bag
+of tools, so one implementation reaches hundreds of maintained servers rather
+than adding integrations one at a time. Tool schemas and descriptions come
+from the server; how to launch it lives in `kora.toml`, so credentials stay
+out of source.
+
+A server runs in its own process, so it is a sink of its own. Releasing a
+secret to the model does not release it to the server.
+
 ## Testing
 
 ```bash
@@ -304,7 +321,7 @@ documented here works and is covered by tests; the test suite never touches
 the network.
 
 Not built yet: classes, list comprehensions, multi-file programs,
-`try`/`except`, MCP integration, and a Python bridge. See
+`try`/`except`, and a Python bridge. See
 [DECISIONS.md](DECISIONS.md) for what is planned and what is deliberately
 excluded.
 
@@ -316,6 +333,7 @@ crates/kora-types     name resolution and editor checks
 crates/kora-runtime   interpreter, agents, budgets, labels, journal, stdlib
 crates/kora-models    OpenAI + Ollama clients, schema-constrained output
 crates/kora-lsp       language server (diagnostics, hover, definition)
+crates/kora-mcp       Model Context Protocol client
 crates/kora-cli       the `kora` binary
 editors/vscode        VS Code extension
 examples/             runnable .ko programs

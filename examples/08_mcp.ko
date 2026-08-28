@@ -1,0 +1,49 @@
+# MCP: borrowing an ecosystem instead of building one.
+#
+# An MCP server is a bag of tools, and Kora already has `tool` as a first-class
+# construct, so the mapping is mechanical. One implementation reaches hundreds
+# of maintained servers -- GitHub, Slack, Postgres, Sentry, Linear, and the
+# filesystem server used here.
+#
+# How to launch a server lives in kora.toml, so credentials stay out of source:
+#
+#   [mcp.files]
+#   command = "npx"
+#   args = ["-y", "@modelcontextprotocol/server-filesystem", "examples/mcp-data"]
+#
+#   kora run examples/08_mcp.ko
+
+use mcp files as fsrv
+
+type Answer:
+    filename: str
+    contents: str
+
+agent read_the_directory(question: str) -> str:
+    budget: max_tokens = 40000, max_steps = 8
+
+    a: Answer = analyze(
+        question,
+        "first call list_allowed_directories to find the directory, then list_directory on it, then read_text_file on the single file you find. Report that file's name and its contents.",
+        tools=fsrv.tools
+    )
+    match a:
+        case Ok(v):
+            return f"{v.filename}: {v.contents}"
+        case Uncertain(why):
+            return f"uncertain: {why}"
+        case Exhausted(meter):
+            return f"budget out of {meter}"
+
+def main():
+    # `fsrv.tools` is every tool the server offers; `fsrv.read_file` would
+    # offer the model just one.
+    print(f"the server offers {len(fsrv.tools)} tools")
+    print(read_the_directory("what single file is in the directory, and what does it say?"))
+
+# A server runs in its own process, so it is a sink of its own. Releasing a
+# secret to the model does not release it to the server:
+#
+#   declassify salary as pay for local_model:
+#       analyze(pay, "...", tools=fsrv.tools)
+#     error: classified data cannot reach MCP server `files` (no declassify in scope)

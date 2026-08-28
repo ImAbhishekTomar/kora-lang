@@ -332,3 +332,51 @@ def analyze_it(v: str) -> str:
     ));
     assert!(err.contains("classified data cannot reach"), "got: {err}");
 }
+
+// --- a release names one sink, not all of them ---
+
+#[test]
+fn a_release_does_not_open_every_sink_in_the_block() {
+    // Regression. `declassify x for local_model:` used to make x *plain*
+    // inside the block, so a secret released to a model could be written to
+    // disk three lines later. The value now keeps its label and records which
+    // sink it was approved for.
+    let err = run_err(&with_types(
+        r#"use fs
+def main():
+    classified s = "hunter2"
+    declassify s as plain for local_model:
+        fs.write("leaked.txt", plain)
+"#,
+    ));
+    assert!(err.contains("classified data"), "got: {err}");
+}
+
+#[test]
+fn a_release_still_permits_the_sink_it_names() {
+    // The fix must not break the legitimate path.
+    let out = run(&with_types(
+        r#"def main():
+    classified s = "hunter2"
+    declassify s as plain for local_model:
+        print(plain)
+"#,
+    ));
+    assert_eq!(out, vec!["hunter2"], "printing inside the block is fine");
+}
+
+#[test]
+fn a_release_does_not_survive_being_combined() {
+    // Deriving a new value from an approved one yields something nobody
+    // approved, so the release does not carry over.
+    let err = run_err(&with_types(
+        r#"def main():
+    classified a = "one"
+    classified b = "two"
+    declassify a as first for local_model:
+        joined = first + b
+        r: R = analyze(joined, "anything")
+"#,
+    ));
+    assert!(err.contains("classified data cannot reach"), "got: {err}");
+}

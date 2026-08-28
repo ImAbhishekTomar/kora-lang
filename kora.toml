@@ -28,3 +28,14 @@ path = ".kora/last.trace.json"      # where `kora trace` looks
 # endpoint = "http://localhost:4318"  # for exporter = "otlp"
 level = "calls"                     # off | agents | calls | full
 redact = true                       # labeled values never reach the exporter
+
+# MCP servers: how to launch each one. The program names which to use.
+# Credentials belong in the environment; `$VAR` is resolved at load.
+[mcp.files]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-filesystem", "examples/mcp-data"]
+
+# [mcp.github]
+# command = "npx"
+# args = ["-y", "@modelcontextprotocol/server-github"]
+# env = { GITHUB_PERSONAL_ACCESS_TOKEN = "$GITHUB_TOKEN" }

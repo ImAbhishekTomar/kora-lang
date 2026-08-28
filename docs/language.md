@@ -268,7 +268,10 @@ declassify emp.salary as pay for local_model:
     a: Assessment = analyze({"pay": pay}, "assess against market")
 ```
 
-The block is the exposure: the binding does not escape it. Which sinks accept
+The block is the exposure: the binding does not escape it, and the value is
+released **to that sink only** — it keeps its label and records what it was
+approved for, so a secret released to a model still cannot be written to a
+file inside the same block. Which sinks accept
 which labels lives in `kora.toml`:
 
 ```toml
@@ -337,6 +340,34 @@ use json as j
 Eight modules: `json`, `csv`, `http`, `sql`, `fs`, `env`, `time`, `re`.
 Every fallible call returns `Ok` / `Err`. See
 [the standard library reference](stdlib.md).
+
+### MCP servers
+
+```python
+use mcp github as gh
+
+t: Ticket = analyze(issue, "triage this", tools=gh.tools)
+```
+
+`gh.tools` is every tool the server offers; `gh.search_issues` offers one.
+How to launch a server lives in `kora.toml`, so credentials stay out of
+source:
+
+```toml
+[mcp.github]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+env = { GITHUB_PERSONAL_ACCESS_TOKEN = "$GITHUB_TOKEN" }
+```
+
+A server runs in its own process, so it is **a sink of its own**. Releasing a
+secret to the model does not release it to the server:
+
+```python
+declassify salary as pay for local_model:
+    analyze(pay, "...", tools=gh.tools)
+# error: classified data cannot reach MCP server `github`
+```
 
 ---
 

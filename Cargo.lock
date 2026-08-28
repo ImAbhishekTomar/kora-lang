@@ -319,6 +319,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kora-mcp"
+version = "0.0.1"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "kora-models"
 version = "0.0.1"
 dependencies = [
@@ -331,8 +339,10 @@ dependencies = [
 name = "kora-runtime"
 version = "0.0.1"
 dependencies = [
+ "kora-mcp",
  "kora-models",
  "kora-syntax",
+ "kora-types",
  "regex",
  "rusqlite",
  "serde",

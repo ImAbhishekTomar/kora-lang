@@ -323,9 +323,12 @@ pub(crate) fn value_to_json(value: &Value) -> Option<J> {
             }
             J::Object(out)
         }
-        Value::Func(_) | Value::Builtin(_) | Value::Module { .. } | Value::TypeRef { .. } => {
-            return None
-        }
+        Value::Func(_)
+        | Value::Builtin(_)
+        | Value::Module { .. }
+        | Value::TypeRef { .. }
+        | Value::McpServer { .. }
+        | Value::McpTool { .. } => return None,
         Value::Variant { tag, payload } => {
             if payload.is_empty() {
                 J::String(tag.to_string())
