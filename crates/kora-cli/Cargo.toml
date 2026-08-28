@@ -3,6 +3,8 @@ name = "kora-cli"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# Not published to crates.io: the crates depend on each other by path.
+publish = false
 
 [[bin]]
 name = "kora"
@@ -12,4 +14,5 @@ path = "src/main.rs"
 kora-syntax.workspace = true
 kora-runtime.workspace = true
 kora-lsp.workspace = true
+kora-types.workspace = true
 serde_json = { workspace = true }

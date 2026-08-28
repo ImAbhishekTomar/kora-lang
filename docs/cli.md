@@ -32,6 +32,19 @@ committed: they make a suite reproducible and free. A cassette is keyed on
 call site, model, prompt, and input, so **changing the configured model
 invalidates them** — re-record with `--record`.
 
+### `kora check <file.ko>...`
+
+Parse and check files without running them — the same analysis the editor
+shows. Useful in CI, and the only way to check a file needing resources this
+machine does not have.
+
+```bash
+kora check examples/*.ko
+kora check --syntax draft.ko    # parse only, skip name resolution
+```
+
+Exits non-zero if anything fails to parse or resolve.
+
 ### `kora test <file.ko>`
 
 Run the `test` blocks in a file. Model calls replay from the cassette, so a

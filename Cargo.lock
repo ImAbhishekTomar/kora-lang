@@ -303,6 +303,7 @@ dependencies = [
  "kora-lsp",
  "kora-runtime",
  "kora-syntax",
+ "kora-types",
  "serde_json",
 ]
 

@@ -29,8 +29,8 @@ pub enum TokenKind {
     Float(f64),
     /// Plain string literal (escapes already resolved).
     Str(String),
-    /// f-string: alternating literal parts and expression source fragments.
-    /// parts[0] + exprs[0] + parts[1] + exprs[1] ... + parts[n]
+    /// f-string: alternating literal parts and expression source fragments,
+    /// joined as `parts[0] + exprs[0] + parts[1] + ... + parts[n]`.
     FStr {
         parts: Vec<String>,
         exprs: Vec<String>,

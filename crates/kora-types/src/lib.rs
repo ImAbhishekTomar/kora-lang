@@ -285,10 +285,14 @@ impl Checker<'_> {
         }
     }
 
-    fn scoped(&mut self, body: &[Stmt]) {
-        self.scopes.push(HashSet::new());
+    /// Run a nested block.
+    ///
+    /// Deliberately *not* a new scope: only functions scope in Kora, exactly
+    /// as in Python. A variable assigned inside an `if`, a loop, or a
+    /// `declassify` block is visible afterwards, and the checker has to agree
+    /// with the interpreter or it reports names that plainly work.
+    fn nested(&mut self, body: &[Stmt]) {
         self.check_block(body);
-        self.scopes.pop();
     }
 
     fn check_stmt(&mut self, stmt: &Stmt) {
@@ -319,25 +323,24 @@ impl Checker<'_> {
             } => {
                 for (cond, body) in branches {
                     self.check_expr(cond);
-                    self.scoped(body);
+                    self.nested(body);
                 }
                 if let Some(body) = else_body {
-                    self.scoped(body);
+                    self.nested(body);
                 }
             }
             StmtKind::While { cond, body } => {
                 self.check_expr(cond);
-                self.scoped(body);
+                self.nested(body);
             }
             StmtKind::For { var, iter, body }
             | StmtKind::ParallelFor {
                 var, iter, body, ..
             } => {
                 self.check_expr(iter);
-                self.scopes.push(HashSet::new());
+                // The loop variable outlives the loop, as it does in Python.
                 self.declare(var);
-                self.check_block(body);
-                self.scopes.pop();
+                self.nested(body);
                 if let StmtKind::ParallelFor {
                     collect_into: Some(name),
                     ..
@@ -371,7 +374,6 @@ impl Checker<'_> {
             StmtKind::Match { subject, arms } => {
                 self.check_expr(subject);
                 for arm in arms {
-                    self.scopes.push(HashSet::new());
                     match &arm.pattern {
                         Pattern::Bind(name) => self.declare(name),
                         Pattern::Ctor(_, binders) => {
@@ -381,8 +383,7 @@ impl Checker<'_> {
                         }
                         _ => {}
                     }
-                    self.check_block(&arm.body);
-                    self.scopes.pop();
+                    self.nested(&arm.body);
                 }
             }
             StmtKind::Declassify {
@@ -392,17 +393,17 @@ impl Checker<'_> {
                 ..
             } => {
                 self.check_expr(value);
-                self.scopes.push(HashSet::new());
+                // The binding is scoped at runtime, but anything assigned
+                // inside the block is not, so only the binding is temporary.
                 self.declare(binding);
-                self.check_block(body);
-                self.scopes.pop();
+                self.nested(body);
             }
-            StmtKind::WithBudget { body, .. } => self.scoped(body),
+            StmtKind::WithBudget { body, .. } => self.nested(body),
             StmtKind::WithMock { result, body, .. } => {
                 self.check_expr(result);
-                self.scoped(body);
+                self.nested(body);
             }
-            StmtKind::Test { body, .. } => self.scoped(body),
+            StmtKind::Test { body, .. } => self.nested(body),
             StmtKind::Assert { condition, message } => {
                 self.check_expr(condition);
                 if let Some(m) = message {

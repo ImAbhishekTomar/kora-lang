@@ -90,8 +90,10 @@ agent review(customer: Customer) -> str:
                 decision = ask_human("approve?", assessment.rationale)
                 return decision
             return "auto-approved"
-        case Uncertain(why):    return f"needs a human: {why}"
-        case Exhausted(meter):  return f"out of {meter}"
+        case Uncertain(why):
+            return f"needs a human: {why}"
+        case Exhausted(meter):
+            return f"out of {meter}"
 
 def main():
     with budget(max_tokens = 50000):
@@ -254,8 +256,10 @@ And failure is a value, never a silent `None` or a forgotten exception:
 
 ```python
 match fs.read(path):
-    case Ok(text):  ...
-    case Err(why):  print(why)
+    case Ok(text):
+        ...
+    case Err(why):
+        print(why)
 ```
 
 ## MCP
@@ -281,8 +285,10 @@ secret to the model does not release it to the server.
 use python statistics as stats
 
 match stats.mean(readings):
-    case Ok(m):     print(m)
-    case Err(why):  print(why)
+    case Ok(m):
+        print(m)
+    case Err(why):
+        print(why)
 ```
 
 The long-tail escape hatch, as a sidecar rather than an embed. Python runs in
@@ -406,6 +412,16 @@ docs/                 language, stdlib, and CLI references
 cargo build
 cargo test --workspace
 ./target/debug/kora --version
+```
+
+Before opening a pull request, the checks CI runs:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace
+python3 scripts/check_docs.py     # the docs still describe the language
+kora check examples/*.ko
 ```
 
 ## License

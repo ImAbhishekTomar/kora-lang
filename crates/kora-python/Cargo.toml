@@ -3,6 +3,8 @@ name = "kora-python"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+# Not published to crates.io: the crates depend on each other by path.
+publish = false
 
 [dependencies]
 serde = { workspace = true }

@@ -1,0 +1,38 @@
+# cargo-deny: what the project will and will not depend on.
+
+[advisories]
+# A known vulnerability in a dependency is a build failure, not a warning.
+yanked = "deny"
+
+[bans]
+# Two versions of the same crate bloat the binary but are usually forced
+# by a dependency, so this warns rather than blocks.
+multiple-versions = "warn"
+wildcards = "deny"
+# The crates in this workspace depend on each other by path, which has no
+# version to pin. That is not the unpinned-external-dependency problem
+# this check exists to catch.
+allow-wildcard-paths = true
+
+[licenses]
+# Permissive only. A copyleft dependency would change what people can do with
+# a language they build on.
+# This list is the set actually present in the tree, not a wishlist.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "0BSD",
+    "ISC",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.9
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
