@@ -6,6 +6,7 @@ members = [
     "crates/kora-runtime",
     "crates/kora-models",
     "crates/kora-lsp",
+    "crates/kora-mcp",
     "crates/kora-cli",
 ]
 
@@ -21,6 +22,7 @@ kora-types = { path = "crates/kora-types" }
 kora-runtime = { path = "crates/kora-runtime" }
 kora-models = { path = "crates/kora-models" }
 kora-lsp = { path = "crates/kora-lsp" }
+kora-mcp = { path = "crates/kora-mcp" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "2", features = ["json"] }

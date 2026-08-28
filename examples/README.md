@@ -16,6 +16,7 @@ no API key and no model installed.
 | [05_stdlib.ko](05_stdlib.ko) | `json`, `fs`, `time`, `re` and the defects they fix | `kora run` |
 | [06_stdlib_safety.ko](06_stdlib_safety.ko) | `csv` and `http`, and the attacks that are refused | `kora run` |
 | [07_tests.ko](07_tests.ko) | `test` blocks and typed mocks | `kora test` |
+| [08_mcp.ko](08_mcp.ko) | a model calling tools from a real MCP server | `kora run` |
 
 ```bash
 kora run examples/00_basics.ko
@@ -36,6 +37,12 @@ kora answer examples/04_durable_approval.ko <run-id> yes
 
 It needs a real model, since it is not backed by a cassette. The resume costs
 nothing: the model work it already did is served from the journal.
+
+## The MCP one
+
+`08_mcp.ko` starts a real MCP server (`npx @modelcontextprotocol/server-filesystem`)
+and lets a model drive its tools. It needs Node and a real model, and takes
+about a minute — most of it the local model thinking.
 
 ## Re-recording
 

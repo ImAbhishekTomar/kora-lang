@@ -45,6 +45,15 @@ pub enum Value {
     TypeRef {
         name: Rc<String>,
     },
+    /// A connected MCP server, from `use mcp github as gh`.
+    McpServer {
+        alias: Rc<String>,
+    },
+    /// One tool exposed by an MCP server, ready to hand to `analyze`.
+    McpTool {
+        server: Rc<String>,
+        name: Rc<String>,
+    },
     /// A value carrying a confidentiality label.
     ///
     /// Wrapping rather than tagging every variant keeps the label out of the
@@ -72,6 +81,8 @@ impl Value {
             Value::Variant { tag, .. } => tag.as_str().into(),
             Value::Module { name } => format!("module {name}"),
             Value::TypeRef { name } => format!("type {name}"),
+            Value::McpServer { alias } => format!("mcp server {alias}"),
+            Value::McpTool { server, name } => format!("tool {server}.{name}"),
             Value::Labeled { inner, .. } => inner.type_name(),
         }
     }
@@ -79,7 +90,7 @@ impl Value {
     /// The label this value carries.
     pub fn label(&self) -> Label {
         match self {
-            Value::Labeled { label, .. } => *label,
+            Value::Labeled { label, .. } => label.clone(),
             _ => Label::PUBLIC,
         }
     }
@@ -123,7 +134,11 @@ impl Value {
             Value::List(l) => !l.borrow().is_empty(),
             Value::Dict(d) => !d.borrow().is_empty(),
             Value::Func(_) | Value::Object { .. } | Value::Builtin(_) => true,
-            Value::Variant { .. } | Value::Module { .. } | Value::TypeRef { .. } => true,
+            Value::Variant { .. }
+            | Value::Module { .. }
+            | Value::TypeRef { .. }
+            | Value::McpServer { .. }
+            | Value::McpTool { .. } => true,
             Value::Labeled { inner, .. } => inner.truthy(),
         }
     }
@@ -239,6 +254,8 @@ impl fmt::Display for Value {
             }
             Value::Module { name } => write!(f, "<module {name}>"),
             Value::TypeRef { name } => write!(f, "<type {name}>"),
+            Value::McpServer { alias } => write!(f, "<mcp server {alias}>"),
+            Value::McpTool { server, name } => write!(f, "<tool {server}.{name}>"),
             // Printing is a local action, not an export, so the value shows
             // normally. Telemetry export is a labeled sink and redacts.
             Value::Labeled { inner, .. } => write!(f, "{inner}"),

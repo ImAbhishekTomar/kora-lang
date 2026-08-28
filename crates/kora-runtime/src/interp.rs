@@ -153,6 +153,9 @@ pub struct Interpreter {
     pub tracer: Arc<Tracer>,
     /// The span a new child should attach to.
     parent_span: Option<String>,
+    /// Connected MCP servers, by configured name. Shared so parallel branches
+    /// reuse one connection rather than spawning a process per agent.
+    pub mcp: Arc<Mutex<HashMap<String, kora_mcp::Server>>>,
 }
 
 /// Tags a program may construct directly: the outcomes of a model call and
@@ -218,6 +221,7 @@ impl Interpreter {
             tests: Vec::new(),
             tracer: Arc::new(Tracer::disabled()),
             parent_span: Option::None,
+            mcp: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -402,6 +406,15 @@ impl Interpreter {
                 self.mocked_analyze.pop();
                 outcome
             }
+            StmtKind::UseMcp { server, alias } => {
+                self.connect_mcp(server, stmt.span)?;
+                let value = Value::McpServer {
+                    alias: Rc::new(server.clone()),
+                };
+                scope.insert(alias.clone(), value.clone());
+                self.globals.insert(alias.clone(), value);
+                Ok(Flow::Normal)
+            }
             StmtKind::Use { module, alias } => {
                 if crate::stdlib::module(module).is_none() {
                     let mut e = RuntimeError::new(
@@ -451,7 +464,7 @@ impl Interpreter {
                     return Err(err);
                 }
 
-                if !self.sinks.permits(sink, label) {
+                if !self.sinks.permits(sink, label.clone()) {
                     let accepting = self.sinks.sinks_accepting_classified();
                     let hint = if accepting.is_empty() {
                         "no sink currently accepts classified data — check `[sinks]` in kora.toml"
@@ -496,11 +509,16 @@ impl Interpreter {
                     self.tracer.end(span, Option::None);
                 }
 
-                // Inside the block the value is usable for this sink only, and
-                // the binding is scoped: nothing escapes to the rest of the
-                // program.
+                // The value keeps its label and records the sink it was
+                // released to. Stripping the label instead would release it
+                // to *everything* inside the block, so a secret declassified
+                // for a model could be written to a file three lines later.
                 let shadowed = scope.get(binding).cloned();
-                scope.insert(binding.clone(), released.unlabeled().clone());
+                let approved = released
+                    .unlabeled()
+                    .clone()
+                    .with_label(released.label().released_to(sink));
+                scope.insert(binding.clone(), approved);
                 self.declassified_for.push(sink.clone());
 
                 let result = self.exec_block(body, scope);
@@ -747,6 +765,12 @@ impl Interpreter {
             }
             ExprKind::Attr { object, name } => {
                 let obj = self.eval(object, scope)?;
+                // `gh.tools` and `gh.search_issues` resolve against the
+                // connected server rather than a field.
+                if let Value::McpServer { alias } = obj.unlabeled() {
+                    let alias = alias.to_string();
+                    return self.mcp_member(&alias, name, expr.span);
+                }
                 let outer_label = obj.label();
                 // A `classified` field marks values read from it, even when
                 // the containing object is public.
@@ -1273,7 +1297,10 @@ impl Interpreter {
         let label = v.label();
         let v = v.unlabeled().clone();
         let items = self.iterate_inner(v, span)?;
-        Ok(items.into_iter().map(|i| i.with_label(label)).collect())
+        Ok(items
+            .into_iter()
+            .map(|i| i.with_label(label.clone()))
+            .collect())
     }
 
     fn iterate_inner(&self, v: Value, span: Span) -> Result<Vec<Value>, RuntimeError> {
@@ -1666,8 +1693,9 @@ impl Interpreter {
         let data_label = data.label();
         if data_label.is_classified() {
             let sink_name = self.model_sink_name();
-            let unlocked = self.declassified_for.contains(&sink_name);
-            if !unlocked {
+            // The value must have been released to *this* sink, not merely
+            // released to something.
+            if !data_label.may_reach(&sink_name) {
                 let accepting = self.sinks.sinks_accepting_classified();
                 let hint = if accepting.is_empty() {
                     "wrap it in `declassify <value> for <sink>:` and allow that sink in kora.toml"
@@ -1686,7 +1714,7 @@ impl Interpreter {
                 )
                 .with_hint(hint));
             }
-            if !self.sinks.permits(&sink_name, data_label) {
+            if !self.sinks.permits(&sink_name, data_label.clone()) {
                 return Err(RuntimeError::new(
                     format!("policy forbids classified data reaching sink `{sink_name}`"),
                     args[0].span,
@@ -1733,9 +1761,41 @@ impl Interpreter {
             Some((_, arg)) => self.tool_list(arg, scope)?,
             Option::None => Vec::new(),
         };
+
+        // An MCP server is a separate process, so offering its tools is a
+        // second destination for the data — distinct from the model itself.
+        // Releasing a secret to the model does not release it to GitHub.
+        let data_label_for_servers = self.deep_label(&data);
+        if data_label_for_servers.is_classified() {
+            let mut servers: Vec<&str> = tool_funcs
+                .iter()
+                .filter_map(|h| match h {
+                    ToolHandle::Mcp { server, .. } => Some(server.as_str()),
+                    ToolHandle::Kora(_) => Option::None,
+                })
+                .collect();
+            servers.sort();
+            servers.dedup();
+            for server in servers {
+                if !data_label_for_servers.may_reach(server) {
+                    return Err(RuntimeError::new(
+                        format!(
+                            "classified data cannot reach MCP server `{server}` (no declassify in scope)"
+                        ),
+                        args[0].span,
+                    )
+                    .with_hint(format!(
+                        "a server runs in its own process, so it is its own sink: wrap it in `declassify <value> for {server}:` and allow that sink in kora.toml"
+                    )));
+                }
+            }
+        }
         let tools: Vec<ToolSpec> = tool_funcs
             .iter()
-            .map(|f| self.tool_spec(f))
+            .map(|handle| match handle {
+                ToolHandle::Kora(f) => self.tool_spec(f),
+                ToolHandle::Mcp { server, name } => self.mcp_tool_spec(server, name, span),
+            })
             .collect::<Result<_, _>>()?;
 
         let data_json = value_to_json(data.unlabeled());
@@ -2011,6 +2071,8 @@ fn value_to_json(value: &Value) -> serde_json::Value {
         Value::Builtin(name) => J::String(format!("<builtin {name}>")),
         Value::Module { name } => J::String(format!("<module {name}>")),
         Value::TypeRef { name } => J::String(format!("<type {name}>")),
+        Value::McpServer { alias } => J::String(format!("<mcp server {alias}>")),
+        Value::McpTool { server, name } => J::String(format!("<tool {server}.{name}>")),
         // Serialization is only reached after a label check has passed, so
         // the wrapper is transparent here.
         Value::Labeled { inner, .. } => value_to_json(inner),
@@ -2236,7 +2298,7 @@ impl Interpreter {
         &mut self,
         arg: &Expr,
         scope: &mut Scope,
-    ) -> Result<Vec<Rc<FuncDef>>, RuntimeError> {
+    ) -> Result<Vec<ToolHandle>, RuntimeError> {
         let value = self.eval(arg, scope)?;
         let items = match value {
             Value::List(items) => items.borrow().clone(),
@@ -2251,7 +2313,11 @@ impl Interpreter {
         let mut out = Vec::new();
         for item in items {
             match item {
-                Value::Func(f) if f.kind == FuncKind::Tool => out.push(f),
+                Value::Func(f) if f.kind == FuncKind::Tool => out.push(ToolHandle::Kora(f)),
+                Value::McpTool { server, name } => out.push(ToolHandle::Mcp {
+                    server: server.to_string(),
+                    name: name.to_string(),
+                }),
                 Value::Func(f) => {
                     return Err(
                         RuntimeError::new(format!("`{}` is not a tool", f.name), arg.span)
@@ -2307,7 +2373,7 @@ impl Interpreter {
         data_text: &str,
         schema: &Schema,
         tools: &[ToolSpec],
-        tool_funcs: &[Rc<FuncDef>],
+        tool_funcs: &[ToolHandle],
         span: Span,
     ) -> Result<AnalyzeOutcome, RuntimeError> {
         // A hard ceiling so a model that keeps asking for tools cannot spin
@@ -2371,16 +2437,25 @@ impl Interpreter {
         &mut self,
         name: &str,
         arguments_json: &str,
-        tool_funcs: &[Rc<FuncDef>],
+        tool_funcs: &[ToolHandle],
         span: Span,
     ) -> Result<String, RuntimeError> {
-        let func = tool_funcs
+        let handle = tool_funcs
             .iter()
-            .find(|f| f.name == name)
+            .find(|h| h.model_name() == name)
             .ok_or_else(|| {
                 RuntimeError::new(format!("model asked for unknown tool `{name}`"), span)
             })?
             .clone();
+
+        // An MCP tool runs in its server's process. What it returns is data
+        // from outside the program, labeled accordingly by the caller.
+        let func = match handle {
+            ToolHandle::Mcp { server, name } => {
+                return self.run_mcp_tool(&server, &name, arguments_json, span)
+            }
+            ToolHandle::Kora(f) => f,
+        };
 
         let parsed: serde_json::Value =
             serde_json::from_str(arguments_json).unwrap_or(serde_json::Value::Null);
@@ -2961,5 +3036,184 @@ impl Interpreter {
         self.tracer
             .set_plain(&mut span, "gen_ai.usage.input_tokens", serde_json::json!(0));
         self.tracer.end(span, None);
+    }
+}
+
+/// MCP: connecting to servers, and calling their tools.
+impl Interpreter {
+    /// Start a configured server, or reuse one already connected.
+    fn connect_mcp(&mut self, name: &str, span: Span) -> Result<(), RuntimeError> {
+        let mut servers = self.mcp.lock().unwrap_or_else(|e| e.into_inner());
+        if servers.contains_key(name) {
+            return Ok(());
+        }
+        let Some(config) = self.config.mcp_servers.get(name).cloned() else {
+            let mut known: Vec<&String> = self.config.mcp_servers.keys().collect();
+            known.sort();
+            let mut e =
+                RuntimeError::new(format!("no MCP server named `{name}` is configured"), span);
+            e = if known.is_empty() {
+                e.with_hint(
+                    "add one to kora.toml, e.g. `[mcp.github] command = \"npx\", args = [\"-y\", \"@modelcontextprotocol/server-github\"]`",
+                )
+            } else {
+                e.with_hint(format!(
+                    "configured servers: {}",
+                    known
+                        .iter()
+                        .map(|k| k.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ))
+            };
+            return Err(e);
+        };
+        if config.command.is_empty() {
+            return Err(RuntimeError::new(
+                format!("MCP server `{name}` has no `command` in kora.toml"),
+                span,
+            ));
+        }
+
+        let server = kora_mcp::Server::connect(name, &config)
+            .map_err(|e| RuntimeError::new(format!("could not start `{name}`: {e}"), span))?;
+        servers.insert(name.to_string(), server);
+        Ok(())
+    }
+
+    /// `gh.tools` — every tool the server offers, ready for `analyze`.
+    fn mcp_member(
+        &mut self,
+        server: &str,
+        member: &str,
+        span: Span,
+    ) -> Result<Value, RuntimeError> {
+        let servers = self.mcp.lock().unwrap_or_else(|e| e.into_inner());
+        let Some(connected) = servers.get(server) else {
+            return Err(RuntimeError::new(
+                format!("`{server}` is not connected"),
+                span,
+            ));
+        };
+        match member {
+            "tools" => Ok(Value::List(Rc::new(RefCell::new(
+                connected
+                    .tools()
+                    .iter()
+                    .map(|t| Value::McpTool {
+                        server: Rc::new(server.to_string()),
+                        name: Rc::new(t.name.clone()),
+                    })
+                    .collect(),
+            )))),
+            // A named tool, so a program can offer a model one rather than all.
+            name if connected.tool(name).is_some() => Ok(Value::McpTool {
+                server: Rc::new(server.to_string()),
+                name: Rc::new(name.to_string()),
+            }),
+            other => {
+                let mut available: Vec<&str> =
+                    connected.tools().iter().map(|t| t.name.as_str()).collect();
+                available.sort();
+                Err(
+                    RuntimeError::new(format!("`{server}` has no tool `{other}`"), span).with_hint(
+                        format!(
+                            "`{server}` offers: {} (or use `{server}.tools` for all of them)",
+                            available.join(", ")
+                        ),
+                    ),
+                )
+            }
+        }
+    }
+
+    /// Describe an MCP tool to the model, using the schema the server gave us.
+    fn mcp_tool_spec(
+        &self,
+        server: &str,
+        name: &str,
+        span: Span,
+    ) -> Result<ToolSpec, RuntimeError> {
+        let servers = self.mcp.lock().unwrap_or_else(|e| e.into_inner());
+        let tool = servers
+            .get(server)
+            .and_then(|s| s.tool(name))
+            .ok_or_else(|| RuntimeError::new(format!("`{server}` has no tool `{name}`"), span))?;
+
+        let params = tool
+            .params
+            .iter()
+            .filter_map(|(param, ty)| {
+                // A parameter Kora cannot describe is left out rather than
+                // guessed at; the model simply will not be offered it.
+                let mapped = match ty {
+                    kora_mcp::ParamType::Str => FieldType::Str,
+                    kora_mcp::ParamType::Int => FieldType::Int,
+                    kora_mcp::ParamType::Float => FieldType::Float,
+                    kora_mcp::ParamType::Bool => FieldType::Bool,
+                    kora_mcp::ParamType::ListOfStr => FieldType::ListOfStr,
+                    kora_mcp::ParamType::Unsupported => return Option::None,
+                };
+                Some((param.clone(), mapped))
+            })
+            .collect();
+
+        Ok(ToolSpec {
+            // Namespaced, so two servers offering `search` do not collide.
+            name: format!("{server}__{name}"),
+            description: if tool.description.is_empty() {
+                format!("The {name} tool from {server}.")
+            } else {
+                tool.description.clone()
+            },
+            params,
+        })
+    }
+
+    /// Run a tool the model asked for on an MCP server.
+    fn run_mcp_tool(
+        &mut self,
+        server: &str,
+        name: &str,
+        arguments_json: &str,
+        span: Span,
+    ) -> Result<String, RuntimeError> {
+        let arguments: serde_json::Value =
+            serde_json::from_str(arguments_json).unwrap_or(serde_json::json!({}));
+
+        let mut servers = self.mcp.lock().unwrap_or_else(|e| e.into_inner());
+        let connected = servers
+            .get_mut(server)
+            .ok_or_else(|| RuntimeError::new(format!("`{server}` is not connected"), span))?;
+        connected
+            .call(name, arguments)
+            .map_err(|e| RuntimeError::new(format!("`{server}.{name}` failed: {e}"), span))
+    }
+}
+
+/// A tool the model may call: declared in this program, or offered by an MCP
+/// server.
+#[derive(Debug, Clone)]
+enum ToolHandle {
+    Kora(Rc<FuncDef>),
+    Mcp { server: String, name: String },
+}
+
+impl ToolHandle {
+    /// The name the model sees. MCP tools are namespaced by server, so two
+    /// servers offering `search` do not collide.
+    fn model_name(&self) -> String {
+        match self {
+            ToolHandle::Kora(f) => f.name.clone(),
+            ToolHandle::Mcp { server, name } => format!("{server}__{name}"),
+        }
+    }
+}
+
+impl Interpreter {
+    /// Bind a global by hand. Used by tests to stand in for a statement that
+    /// would otherwise need external resources.
+    pub fn bind_global(&mut self, name: &str, value: Value) {
+        self.globals.insert(name.to_string(), value);
     }
 }

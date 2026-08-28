@@ -358,6 +358,26 @@ impl Parser {
     fn use_stmt(&mut self) -> Result<Stmt, SyntaxError> {
         let span = self.peek_span();
         self.advance(); // use
+
+        // `use mcp <server> as <alias>` names a server configured in
+        // kora.toml rather than a stdlib module.
+        if matches!(self.peek_kind(), TokenKind::Ident(word) if word == "mcp") {
+            self.advance();
+            let server = self.expect_ident("a server name after `use mcp`")?;
+            let alias = match self.peek_kind() {
+                TokenKind::Ident(word) if word == "as" => {
+                    self.advance();
+                    self.expect_ident("a name after `as`")?
+                }
+                _ => server.clone(),
+            };
+            self.expect_newline("use")?;
+            return Ok(Stmt {
+                kind: StmtKind::UseMcp { server, alias },
+                span,
+            });
+        }
+
         let module = self.expect_ident("a module name after `use`")?;
         let alias = match self.peek_kind() {
             TokenKind::Ident(word) if word == "as" => {

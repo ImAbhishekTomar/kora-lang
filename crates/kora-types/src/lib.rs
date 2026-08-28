@@ -215,6 +215,17 @@ impl Checker<'_> {
                         doc: None,
                     });
                 }
+                StmtKind::UseMcp { server, alias } => {
+                    self.define_symbol(Symbol {
+                        name: alias.clone(),
+                        kind: SymbolKind::Module,
+                        span: stmt.span,
+                        detail: format!("use mcp {server}"),
+                        doc: Some(
+                            "An MCP server. `.tools` offers every tool it exposes.".to_string(),
+                        ),
+                    });
+                }
                 StmtKind::Use { module, alias } => {
                     self.analysis.modules.insert(alias.clone(), module.clone());
                     self.define_symbol(Symbol {
@@ -386,6 +397,12 @@ impl Checker<'_> {
                 if let Some(m) = message {
                     self.check_expr(m);
                 }
+            }
+            StmtKind::UseMcp { alias, .. } => {
+                // Which servers exist is a runtime question: the checker
+                // cannot know without launching them, so it records the alias
+                // rather than reporting a name it cannot verify.
+                self.declare(alias);
             }
             StmtKind::Use { module, alias } => {
                 if !MODULES.iter().any(|(name, _)| name == module) {

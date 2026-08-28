@@ -38,27 +38,37 @@ pub enum Trust {
 /// Confidentiality runs outward (secrets must not leave), integrity runs
 /// inward (untrusted data must not reach a dangerous sink). Same machinery,
 /// opposite directions.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct Label {
     pub secrecy: Secrecy,
     pub trust: Trust,
+    /// The sink this value has been released to, if any.
+    ///
+    /// A `declassify ... for X:` block does **not** make the value plain: it
+    /// records that X may receive it. Otherwise the block would release the
+    /// value to everything inside it, so a secret declassified for a model
+    /// could be written to a file three lines later.
+    pub released: Option<Box<str>>,
 }
 
 impl Label {
     pub const PUBLIC: Label = Label {
         secrecy: Secrecy::Public,
         trust: Trust::Trusted,
+        released: None,
     };
 
     pub const CLASSIFIED: Label = Label {
         secrecy: Secrecy::Classified,
         trust: Trust::Trusted,
+        released: None,
     };
 
     /// Data that came from outside the program.
     pub const UNVERIFIED: Label = Label {
         secrecy: Secrecy::Public,
         trust: Trust::Unverified,
+        released: None,
     };
 
     /// Combining two values yields the stricter label on both axes. This one
@@ -73,39 +83,60 @@ impl Label {
                 (Trust::Trusted, Trust::Trusted) => Trust::Trusted,
                 _ => Trust::Unverified,
             },
+            // Combining a released value with anything else drops the
+            // release: the result is not the thing that was approved.
+            released: match (&self.released, &other.released) {
+                (Some(a), Some(b)) if a == b => Some(a.clone()),
+                (Some(a), None) if other.secrecy == Secrecy::Public => Some(a.clone()),
+                (None, Some(b)) if self.secrecy == Secrecy::Public => Some(b.clone()),
+                _ => None,
+            },
         }
     }
 
-    pub fn is_classified(self) -> bool {
+    /// Mark this value as approved for one named sink.
+    pub fn released_to(mut self, sink: &str) -> Label {
+        self.released = Some(sink.into());
+        self
+    }
+
+    /// Whether this value may be given to `sink`.
+    ///
+    /// Public data may go anywhere. Classified data may go only where it was
+    /// explicitly released.
+    pub fn may_reach(&self, sink: &str) -> bool {
+        if !self.is_classified() {
+            return true;
+        }
+        self.released.as_deref() == Some(sink)
+    }
+
+    pub fn is_classified(&self) -> bool {
         self.secrecy == Secrecy::Classified
     }
 
-    pub fn is_unverified(self) -> bool {
+    pub fn is_unverified(&self) -> bool {
         self.trust == Trust::Unverified
     }
 
     /// Whether the value carries any restriction at all.
-    pub fn is_plain(self) -> bool {
-        self == Label::PUBLIC
+    pub fn is_plain(&self) -> bool {
+        self.secrecy == Secrecy::Public && self.trust == Trust::Trusted
     }
 
     /// Mark as having come from outside, keeping any secrecy already present.
-    pub fn untrusted(self) -> Label {
-        Label {
-            trust: Trust::Unverified,
-            ..self
-        }
+    pub fn untrusted(mut self) -> Label {
+        self.trust = Trust::Unverified;
+        self
     }
 
     /// Narrowing succeeded: the value is now safe to act on.
-    pub fn verified(self) -> Label {
-        Label {
-            trust: Trust::Trusted,
-            ..self
-        }
+    pub fn verified(mut self) -> Label {
+        self.trust = Trust::Trusted;
+        self
     }
 
-    pub fn name(self) -> &'static str {
+    pub fn name(&self) -> &'static str {
         match (self.secrecy, self.trust) {
             (Secrecy::Classified, Trust::Unverified) => "classified and unverified",
             (Secrecy::Classified, Trust::Trusted) => "classified",
