@@ -191,8 +191,8 @@ jobs:
           git config user.email "actions@github.com"
           git add Formula/kora.rb
           git diff --cached --quiet || git commit -m "kora ${version}"
-          auth=$(printf 'x-access-token:%s' "$HOMEBREW_TAP_TOKEN" | base64 | tr -d '\n')
-          git -c "http.extraheader=AUTHORIZATION: Basic ${auth}" push
+          git remote set-url origin "https://ImAbhishekTomar:${HOMEBREW_TAP_TOKEN}@github.com/ImAbhishekTomar/homebrew-tap.git"
+          git push
 
       - name: Skip notice
         if: env.HOMEBREW_TAP_TOKEN == ''

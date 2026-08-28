@@ -42,6 +42,6 @@ jobs:
             echo "Formula is already current"
           else
             git -C tap commit -m "kora ${VERSION}"
-            auth=$(printf 'x-access-token:%s' "$HOMEBREW_TAP_TOKEN" | base64 | tr -d '\n')
-            git -C tap -c "http.extraheader=AUTHORIZATION: Basic ${auth}" push
+            git -C tap remote set-url origin "https://ImAbhishekTomar:${HOMEBREW_TAP_TOKEN}@github.com/ImAbhishekTomar/homebrew-tap.git"
+            git -C tap push
           fi
