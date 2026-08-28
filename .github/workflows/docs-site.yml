@@ -2,7 +2,16 @@ name: Documentation site
 
 on:
   push:
-    branches: [main]
+    branches: ["**"]
+    paths:
+      - "app/**"
+      - "package.json"
+      - "pnpm-lock.yaml"
+      - "next.config.mjs"
+      - "mdx-components.tsx"
+      - "styles.css"
+      - ".github/workflows/docs-site.yml"
+  pull_request:
     paths:
       - "app/**"
       - "package.json"
@@ -15,45 +24,46 @@ on:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
-# One deployment at a time; never cancel one midway.
 concurrency:
-  group: pages
-  cancel-in-progress: false
+  group: docs-vercel-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  VERCEL_ORG_ID: ${{ secrets.VERCEL_ORG_ID }}
+  VERCEL_PROJECT_ID: ${{ secrets.VERCEL_PROJECT_ID }}
 
 jobs:
-  build:
-    name: Build the site
+  deploy:
+    name: Build and deploy docs
+    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - uses: actions/checkout@v4
+
       - uses: pnpm/action-setup@v4
         with:
-          version: 10
-      - uses: actions/setup-node@v6
+          version: 11.0.8
+
+      - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
-      - name: Install
-        run: pnpm install --frozen-lockfile
-      - name: Build
-        run: pnpm build
-        env:
-          # GitHub Pages serves a project site from a subpath.
-          NEXT_PUBLIC_BASE_PATH: /${{ github.event.repository.name }}
-      - uses: actions/upload-pages-artifact@v4
-        with:
-          path: out
 
-  deploy:
-    name: Deploy to Pages
-    needs: build
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
-    runs-on: ubuntu-latest
-    steps:
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Pull Vercel environment
+        run: pnpm exec vercel pull --yes --environment=${{ github.ref == 'refs/heads/main' && 'production' || 'preview' }} --token="$VERCEL_TOKEN"
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+
+      - name: Build Vercel output
+        run: pnpm exec vercel build --token="$VERCEL_TOKEN"
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
+
+      - name: Deploy to Vercel
+        run: pnpm exec vercel deploy --prebuilt ${{ github.ref == 'refs/heads/main' && '--prod' || '' }} --token="$VERCEL_TOKEN"
+        env:
+          VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
