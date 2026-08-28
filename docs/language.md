@@ -367,6 +367,59 @@ Eight modules: `json`, `csv`, `http`, `sql`, `fs`, `env`, `time`, `re`.
 Every fallible call returns `Ok` / `Err`. See
 [the standard library reference](stdlib.md).
 
+### Your own files
+
+Split a program across files and import one from another:
+
+```python
+# lib/tax.ko
+RATE = 0.2
+
+type Money:
+    amount: float
+    currency: str
+
+def with_tax(amount: float) -> float:
+    return amount * (1.0 + RATE)
+```
+
+```python
+# main.ko
+use "./lib/tax.ko" as tax
+
+def main():
+    print(tax.with_tax(100.0))
+    m = tax.Money(12.5, "USD")
+```
+
+A quoted path is a file; a bare word is a stdlib module. The two can never be
+confused for one another, and a path always needs `as <name>` — a path has no
+natural bare name, so Kora does not invent one.
+
+Rules worth knowing:
+
+- **Paths resolve relative to the file that writes them**, never the working
+  directory. A program is a directory, and it can be moved or vendored whole.
+  Inside `lib/deep.ko`, `use "./inner.ko"` means `lib/inner.ko`.
+- **Every top-level name is exported.** Functions, agents, tools, types, and
+  top-level variables are all reachable as `alias.name`. There is no `export`
+  keyword and no privacy marker yet.
+- **A file reads its own top level, not its importer's.** Two files may bind
+  `RATE` to different values; each one's functions see their own. Importing a
+  module can never change what the code inside it means.
+- **A file's top level runs once per run**, no matter how many files import
+  it. Two importers get the same module, not two copies with separate state.
+- **Types are shared across files.** A `Money` built in one file is the same
+  `Money` everywhere, so declaring the same type name differently in two files
+  is an error rather than two unrelated types.
+- **Cycles are an error**, reported with the chain that produced them. Move
+  the shared code into a third file both can import.
+- **`.ko` is required.** Any other extension is refused.
+
+Budgets, labels, and the journal do not stop at a file boundary. An imported
+agent spends from the same budget, `classified` still propagates, and
+`kora audit` lists declassification sites across every imported file.
+
 ### MCP servers
 
 ```python
@@ -474,10 +527,11 @@ suite costs nothing. Under `kora run`, `test` blocks are inert.
 | Dict keys are strings | no arbitrary hashable keys |
 | No classes | `type` blocks hold data; functions act on it |
 | No comprehensions yet | use a `for` loop |
-| No `import` of other `.ko` files yet | one file per program |
+| Imports are paths, not package names | `use "./lib/tax.ko" as tax`; no package manager yet |
+| No `export` keyword | every top-level name is public |
 | Methods are functions | `append(xs, v)`, not `xs.append(v)` |
 | Type annotations are checked | not hints |
 
-**Not yet built:** classes, list comprehensions, multi-file programs,
+**Not yet built:** classes, list comprehensions, per-name privacy on modules,
 user-defined generics, `try`/`except`, keyword arguments on user functions
 (only `analyze` takes them), `*args`/`**kwargs`, integer keys in dicts.

@@ -8,6 +8,7 @@ Full editor support for [Kora](https://github.com/abhishektomar/kora-lang), the 
 - **File icons** — a dedicated Kora file icon, enable via *File > Preferences > File Icon Theme > Kora Icons*
 - **Run / Test buttons** in the editor toolbar, plus `Cmd/Ctrl+Shift+R` to run the current file
 - **IntelliSense** via the `kora lsp` language server: diagnostics, hover, go-to-definition, outline, and completion
+- **Cross-file imports** — `use "./lib/tax.ko" as tax` resolves for real: completion and diagnostics read the imported file, and go-to-definition on the alias opens it
 
 ## Requirements
 

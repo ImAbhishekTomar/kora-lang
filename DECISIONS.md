@@ -44,13 +44,41 @@ design changes and should be deliberate.
   f-strings, list/dict literals, comprehensions. Zero learning curve is a goal.
 - Static types, checked. Type declarations on the left: `e: Expense = ...`.
 - New words (whole list): `analyze`, `tool`, `agent`, `budget`, `parallel for`,
-  `classified` / `declassify`, `ask_human`, `test`, `mock`.
+  `classified` / `declassify`, `ask_human`, `test`, `mock`. `use` covers
+  stdlib modules, Python, MCP servers, and other `.ko` files.
 - `analyze(data, "prompt")` returns a typed result via schema-constrained
   output. Result is `Ok(T)` / `Uncertain(reason)` / `Exhausted(meter)`,
   handled with `match`.
 - No confidence float. Model must refuse explicitly (`Uncertain`).
 - Fixes over Python: no GIL, no async coloring, mandatory-at-boundary types,
   no bare except, one packaging story, no mutable-default-arg footgun.
+
+### File modules
+
+- A program may span several `.ko` files: `use "./lib/tax.ko" as tax`.
+- A **quoted path** is a file; a **bare word** is a stdlib module. Two
+  syntaxes rather than one namespace, so an import can never be ambiguous and
+  adding a stdlib module can never shadow somebody's file.
+- Paths resolve against the **importing file**, never the working directory.
+  A program is a directory, and it moves or vendors whole. Package names and
+  a registry are a later problem; paths need no infrastructure to work.
+- `as <name>` is **required**. A path has no natural bare name, and inventing
+  one from the file stem would bind a name the source never mentions.
+- **Everything top-level is exported.** No `export` keyword yet: adding
+  privacy later only removes names, which is a change a checker can report,
+  whereas guessing a privacy rule now would be one we could not take back.
+- **Each file reads its own top level.** A function resolves free names in
+  the file it was written in, so importing a module cannot change what its
+  code means. This is why functions carry their home module at runtime.
+- **Types are global across the module graph.** A `Money` is one type
+  everywhere, so values cross file boundaries without conversion; declaring
+  the same name differently in two files is an error, not two types.
+- **A file's top level runs once per run.** Imports are cached by canonical
+  path, so a diamond is one module, not two with separate state.
+- **Cycles are an error**, reported with the chain. A half-initialized module
+  is the failure mode Python accepted; we would rather refuse it.
+- Budgets, labels, the journal, and `kora audit` all cross file boundaries
+  unchanged. A module boundary is an organizing device, not a security one.
 
 ## Memory model
 

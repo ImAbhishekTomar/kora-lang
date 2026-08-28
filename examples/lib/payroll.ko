@@ -1,0 +1,15 @@
+# A library file. Nothing here is special: any .ko file is importable, and
+# every top-level name it binds is reachable through the alias.
+
+TAX_RATE = 0.2
+
+type Employee:
+    name: str
+    salary: int
+    team: str
+
+def with_tax(amount: float) -> float:
+    return amount * (1.0 - TAX_RATE)
+
+def describe(e: Employee) -> str:
+    return f"{e.name} ({e.team}): {e.salary}"

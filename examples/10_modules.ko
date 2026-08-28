@@ -1,0 +1,38 @@
+# Splitting a program across files.
+#
+# A quoted path is a file; a bare word is a stdlib module. The path resolves
+# relative to *this* file, so the program is a directory that moves whole.
+
+use "./lib/payroll.ko" as payroll
+use json
+
+# This file's TAX_RATE has nothing to do with the library's. Each file reads
+# its own top level, so importing a module cannot change what its code means.
+TAX_RATE = "not the library's rate"
+
+def main():
+    team = [
+        payroll.Employee("Ada", 120, "compilers"),
+        payroll.Employee("Grace", 130, "compilers"),
+    ]
+
+    for e in team:
+        print(payroll.describe(e))
+
+    # Top-level variables are exported too, not just functions and types.
+    print(f"library rate: {payroll.TAX_RATE}")
+    print(f"this file's:  {TAX_RATE}")
+
+    take_home = payroll.with_tax(120.0)
+    print(f"take home: {take_home}")
+
+    # Types are shared across files: an Employee built through the alias is
+    # the same Employee everywhere, so it serializes like any other value.
+    match json.stringify(team[0]):
+        case Ok(text):
+            print(text)
+        case Err(why):
+            print(why)
+
+test "the library keeps its own rate":
+    assert payroll.with_tax(100.0) == 80.0
