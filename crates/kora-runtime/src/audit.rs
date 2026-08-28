@@ -54,7 +54,9 @@ fn walk_stmt(stmt: &Stmt, file: &str, out: &mut Vec<DeclassifySite>) {
         StmtKind::While { body, .. }
         | StmtKind::For { body, .. }
         | StmtKind::ParallelFor { body, .. }
-        | StmtKind::WithBudget { body, .. } => walk_stmts(body, file, out),
+        | StmtKind::WithBudget { body, .. }
+        | StmtKind::WithMock { body, .. }
+        | StmtKind::Test { body, .. } => walk_stmts(body, file, out),
         StmtKind::Match { arms, .. } => {
             for arm in arms {
                 walk_stmts(&arm.body, file, out);
@@ -69,6 +71,7 @@ fn walk_stmt(stmt: &Stmt, file: &str, out: &mut Vec<DeclassifySite>) {
         | StmtKind::Break
         | StmtKind::Continue
         | StmtKind::Use { .. }
+        | StmtKind::Assert { .. }
         | StmtKind::Pass => {}
     }
 }

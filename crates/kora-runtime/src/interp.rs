@@ -142,7 +142,16 @@ pub struct Interpreter {
     pub allow_private_hosts: bool,
     /// Timeout applied to every outbound request.
     pub http_timeout_secs: u64,
+    /// Value that `analyze` should return while a `with mock` block is active.
+    mocked_analyze: Vec<Value>,
+    /// Collected `test` blocks, when running under `kora test`.
+    pub collecting_tests: bool,
+    pub tests: Vec<(String, Vec<Stmt>)>,
 }
+
+/// Tags a program may construct directly: the outcomes of a model call and
+/// the stdlib's result shape.
+const OUTCOME_TAGS: &[&str] = &["Ok", "Err", "Uncertain", "Exhausted"];
 
 const BUILTINS: &[&str] = &[
     "print",
@@ -198,7 +207,31 @@ impl Interpreter {
             pending_slot: None,
             allow_private_hosts: false,
             http_timeout_secs: 30,
+            mocked_analyze: Vec::new(),
+            collecting_tests: false,
+            tests: Vec::new(),
         }
+    }
+
+    /// Execute a program's top level without calling `main()`.
+    ///
+    /// Used by the test runner: definitions and `use` statements must be in
+    /// scope, but the program's entry point must not run.
+    pub fn run_top_level(&mut self, program: &Program) -> Result<(), RuntimeError> {
+        let mut scope = HashMap::new();
+        for stmt in &program.items {
+            if let Flow::Return(_) = self.exec(stmt, &mut scope)? {
+                break;
+            }
+        }
+        self.globals.extend(scope);
+        Ok(())
+    }
+
+    /// Run a sequence of statements in a fresh scope, for one test body.
+    pub fn run_block(&mut self, body: &[Stmt]) -> Result<(), RuntimeError> {
+        let mut scope = HashMap::new();
+        self.exec_block(body, &mut scope).map(|_| ())
     }
 
     /// Run a whole program: execute top-level statements, then call `main()`
@@ -323,6 +356,43 @@ impl Interpreter {
                     None => Value::None,
                 };
                 Ok(Flow::Return(v))
+            }
+            StmtKind::Test { name, body } => {
+                // Under `kora run` a test block is inert; `kora test`
+                // collects and runs them.
+                if self.collecting_tests {
+                    self.tests.push((name.clone(), body.clone()));
+                }
+                Ok(Flow::Normal)
+            }
+            StmtKind::Assert { condition, message } => {
+                let holds = self.eval(condition, scope)?.truthy();
+                if holds {
+                    return Ok(Flow::Normal);
+                }
+                let detail = match message {
+                    Some(expr) => self.eval(expr, scope)?.to_string(),
+                    Option::None => "assertion failed".to_string(),
+                };
+                Err(RuntimeError::new(detail, stmt.span))
+            }
+            StmtKind::WithMock {
+                target,
+                result,
+                body,
+            } => {
+                if target != "analyze" {
+                    return Err(RuntimeError::new(
+                        format!("`{target}` cannot be mocked"),
+                        stmt.span,
+                    )
+                    .with_hint("today only `analyze` can be mocked"));
+                }
+                let value = self.eval(result, scope)?;
+                self.mocked_analyze.push(value);
+                let outcome = self.exec_block(body, scope);
+                self.mocked_analyze.pop();
+                outcome
             }
             StmtKind::Use { module, alias } => {
                 if crate::stdlib::module(module).is_none() {
@@ -797,6 +867,16 @@ impl Interpreter {
                         }
                         if let Some(fields) = self.types.get(name).cloned() {
                             return self.construct(name, &fields, arg_vals, expr.span);
+                        }
+                        // Outcome constructors, so a test can build the value
+                        // a model call would have produced. Restricted to the
+                        // known tags, so a typo is an error rather than a
+                        // silently-created variant nothing will ever match.
+                        if OUTCOME_TAGS.contains(&name.as_str()) {
+                            return Ok(Value::Variant {
+                                tag: Rc::new(name.clone()),
+                                payload: arg_vals,
+                            });
                         }
                         match self.lookup(name, scope, callee.span)? {
                             Value::Func(f) => self.call_function(&f, arg_vals, expr.span),
@@ -1587,6 +1667,14 @@ impl Interpreter {
             TypeExpr::Generic(n, _) => n.clone(),
         };
         let schema = self.schema_for(&type_name, span)?;
+
+        // A mock stands in for the whole call. It is checked against the
+        // declared type, so a mock of the wrong shape fails the test instead
+        // of passing it — which is the failure mode of untyped mocking.
+        if let Some(mocked) = self.mocked_analyze.last().cloned() {
+            self.check_mock(&mocked, &type_name, span)?;
+            return Ok(mocked);
+        }
 
         // `tools=[...]`: the tools the model may call.
         let tool_funcs = match kwargs.iter().find(|(n, _)| n == "tools") {
@@ -2707,5 +2795,80 @@ impl Interpreter {
                 },
             )
             .map_err(|e| RuntimeError::new(e.to_string(), span))
+    }
+}
+
+impl Interpreter {
+    /// Verify a mocked `analyze` result matches what the call site declared.
+    ///
+    /// Mocking frameworks elsewhere cannot do this: they have no idea what
+    /// shape the caller expected, so a mock that drifts from reality keeps
+    /// passing long after the code it stands for has changed.
+    fn check_mock(&self, mocked: &Value, type_name: &str, span: Span) -> Result<(), RuntimeError> {
+        let Value::Variant { tag, payload } = mocked.unlabeled() else {
+            return Err(RuntimeError::new(
+                format!(
+                    "a mock for analyze() must be Ok(...), Uncertain(...), or Exhausted(...), got {}",
+                    mocked.type_name()
+                ),
+                span,
+            ));
+        };
+        match tag.as_str() {
+            "Ok" => {
+                let Some(inner) = payload.first() else {
+                    return Err(RuntimeError::new("Ok(...) needs a value", span));
+                };
+                let Value::Object {
+                    type_name: actual,
+                    fields,
+                } = inner.unlabeled()
+                else {
+                    return Err(RuntimeError::new(
+                        format!(
+                            "the mock returns Ok({}), but this call site declares `{type_name}`",
+                            inner.type_name()
+                        ),
+                        span,
+                    ));
+                };
+                if actual.as_str() != type_name {
+                    return Err(RuntimeError::new(
+                        format!(
+                            "the mock returns `{actual}`, but this call site declares `{type_name}`"
+                        ),
+                        span,
+                    ));
+                }
+                // Every declared field must be present, so a mock cannot drift
+                // from the type it stands for.
+                if let Some(declared) = self.types.get(type_name) {
+                    let present = fields.borrow();
+                    for field in declared {
+                        if !present.contains_key(&field.name) {
+                            return Err(RuntimeError::new(
+                                format!("the mock is missing field `{}`", field.name),
+                                span,
+                            )
+                            .with_hint(format!(
+                                "`{type_name}` declares: {}",
+                                declared
+                                    .iter()
+                                    .map(|f| f.name.as_str())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            )));
+                        }
+                    }
+                }
+                Ok(())
+            }
+            "Uncertain" | "Exhausted" => Ok(()),
+            other => Err(RuntimeError::new(
+                format!("`{other}` is not a valid analyze() outcome"),
+                span,
+            )
+            .with_hint("use Ok(...), Uncertain(reason), or Exhausted(meter)")),
+        }
     }
 }

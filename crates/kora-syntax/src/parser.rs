@@ -41,10 +41,15 @@ impl Parser {
             TokenKind::Budget => self.budget_line(),
             TokenKind::Declassify => self.declassify_stmt(),
             TokenKind::Use => self.use_stmt(),
+            TokenKind::Test => self.test_stmt(),
+            TokenKind::Assert => self.assert_stmt(),
             TokenKind::Parallel => self.parallel_for(None),
             TokenKind::Classified => self.classified_assign(),
             TokenKind::Ident(name) if name == "with" && self.peek_next_is(&TokenKind::Budget) => {
                 self.with_stmt()
+            }
+            TokenKind::Ident(name) if name == "with" && self.peek_next_is(&TokenKind::Mock) => {
+                self.with_mock()
             }
             TokenKind::If => self.if_stmt(),
             TokenKind::While => self.while_stmt(),
@@ -364,6 +369,79 @@ impl Parser {
         self.expect_newline("use")?;
         Ok(Stmt {
             kind: StmtKind::Use { module, alias },
+            span,
+        })
+    }
+
+    /// `test "name":` block.
+    fn test_stmt(&mut self) -> Result<Stmt, SyntaxError> {
+        let span = self.peek_span();
+        self.advance(); // test
+        let name = match self.peek_kind().clone() {
+            TokenKind::Str(text) => {
+                self.advance();
+                text
+            }
+            other => {
+                return Err(SyntaxError::new(
+                    format!("expected a test name in quotes, found `{other}`"),
+                    self.peek_span(),
+                )
+                .with_hint("write `test \"does the thing\":`"))
+            }
+        };
+        let body = self.block("test body")?;
+        Ok(Stmt {
+            kind: StmtKind::Test { name, body },
+            span,
+        })
+    }
+
+    /// `assert <expr>` / `assert <expr>, "message"`
+    fn assert_stmt(&mut self) -> Result<Stmt, SyntaxError> {
+        let span = self.peek_span();
+        self.advance(); // assert
+        let condition = self.expression()?;
+        let message = if self.check(&TokenKind::Comma) {
+            self.advance();
+            Some(self.expression()?)
+        } else {
+            None
+        };
+        self.expect_newline("assert")?;
+        Ok(Stmt {
+            kind: StmtKind::Assert { condition, message },
+            span,
+        })
+    }
+
+    /// `with mock analyze -> <expr>:` block.
+    fn with_mock(&mut self) -> Result<Stmt, SyntaxError> {
+        let span = self.peek_span();
+        self.advance(); // with
+        self.advance(); // mock
+        let target = match self.peek_kind().clone() {
+            TokenKind::Ident(name) => {
+                self.advance();
+                name
+            }
+            other => {
+                return Err(SyntaxError::new(
+                    format!("expected something to mock, found `{other}`"),
+                    self.peek_span(),
+                )
+                .with_hint("today only `analyze` can be mocked"))
+            }
+        };
+        self.expect(&TokenKind::Arrow, "expected `->` after the mock target")?;
+        let result = self.expression()?;
+        let body = self.block("mock block")?;
+        Ok(Stmt {
+            kind: StmtKind::WithMock {
+                target,
+                result,
+                body,
+            },
             span,
         })
     }

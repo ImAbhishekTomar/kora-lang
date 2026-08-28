@@ -65,6 +65,27 @@ pub enum StmtKind {
         module: String,
         alias: String,
     },
+    /// `test "name":` — a test case, collected by `kora test`.
+    Test {
+        name: String,
+        body: Vec<Stmt>,
+    },
+    /// `assert <expr>` / `assert <expr>, "message"`
+    Assert {
+        condition: Expr,
+        message: Option<Expr>,
+    },
+    /// `with mock analyze -> Ok(...):` — replace model calls inside the block.
+    ///
+    /// Mocks are checked against the declared result type, so one returning
+    /// the wrong shape is an error rather than a passing test.
+    WithMock {
+        /// What is being replaced; only `analyze` today.
+        target: String,
+        /// The value model calls should produce.
+        result: Expr,
+        body: Vec<Stmt>,
+    },
     /// `declassify <expr> for <sink>:` — a bounded region in which a
     /// classified value may reach one named sink. Scoped on purpose: the
     /// exposure is the block, not the rest of the program.

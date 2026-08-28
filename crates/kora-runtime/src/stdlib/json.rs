@@ -23,14 +23,155 @@ use crate::value::Value;
 pub const EXPORTS: super::Exports = &[("parse", parse), ("stringify", stringify), ("get", get)];
 
 /// `json.parse(text) -> Ok(value) | Err(reason)`
+/// `json.parse(text, RowType) -> Ok(typed) | Err(reason)`
 ///
-/// The result is `unverified`: it came from outside the program, so it cannot
-/// reach a dangerous sink until something narrows it.
-fn parse(_interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
+/// With a declared type, the shape is checked here and the error names the
+/// path that failed. Without one, the result is an untyped document — useful
+/// for exploring, but the mistake then surfaces later, which is exactly the
+/// defect this module exists to fix.
+///
+/// Either way the result is `unverified`: it came from outside the program.
+fn parse(interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
     let text = str_arg(&args, 0, "json.parse", "the text to parse", span)?;
-    match serde_json::from_str::<J>(&text) {
-        Ok(value) => Ok(ok(json_to_value(&value).with_label(Label::UNVERIFIED))),
-        Err(e) => Ok(err(describe_parse_error(&text, &e))),
+    let parsed = match serde_json::from_str::<J>(&text) {
+        Ok(value) => value,
+        Err(e) => return Ok(err(describe_parse_error(&text, &e))),
+    };
+
+    let Some(type_arg) = args.get(1) else {
+        return Ok(ok(json_to_value(&parsed).with_label(Label::UNVERIFIED)));
+    };
+    let type_name = match type_arg.unlabeled() {
+        Value::TypeRef { name } => name.to_string(),
+        other => {
+            return Err(RuntimeError::new(
+                format!(
+                    "json.parse() expects a declared type as its second argument, got {}",
+                    other.type_name()
+                ),
+                span,
+            )
+            .with_hint("declare the shape with `type Config:` and pass `Config`"))
+        }
+    };
+
+    match coerce_to_type(interp, &parsed, &type_name, "$", span)? {
+        Ok(value) => Ok(ok(value.with_label(Label::UNVERIFIED))),
+        Err(message) => Ok(err(message)),
+    }
+}
+
+/// Check a parsed document against a declared type, naming the path on
+/// failure: `$.users.2.email: expected str, got int`.
+///
+/// The outer `Result` is a real error (the type is not declared); the inner
+/// one is a mismatch, which is data the program should handle.
+fn coerce_to_type(
+    interp: &Interpreter,
+    json: &J,
+    type_name: &str,
+    path: &str,
+    span: Span,
+) -> Result<Result<Value, String>, RuntimeError> {
+    let Some(fields) = interp.declared_fields(type_name) else {
+        return Err(RuntimeError::new(
+            format!("`{type_name}` is not a declared type"),
+            span,
+        ));
+    };
+    let J::Object(map) = json else {
+        return Ok(Err(format!(
+            "{path}: expected an object for `{type_name}`, got {}",
+            json_kind(json)
+        )));
+    };
+
+    let mut out = HashMap::new();
+    for (name, ty) in fields {
+        let field_path = format!("{path}.{name}");
+        let Some(raw) = map.get(&name) else {
+            return Ok(Err(format!("{field_path}: missing")));
+        };
+        match coerce_field(interp, raw, &ty, &field_path, span)? {
+            Ok(value) => {
+                out.insert(name, value);
+            }
+            Err(message) => return Ok(Err(message)),
+        }
+    }
+    Ok(Ok(Value::Object {
+        type_name: Rc::new(type_name.to_string()),
+        fields: Rc::new(RefCell::new(out)),
+    }))
+}
+
+fn coerce_field(
+    interp: &Interpreter,
+    json: &J,
+    ty: &kora_syntax::ast::TypeExpr,
+    path: &str,
+    span: Span,
+) -> Result<Result<Value, String>, RuntimeError> {
+    use kora_syntax::ast::TypeExpr;
+    let mismatch = |expected: &str| {
+        Ok(Err(format!(
+            "{path}: expected {expected}, got {}",
+            json_kind(json)
+        )))
+    };
+    match ty {
+        TypeExpr::Name(name) => match (name.as_str(), json) {
+            ("str", J::String(s)) => Ok(Ok(Value::Str(Rc::new(s.clone())))),
+            ("str", _) => mismatch("str"),
+            ("int", J::Number(n)) if n.is_i64() || n.is_u64() => {
+                Ok(Ok(Value::Int(n.as_i64().unwrap_or(0))))
+            }
+            // A whole float is accepted: JSON has one number type, so 3.0 for
+            // an int field is a representation detail, not a mistake.
+            ("int", J::Number(n)) if n.as_f64().is_some_and(|f| f.fract() == 0.0) => {
+                Ok(Ok(Value::Int(n.as_f64().unwrap_or(0.0) as i64)))
+            }
+            ("int", _) => mismatch("int"),
+            ("float", J::Number(n)) => Ok(Ok(Value::Float(n.as_f64().unwrap_or(0.0)))),
+            ("float", _) => mismatch("float"),
+            ("bool", J::Bool(b)) => Ok(Ok(Value::Bool(*b))),
+            ("bool", _) => mismatch("bool"),
+            // A nested declared type.
+            (other, _) => coerce_to_type(interp, json, other, path, span),
+        },
+        TypeExpr::Generic(outer, args) if outer == "list" => {
+            let J::Array(items) = json else {
+                return mismatch("a list");
+            };
+            let Some(inner) = args.first() else {
+                return Ok(Err(format!("{path}: list needs an element type")));
+            };
+            let mut out = Vec::with_capacity(items.len());
+            for (index, item) in items.iter().enumerate() {
+                let item_path = format!("{path}.{index}");
+                match coerce_field(interp, item, inner, &item_path, span)? {
+                    Ok(value) => out.push(value),
+                    Err(message) => return Ok(Err(message)),
+                }
+            }
+            Ok(Ok(Value::List(Rc::new(RefCell::new(out)))))
+        }
+        other => Ok(Err(format!(
+            "{path}: `{}` is a shape json cannot check yet",
+            other.display()
+        ))),
+    }
+}
+
+fn json_kind(json: &J) -> &'static str {
+    match json {
+        J::Null => "null",
+        J::Bool(_) => "bool",
+        J::Number(n) if n.is_f64() => "float",
+        J::Number(_) => "int",
+        J::String(_) => "str",
+        J::Array(_) => "a list",
+        J::Object(_) => "an object",
     }
 }
 

@@ -14,6 +14,7 @@ const USAGE: &str = "\
 usage:
   kora run <file.ko>           run a program
   kora <file.ko>               same as `kora run`
+  kora test <file.ko>          run the `test` blocks in a file
   kora audit <file.ko>         list every declassification site
   kora runs <file.ko>          list durable runs and their status
   kora answer <file.ko> <id> <text>
@@ -36,6 +37,13 @@ fn main() -> ExitCode {
             ExitCode::SUCCESS
         }
         Some("run") => run_args(&args[1..]),
+        Some("test") => match args.get(1) {
+            Some(path) => test_file(path),
+            None => {
+                eprintln!("usage: kora test <file.ko>");
+                ExitCode::from(2)
+            }
+        },
         Some("runs") => match args.get(1) {
             Some(path) => list_runs(path),
             None => {
@@ -116,6 +124,90 @@ fn run_args(args: &[String]) -> ExitCode {
         return ExitCode::from(2);
     };
     run_file(path, mode, report, durable, resume)
+}
+
+/// `kora test` — run the `test` blocks in a file.
+///
+/// Model calls replay from the cassette, so a suite costs nothing and gives
+/// the same answer every time. A test that wants a live model is the
+/// exception, not the default.
+fn test_file(path: &str) -> ExitCode {
+    let source = match std::fs::read_to_string(path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("error: cannot read `{path}`: {e}");
+            return ExitCode::from(1);
+        }
+    };
+    let program = match kora_syntax::parse(&source) {
+        Ok(p) => p,
+        Err(e) => {
+            eprint!("{}", e.render(&source, path));
+            return ExitCode::from(1);
+        }
+    };
+
+    let program_path = Path::new(path);
+    let config = Config::discover(program_path);
+
+    // Collect the tests by running the file's top level once.
+    let mut collector = Interpreter::new();
+    collector.collecting_tests = true;
+    collector.program_name = path.to_string();
+    collector.config = config.clone();
+    collector.sinks = config.sinks.clone();
+    if let Err(e) = collector.run_top_level(&program) {
+        eprint!("{}", e.render(&source, path));
+        return ExitCode::from(1);
+    }
+
+    let tests = collector.tests.clone();
+    if tests.is_empty() {
+        println!("no tests found in {path}");
+        println!("write one with: test \"it works\":");
+        return ExitCode::SUCCESS;
+    }
+
+    let mut passed = 0;
+    let mut failed = Vec::new();
+    for (name, body) in &tests {
+        let mut interp = Interpreter::new();
+        interp.program_name = path.to_string();
+        interp.config = config.clone();
+        interp.sinks = config.sinks.clone();
+        interp.allow_private_hosts = config.http_allow_private;
+        interp.http_timeout_secs = config.http_timeout_secs;
+        interp.cassette = Some(std::sync::Arc::new(std::sync::Mutex::new(Cassette::open(
+            Mode::Replay,
+            program_path,
+        ))));
+        // Each test re-runs the file's definitions, then its own body, so
+        // tests cannot leak state into one another.
+        let outcome = interp
+            .run_top_level(&program)
+            .and_then(|()| interp.run_block(body));
+
+        match outcome {
+            Ok(()) => {
+                println!("  pass  {name}");
+                passed += 1;
+            }
+            Err(e) => {
+                println!("  FAIL  {name}");
+                println!("        {}", e.message);
+                failed.push((name.clone(), e));
+            }
+        }
+    }
+
+    println!();
+    if failed.is_empty() {
+        println!("{passed} passed");
+        ExitCode::SUCCESS
+    } else {
+        println!("{passed} passed, {} failed", failed.len());
+        ExitCode::from(1)
+    }
 }
 
 /// `kora audit` — the complete inventory of declassification sites.

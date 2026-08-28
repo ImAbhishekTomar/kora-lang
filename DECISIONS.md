@@ -232,7 +232,7 @@ when something actually demands it (designed, not built speculatively).
 3. `agent`, `tool`, `parallel for`, budgets — **done**
 4. `classified` / `declassify` + `kora audit` — **done**
 5. Durability (journal/replay, `ask_human`) — **done**
-6. `test`/`mock`, OTel, LSP (squiggles, hover, go-to-def)
+6. `test`/`mock` — **done**; OTel and LSP (squiggles, hover, go-to-def) next
 7. (parked) in-process GPU inference
 
 Ecosystem work, sequenced alongside the phases above:
