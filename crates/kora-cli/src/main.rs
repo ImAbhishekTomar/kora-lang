@@ -19,6 +19,7 @@ usage:
   kora runs <file.ko>          list durable runs and their status
   kora answer <file.ko> <id> <text>
                                answer a suspended run and resume it
+  kora trace <file.ko>         show the spans from the last run
   kora lsp                     run the language server (used by editors)
   kora --version               print version
 
@@ -26,6 +27,7 @@ flags for `run`:
   --record                     call models, then save the calls to a cassette
   --replay                     use only recorded calls; never reach a provider
   --report                     print token usage after the run
+  --trace                      record OpenTelemetry spans for this run
   --durable                    journal every effect; survives being killed
                                and can suspend on ask_human
   --resume <run-id>            continue a durable run that was interrupted";
@@ -50,6 +52,13 @@ fn main() -> ExitCode {
             Some(path) => test_file(path),
             None => {
                 eprintln!("usage: kora test <file.ko>");
+                ExitCode::from(2)
+            }
+        },
+        Some("trace") => match args.get(1) {
+            Some(path) => show_trace(path),
+            None => {
+                eprintln!("usage: kora trace <file.ko>");
                 ExitCode::from(2)
             }
         },
@@ -100,6 +109,7 @@ fn run_args(args: &[String]) -> ExitCode {
     let mut mode = Mode::Live;
     let mut report = false;
     let mut durable = false;
+    let mut trace = false;
     let mut resume: Option<String> = None;
 
     let mut iter = args.iter().peekable();
@@ -119,6 +129,7 @@ fn run_args(args: &[String]) -> ExitCode {
             "--replay" => mode = Mode::Replay,
             "--report" => report = true,
             "--durable" => durable = true,
+            "--trace" => trace = true,
             other if other.starts_with("--") => {
                 eprintln!("kora: unknown flag `{other}`");
                 eprintln!("{USAGE}");
@@ -132,7 +143,7 @@ fn run_args(args: &[String]) -> ExitCode {
         eprintln!("usage: kora run <file.ko>");
         return ExitCode::from(2);
     };
-    run_file(path, mode, report, durable, resume)
+    run_file(path, mode, report, durable, resume, trace)
 }
 
 /// `kora test` — run the `test` blocks in a file.
@@ -243,6 +254,73 @@ fn audit_file(path: &str) -> ExitCode {
     ExitCode::SUCCESS
 }
 
+/// Where a run's spans are written.
+///
+/// Honours `[telemetry] path` when the project configures one, so `kora trace`
+/// and the run itself never disagree about where the file is.
+fn trace_path(program: &Path) -> String {
+    if let kora_runtime::telemetry::Exporter::File(path) =
+        &Config::discover(program).telemetry.exporter
+    {
+        return path.clone();
+    }
+    program
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join(".kora")
+        .join("last.trace.json")
+        .to_string_lossy()
+        .to_string()
+}
+
+/// `kora trace` — show the spans from the most recent traced run.
+fn show_trace(path: &str) -> ExitCode {
+    let file = trace_path(Path::new(path));
+    let Ok(text) = std::fs::read_to_string(&file) else {
+        println!("no trace yet — run it with `kora run --trace {path}`");
+        return ExitCode::SUCCESS;
+    };
+    let Ok(payload) = serde_json::from_str::<serde_json::Value>(&text) else {
+        eprintln!("error: {file} is not readable as a trace");
+        return ExitCode::from(1);
+    };
+    let spans = &payload["resourceSpans"][0]["scopeSpans"][0]["spans"];
+    let Some(spans) = spans.as_array() else {
+        println!("the trace has no spans");
+        return ExitCode::SUCCESS;
+    };
+
+    let mut rows: Vec<(u128, String)> = Vec::new();
+    for span in spans {
+        let start = span["startTimeUnixNano"]
+            .as_str()
+            .and_then(|s| s.parse::<u128>().ok())
+            .unwrap_or(0);
+        let end = span["endTimeUnixNano"]
+            .as_str()
+            .and_then(|s| s.parse::<u128>().ok())
+            .unwrap_or(0);
+        let name = span["name"].as_str().unwrap_or("?");
+        let nested = span.get("parentSpanId").is_some();
+        let failed = span["status"]["code"] == serde_json::json!(2);
+        rows.push((
+            start,
+            format!(
+                "{}{name:<32}{:>7}ms{}",
+                if nested { "  " } else { "" },
+                end.saturating_sub(start) / 1_000_000,
+                if failed { "  FAILED" } else { "" }
+            ),
+        ));
+    }
+    rows.sort_by_key(|(start, _)| *start);
+    for (_, line) in rows {
+        println!("{line}");
+    }
+    println!("\n{} spans in {file}", spans.len());
+    ExitCode::SUCCESS
+}
+
 /// `kora runs` — durable runs for a program and where each one stands.
 fn list_runs(path: &str) -> ExitCode {
     let dir = kora_runtime::journal::runs_dir(Path::new(path));
@@ -314,15 +392,17 @@ fn answer_run(path: &str, id: &str, text: &str) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    run_file(path, Mode::Live, false, true, Some(id.to_string()))
+    run_file(path, Mode::Live, false, true, Some(id.to_string()), false)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn run_file(
     path: &str,
     mode: Mode,
     report: bool,
     durable: bool,
     resume_id: Option<String>,
+    trace: bool,
 ) -> ExitCode {
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
@@ -348,6 +428,14 @@ fn run_file(
     interp.sinks = interp.config.sinks.clone();
     interp.allow_private_hosts = interp.config.http_allow_private;
     interp.http_timeout_secs = interp.config.http_timeout_secs;
+
+    // `--trace` turns tracing on for a run that has no telemetry configured,
+    // writing beside the program so there is nothing to set up first.
+    let mut telemetry = interp.config.telemetry.clone();
+    if trace && telemetry.exporter == kora_runtime::telemetry::Exporter::None {
+        telemetry.exporter = kora_runtime::telemetry::Exporter::File(trace_path(program_path));
+    }
+    interp.tracer = std::sync::Arc::new(kora_runtime::Tracer::new(telemetry));
     interp.cassette = Some(std::sync::Arc::new(std::sync::Mutex::new(Cassette::open(
         mode,
         program_path,
@@ -372,6 +460,10 @@ fn run_file(
         if let Err(e) = cassette.save() {
             eprintln!("warning: could not write cassette: {e}");
         }
+    }
+
+    if let Err(e) = interp.tracer.flush() {
+        eprintln!("warning: {e}");
     }
 
     if report {

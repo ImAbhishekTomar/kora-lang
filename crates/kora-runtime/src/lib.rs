@@ -11,6 +11,7 @@ pub mod journal;
 pub mod label;
 pub mod portable;
 pub mod stdlib;
+pub mod telemetry;
 pub mod value;
 
 pub use budget::{Budget, Meter};
@@ -19,4 +20,5 @@ pub use config::Config;
 pub use interp::{Interpreter, RuntimeError};
 pub use journal::{Journal, Run, RunStatus};
 pub use label::{Label, SinkPolicy};
+pub use telemetry::Tracer;
 pub use value::Value;

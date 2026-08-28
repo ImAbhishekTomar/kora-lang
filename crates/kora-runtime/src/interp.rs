@@ -18,6 +18,7 @@ use crate::config::Config;
 use crate::journal::{self, Effect, Journal, Lookup, PendingQuestion};
 use crate::label::{DeclassifySite, Label, SinkPolicy};
 use crate::portable::Portable;
+use crate::telemetry::Tracer;
 use crate::value::Value;
 
 /// Why execution stopped.
@@ -147,6 +148,11 @@ pub struct Interpreter {
     /// Collected `test` blocks, when running under `kora test`.
     pub collecting_tests: bool,
     pub tests: Vec<(String, Vec<Stmt>)>,
+    /// Emits OpenTelemetry spans. Shared, so parallel branches land in one
+    /// trace.
+    pub tracer: Arc<Tracer>,
+    /// The span a new child should attach to.
+    parent_span: Option<String>,
 }
 
 /// Tags a program may construct directly: the outcomes of a model call and
@@ -210,6 +216,8 @@ impl Interpreter {
             mocked_analyze: Vec::new(),
             collecting_tests: false,
             tests: Vec::new(),
+            tracer: Arc::new(Tracer::disabled()),
+            parent_span: Option::None,
         }
     }
 
@@ -472,6 +480,21 @@ impl Interpreter {
                     expression: binding.clone(),
                     sink: sink.clone(),
                 });
+                if self.tracer.is_enabled() {
+                    // `kora audit` is the static inventory; this is the live
+                    // record of what actually happened.
+                    let mut span = self.tracer.start("declassify", self.parent_span.clone());
+                    self.tracer
+                        .set_plain(&mut span, "kora.sink", serde_json::json!(sink));
+                    self.tracer
+                        .set_plain(&mut span, "kora.value", serde_json::json!(binding));
+                    self.tracer.set_plain(
+                        &mut span,
+                        "kora.site",
+                        serde_json::json!(format!("{}:{}", self.program_name, stmt.span.line)),
+                    );
+                    self.tracer.end(span, Option::None);
+                }
 
                 // Inside the block the value is usable for this sink only, and
                 // the binding is scoped: nothing escapes to the rest of the
@@ -1020,6 +1043,20 @@ impl Interpreter {
                 span,
             ));
         }
+        // Agents are the unit of execution, so they are the unit of tracing.
+        // An agent nested inside another must restore the outer span when it
+        // finishes, or the trace loses its shape.
+        let agent_span = if self.tracer.is_enabled() && f.kind == FuncKind::Agent {
+            let outer_parent = self.parent_span.clone();
+            let mut span = self.tracer.start(&f.name, outer_parent.clone());
+            self.tracer
+                .set_plain(&mut span, "kora.kind", serde_json::json!("agent"));
+            self.parent_span = Some(Tracer::span_id_of(&span));
+            Some((span, outer_parent))
+        } else {
+            Option::None
+        };
+
         // An agent's declared budget wraps its whole body.
         let outer_budget = self.budget.clone();
         if let Some(spec) = &f.budget {
@@ -1040,6 +1077,21 @@ impl Interpreter {
         }
         let flow = self.exec_block(&f.body, &mut local);
         self.budget = outer_budget;
+
+        if let Some((mut span, outer_parent)) = agent_span {
+            self.tracer.set_plain(
+                &mut span,
+                "kora.tokens",
+                serde_json::json!(self.budget.spent_tokens()),
+            );
+            self.parent_span = outer_parent;
+            let error = match &flow {
+                Err(e) if !e.is_suspension() => Some(e.message.clone()),
+                _ => Option::None,
+            };
+            self.tracer.end(span, error);
+        }
+
         match flow? {
             Flow::Return(v) => Ok(v),
             _ => Ok(Value::None),
@@ -1711,6 +1763,7 @@ impl Interpreter {
         // exactly what the earlier attempt returned.
         let journal_site = format!("{site}#model");
         if let Some(outcome) = self.journal_model_call(&journal_site, span)? {
+            self.trace_replayed_call(&type_name, "journal");
             return self.outcome_to_value(outcome, &type_name, &schema, span);
         }
 
@@ -1722,6 +1775,7 @@ impl Interpreter {
                 .map(|e| e.outcome.clone())
         });
         if let Some(outcome) = recorded {
+            self.trace_replayed_call(&type_name, "cassette");
             return self.outcome_to_value(outcome_from_record(outcome), &type_name, &schema, span);
         }
         let mode = self
@@ -2019,6 +2073,8 @@ impl Interpreter {
         let sinks = self.sinks.clone();
         let journal = self.journal.clone();
         let parent_scope = self.scope.clone();
+        let tracer = self.tracer.clone();
+        let parent_span = self.parent_span.clone();
         let program_name = self.program_name.clone();
         let body: Vec<Stmt> = body.to_vec();
         let budget = self.budget.clone();
@@ -2055,6 +2111,8 @@ impl Interpreter {
                         cassette.as_ref(),
                         &journal,
                         &parent_scope,
+                        &tracer,
+                        &parent_span,
                     );
                     *slots[index].lock().unwrap() = Some(outcome);
                 });
@@ -2121,6 +2179,8 @@ fn run_one(
     cassette: Option<&Arc<Mutex<Cassette>>>,
     journal: &Arc<Mutex<Journal>>,
     parent_scope: &journal::Scope,
+    tracer: &Arc<Tracer>,
+    parent_span: &Option<String>,
 ) -> WorkerResult {
     let mut interp = Interpreter::new();
     interp.types = types.clone();
@@ -2137,6 +2197,10 @@ fn run_one(
     }
     interp.cassette = cassette.cloned();
     interp.journal = journal.clone();
+    // One trace covers the whole run, so parallel branches hang off the span
+    // that spawned them rather than starting traces of their own.
+    interp.tracer = tracer.clone();
+    interp.parent_span = parent_span.clone();
     // Each branch counts its own journal steps, so a resumed run replays
     // correctly no matter how the threads interleaved.
     interp.scope = parent_scope.child(index);
@@ -2870,5 +2934,32 @@ impl Interpreter {
             )
             .with_hint("use Ok(...), Uncertain(reason), or Exhausted(meter)")),
         }
+    }
+}
+
+impl Interpreter {
+    /// Record a model call that was served from a cassette or journal.
+    ///
+    /// Worth a span of its own: a trace where cached calls are simply absent
+    /// makes a replayed run look like it did no work at all.
+    fn trace_replayed_call(&mut self, type_name: &str, source: &str) {
+        if !self.tracer.records_calls() {
+            return;
+        }
+        let mut span = self
+            .tracer
+            .start(&format!("analyze {type_name}"), self.parent_span.clone());
+        self.tracer.set_plain(
+            &mut span,
+            "gen_ai.operation.name",
+            serde_json::json!("analyze"),
+        );
+        self.tracer
+            .set_plain(&mut span, "kora.replayed", serde_json::json!(true));
+        self.tracer
+            .set_plain(&mut span, "kora.replay_source", serde_json::json!(source));
+        self.tracer
+            .set_plain(&mut span, "gen_ai.usage.input_tokens", serde_json::json!(0));
+        self.tracer.end(span, None);
     }
 }

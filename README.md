@@ -253,6 +253,31 @@ ln -s "$PWD/editors/vscode" ~/.vscode/extensions/kora-lang
 The editor and the compiler share one analysis pass, so their answers cannot
 disagree.
 
+## Tracing
+
+```bash
+kora run --trace examples/03_salary_review.ko
+kora trace examples/03_salary_review.ko
+```
+
+```
+review                                 812ms
+  declassify                             0ms
+  analyze Assessment                   806ms
+review                                 794ms
+  declassify                             0ms
+  analyze Assessment                   790ms
+```
+
+Spans come from the runtime, not from hand-written instrumentation, so they
+cannot drift from the code. Model calls follow the OpenTelemetry GenAI
+semantic conventions, so existing dashboards read them without translation.
+Point `[telemetry] exporter = "otlp"` at a collector when you have one.
+
+The exporter is a labeled sink, which is the part worth knowing: a
+`classified` value cannot become a span attribute, so prompt text and secrets
+cannot leak into an observability vendor by accident.
+
 ## Status
 
 Early development, pre-alpha. Built for personal use first. See

@@ -24,6 +24,8 @@ pub struct Config {
     pub http_allow_private: bool,
     /// `[http] timeout_secs` — applied to every request; there is no "off".
     pub http_timeout_secs: u64,
+    /// `[telemetry]` settings.
+    pub telemetry: crate::telemetry::Config,
 }
 
 impl Config {
@@ -58,6 +60,46 @@ impl Config {
             http_timeout_secs: 30,
             ..Default::default()
         };
+        if let Some(section) = root.get("telemetry").and_then(|v| v.as_table()) {
+            let level = section
+                .get("level")
+                .and_then(|v| v.as_str())
+                .map(crate::telemetry::Level::parse)
+                .unwrap_or_default();
+            let exporter = match section.get("exporter").and_then(|v| v.as_str()) {
+                Some("otlp") => crate::telemetry::Exporter::Otlp(
+                    section
+                        .get("endpoint")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("http://localhost:4318")
+                        .to_string(),
+                ),
+                // The zero-configuration default: a local file, so there is
+                // no collector to stand up before seeing anything.
+                Some("file") => crate::telemetry::Exporter::File(
+                    section
+                        .get("path")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("kora.trace.json")
+                        .to_string(),
+                ),
+                _ => crate::telemetry::Exporter::None,
+            };
+            config.telemetry = crate::telemetry::Config {
+                level,
+                exporter,
+                // Redaction is on unless someone turns it off on purpose.
+                redact: section
+                    .get("redact")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(true),
+                service_name: section
+                    .get("service_name")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("kora")
+                    .to_string(),
+            };
+        }
         if let Some(http) = root.get("http").and_then(|v| v.as_table()) {
             config.http_allow_private = http
                 .get("allow_private")
