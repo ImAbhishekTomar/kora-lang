@@ -1,0 +1,413 @@
+---
+title: KORA Language Reference
+description: A friendly reference for Kora syntax, built-ins, results, and modules.
+---
+
+# KORA Language Reference
+
+This is the quick reference. Each entry shows the shape first, then a tiny example.
+
+> Kora is still evolving. Features marked **planned** are part of the design, but may not be available in the current CLI yet.
+
+## Program shape
+
+Kora uses indentation, `.ko` files, and `main()` as the entry point.
+
+```kora
+def main():
+    print("hello from Kora")
+```
+
+Comments start with `#`:
+
+```kora
+# This is a comment.
+```
+
+## Values and literals
+
+```kora
+count = 3
+price = 4.50
+name = "Ada"
+ready = True
+nothing = None
+scores = [8, 9, 10]
+user = {"name": "Ada", "active": True}
+```
+
+Strings can use single or double quotes. F-strings put expressions inside `{}`:
+
+```kora
+print(f"{name} has {len(scores)} scores")
+```
+
+## Types
+
+Kora's built-in types are `int`, `float`, `str`, `bool`, `list`, `dict`, and `None`.
+
+Named records use a `type` block:
+
+```kora
+type User:
+    name: str
+    visits: int
+
+ada = User("Ada", 3)
+print(ada.name)
+```
+
+Type annotations go on the left side of an assignment:
+
+```kora
+score: float = 9.5
+```
+
+## Functions
+
+```kora
+def greet(name: str) -> str:
+    return f"Hello, {name}!"
+
+def main():
+    print(greet("Ada"))
+```
+
+Use `return`, `pass`, `break`, and `continue` inside the usual blocks.
+
+## Conditions and loops
+
+```kora
+if score >= 9:
+    print("great")
+elif score >= 5:
+    print("okay")
+else:
+    print("try again")
+```
+
+```kora
+for score in scores:
+    print(score)
+
+while count > 0:
+    count -= 1
+```
+
+The operators are familiar: `+`, `-`, `*`, `/`, `//`, `%`, `**`, comparisons, `and`, `or`, `not`, and `in`.
+
+## `match` and outcomes
+
+`match` checks a value against `case` arms:
+
+```kora
+match result:
+    case Ok(value):
+        print(value)
+    case Uncertain(reason):
+        print(reason)
+    case _:
+        print("something else")
+```
+
+Model calls and standard-library operations use result values such as `Ok`, `Err`, `Uncertain`, and `Exhausted`. Treat the failure path as part of normal program flow.
+
+## Built-in functions
+
+These functions are available without an import.
+
+### `print(...values)`
+
+Prints values separated by spaces. It returns `None`.
+
+```kora
+print("total", 42)
+```
+
+### `len(value)`
+
+Returns the length of a list, string, or dictionary.
+
+```kora
+len("Kora")       # 4
+len([1, 2, 3])     # 3
+```
+
+### `range(stop)` and `range(start, stop)`
+
+Creates a list of integers. The stop value is not included.
+
+```kora
+for i in range(3):
+    print(i)       # 0, 1, 2
+```
+
+### `str(value)`, `int(value)`, `float(value)`, `bool(value)`
+
+Convert ordinary values.
+
+```kora
+int("42")         # 42
+float("4.5")      # 4.5
+str(42)            # "42"
+bool([])           # False
+```
+
+### `abs(number)`
+
+Returns the positive magnitude.
+
+```kora
+abs(-12)           # 12
+```
+
+### `min(values)` and `max(values)`
+
+Accept a list or two or more values.
+
+```kora
+min([4, 2, 9])     # 2
+max(4, 2, 9)       # 9
+```
+
+### `sum(list)`
+
+Adds the values in a list.
+
+```kora
+sum([10, 20, 30])  # 60
+```
+
+### `sorted(list)`
+
+Returns a new sorted list and leaves the original list alone.
+
+```kora
+ordered = sorted([3, 1, 2])
+```
+
+### `append(list, value)`
+
+Adds one value to a list. Kora currently writes this as a function, not a method call.
+
+```kora
+names = ["Ada"]
+append(names, "Grace")
+```
+
+### `keys(dict)` and `values(dict)`
+
+Return the dictionary's keys or values as lists.
+
+```kora
+user = {"name": "Ada", "team": "compilers"}
+keys(user)
+values(user)
+```
+
+### `analyze(data, prompt)`
+
+Asks the configured model for a declared type. Add `tools=[...]` when the call needs tools.
+
+```kora
+type Label:
+    name: str
+
+label: Label = analyze("a green apple", "give this a short label")
+```
+
+See [Typed model calls](/model-calls) for provider setup and replay.
+
+### `redact(value)`
+
+Masks classified fields before data leaves a safe scope.
+
+```kora
+safe = redact(employee)
+```
+
+### `tokens_spent()`, `tokens_remaining()`, `calls_spent()`
+
+Inspect the current budget meter.
+
+```kora
+if tokens_remaining() < 1000:
+    print("wrapping up")
+```
+
+These are most useful inside an agent or a `with budget(...)` block. Budget blocks are currently part of the evolving runtime surface.
+
+### `ask_human(question, context)` — planned
+
+Pauses a durable workflow and waits for a human decision.
+
+```kora
+decision = ask_human("Approve this refund?", refund.reason)
+```
+
+## Agent constructs
+
+### `agent` — planned
+
+Declares a model-using, suspendable unit of work.
+
+```kora
+agent triage(raw: str) -> Ticket:
+    budget: max_tokens = 20_000, max_steps = 5
+    return analyze(raw, "classify this ticket")
+```
+
+### `tool` — planned
+
+Declares a callable a model can use. Its signature becomes the tool schema.
+
+```kora
+tool lookup_customer(email: str) -> Customer:
+    "Fetch a customer record."
+    return db.query("select * from customers where email = ?", email)
+```
+
+### `parallel for` — planned
+
+Fans work out and collects the results.
+
+```kora
+results = parallel for ticket in tickets:
+    triage(ticket)
+```
+
+### `with budget(...)` — planned
+
+Places a nested spending fence around a block.
+
+```kora
+with budget(max_tokens = 5_000):
+    result = analyze(text, "summarize this")
+```
+
+## Data safety
+
+### `classified` and `declassify` — planned
+
+Sensitive values stay labeled. A scoped `declassify` names the only sink allowed to receive them.
+
+```kora
+declassify employee.salary for local_model:
+    review: Review = analyze(employee.salary, "assess pay")
+```
+
+The block ends the permission. There is no permanent “safe now” copy.
+
+## Modules
+
+Modules are brought in with `use`:
+
+```kora
+use json
+use csv as data
+```
+
+### Your own files
+
+A quoted path imports another Kora file. A bare word is a stdlib module, so
+the two can never be confused.
+
+```kora
+use "./lib/tax.ko" as tax
+
+def main():
+    print(tax.with_tax(100.0))
+```
+
+Paths resolve relative to the file that writes them, not the working
+directory, and always need `as <name>`. Every top-level name in the imported
+file — functions, agents, tools, types, and variables — is reachable through
+the alias.
+
+Each file keeps its own top-level names, so importing a file cannot change
+what the code inside it means. A file's top level runs once per run however
+many files import it, and an import cycle is an error rather than a
+half-built module.
+
+### `json`
+
+`json.parse(text)`, `json.stringify(value)`, and `json.get(value, path)` return `Ok(...)` or `Err(...)`.
+
+```kora
+use json
+
+match json.parse("{\"name\": \"Ada\"}"):
+    case Ok(value):
+        print(json.get(value, "name"))
+    case Err(reason):
+        print(reason)
+```
+
+### `csv`
+
+`csv.parse(text, RowType)` turns rows into declared records. `csv.rows(text)` returns dictionaries, and `csv.write(rows)` creates CSV text.
+
+```kora
+use csv
+
+type Person:
+    name: str
+    age: int
+
+people = csv.parse("name,age\nAda,36", Person)
+```
+
+### `fs`
+
+`fs.read(path)`, `fs.lines(path)`, `fs.write(path, text)`, `fs.append(path, text)`, and `fs.exists(path)` cover basic file work. Reads and writes use result values.
+
+### `http`
+
+`http.get(url)` and `http.post(url, body)` include timeouts and return `Ok(response)` or `Err(reason)`. Responses are treated as outside, unverified data.
+
+### `sql`
+
+`sql.query(db_path, query, params)` and `sql.execute(db_path, query, params)` use bound parameters.
+
+```kora
+use sql
+rows = sql.query("app.db", "select * from users where id = ?", [user_id])
+```
+
+### `time`
+
+`time.now()` returns a UTC Unix timestamp, `time.format(seconds, "iso")` formats it, and `time.elapsed(since)` returns whole seconds.
+
+### `re`
+
+`re.matches`, `re.find`, `re.find_all`, `re.replace`, and `re.split` are linear-time pattern operations and return results rather than throwing.
+
+### `env`
+
+`env.get(name)` reads an environment variable and `env.has(name)` checks whether it exists. Secret-looking names are classified automatically.
+
+### Python and MCP bridges — planned
+
+```kora
+use python statistics as stats
+use mcp github as gh
+```
+
+These bridges keep outside values separate from live Kora objects and keep credentials in `kora.toml`.
+
+## Configuration
+
+The project configuration file is `kora.toml`:
+
+```toml
+[models]
+default = "local:llama3.2:latest"
+
+[budget]
+program_max_tokens = 2_000_000
+
+[telemetry]
+exporter = "file"
+```
+
+For the complete setup path, read [Installation](/installation).

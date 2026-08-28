@@ -1,0 +1,110 @@
+---
+title: Comparison
+description: The same AI workflow in Python, TypeScript, and Kora.
+---
+
+# Comparison
+
+The quickest way to understand Kora is to put the same workflow side by side.
+
+Here, every version reads a support ticket, asks a model to classify it, and prints the result.
+
+## Python
+
+```python
+from pydantic import BaseModel
+from openai import OpenAI
+
+class Ticket(BaseModel):
+    severity: str
+    summary: str
+
+client = OpenAI()
+
+def triage(raw: str) -> Ticket:
+    response = client.beta.chat.completions.parse(
+        model="gpt-4o",
+        messages=[
+            {"role": "user", "content": f"Classify this ticket: {raw}"}
+        ],
+        response_format=Ticket,
+    )
+    return response.choices[0].message.parsed
+
+ticket = triage("Checkout fails for every customer")
+print(f"{ticket.severity}: {ticket.summary}")
+```
+
+Python is a great general-purpose choice with a rich AI ecosystem. In this example, the reliability pieces come from libraries and your own conventions: the schema, client setup, retries, logging, replay, and failure handling.
+
+## TypeScript
+
+```typescript
+import OpenAI from "openai";
+import { z } from "zod";
+import { zodTextFormat } from "openai/helpers/zod";
+
+const Ticket = z.object({
+  severity: z.string(),
+  summary: z.string(),
+});
+
+const client = new OpenAI();
+
+async function triage(raw: string) {
+  const response = await client.responses.parse({
+    model: "gpt-4o",
+    input: `Classify this ticket: ${raw}`,
+    text: { format: zodTextFormat(Ticket, "ticket") },
+  });
+  return response.output_parsed;
+}
+
+const ticket = await triage("Checkout fails for every customer");
+console.log(`${ticket.severity}: ${ticket.summary}`);
+```
+
+TypeScript gives you excellent tooling and static types. It is especially comfortable for web teams. The async boundary is explicit, but workflow concerns such as model uncertainty, token budgets, durable pauses, and record/replay still need to be designed around the call.
+
+## Kora
+
+```kora
+type Ticket:
+    severity: str
+    summary: str
+
+def main():
+    result: Ticket = analyze(
+        "Checkout fails for every customer",
+        "classify this support ticket"
+    )
+
+    match result:
+        case Ok(ticket):
+            print(f"{ticket.severity}: {ticket.summary}")
+        case Uncertain(reason):
+            print(f"Could not classify: {reason}")
+```
+
+Kora makes the workflow boundary part of the language. The declared type describes the model output, `Uncertain` is a normal result, and the runtime can record the call for deterministic replay.
+
+## Where Kora helps
+
+Kora is not trying to replace Python or TypeScript for every kind of software. Its focus is the part where ordinary code meets models, tools, data, and human decisions.
+
+| Concern | Python / TypeScript | Kora |
+| --- | --- | --- |
+| Model output | Schema libraries and conventions | Declared result type with `Ok` / `Uncertain` |
+| Testing model calls | Mocking and custom fixtures | Native record/replay cassettes |
+| Token limits | Application-level tracking | Native budget constructs |
+| Agent workflows | Frameworks plus async/job infrastructure | Language constructs for agents and parallel work |
+| Sensitive data | Libraries and careful review | Planned scoped `declassify` checks |
+| Human approval | Queue or workflow service | Planned durable `ask_human` suspension |
+
+The promise is simple: fewer important reliability decisions hidden in glue code.
+
+## The honest trade-off
+
+Python and TypeScript have bigger ecosystems, more libraries, and more production history. Kora is earlier and has fewer integrations.
+
+Kora becomes useful when your main problem is not “how do I call a model?” but “how do I make this AI workflow typed, testable, affordable, observable, and safe as it grows?”

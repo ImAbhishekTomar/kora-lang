@@ -1,0 +1,48 @@
+---
+title: Ecosystem
+description: The tools around Kora.
+---
+
+# Ecosystem
+
+Kora is a language and a small set of tools around it. The goal is for setup to feel like one smooth experience.
+
+## VS Code
+
+The first piece is here today:
+
+- `.ko` files are recognized as Kora.
+- Syntax gets colorized.
+- **Kora: Run Current File** runs the file from the editor.
+
+It is in [`editors/vscode`](https://github.com/abhishektomar/kora-lang/tree/main/editors/vscode). IntelliSense, richer diagnostics, hover, and go-to-definition are on the way with the language server.
+
+## The one-click direction
+
+The planned Kora VS Code extension will make the whole setup feel like one install:
+
+```text
+Kora extension
+├── compiler + CLI
+├── IntelliSense
+├── syntax colors + themes
+├── .ko file icons
+└── run, replay, and project tools
+```
+
+That means you can open a Kora project and start writing, without collecting five separate tools first.
+
+## Runtime pieces
+
+The repository is organized into focused Rust crates:
+
+| Piece | What it does |
+| --- | --- |
+| `kora-syntax` | Lexer, parser, and AST |
+| `kora-types` | Type checking and data labels |
+| `kora-runtime` | Interpreter, cassettes, and execution |
+| `kora-models` | OpenAI and Ollama model clients |
+| `kora-lsp` | Language server foundation |
+| `kora-cli` | The `kora` command |
+
+You can browse the full [repository](https://github.com/abhishektomar/kora-lang) when you want to go deeper.

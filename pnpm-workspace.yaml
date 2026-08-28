@@ -1,0 +1,3 @@
+allowBuilds:
+  '@abhishektomar/kora-cli': true
+  esbuild: false

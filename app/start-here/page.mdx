@@ -1,0 +1,50 @@
+---
+title: Start here
+description: Install Kora and run your first program.
+---
+
+# Start here
+
+Kora is still a pre-alpha project, so the easiest way to try it is from this repository.
+
+## 1. Get the code
+
+You need Rust and Cargo installed. Then build Kora:
+
+```bash
+git clone https://github.com/abhishektomar/kora-lang.git
+cd kora-lang
+cargo build
+```
+
+Check that the CLI is ready:
+
+```bash
+./target/debug/kora --version
+```
+
+## 2. Run a tiny program
+
+```bash
+./target/debug/kora run examples/00_basics.ko
+```
+
+Or run any `.ko` file directly:
+
+```bash
+./target/debug/kora hello.ko
+```
+
+## 3. Open it in VS Code
+
+Kora already has a small VS Code extension with `.ko` language support, syntax highlighting, and a **Kora: Run Current File** command.
+
+The extension lives in [`editors/vscode`](https://github.com/abhishektomar/kora-lang/tree/main/editors/vscode). Open that folder in VS Code and package or link it while the extension is still taking shape.
+
+The bigger plan is one friendly installer for the full Kora experience: IntelliSense, color coding, themes, file icons, and the tools needed to run Kora. That is coming as the language settles.
+
+## What should I read next?
+
+- Learn the everyday syntax in [Language](/language).
+- See typed model calls in [Typed model calls](/model-calls).
+- Peek at what is shipping next in [Roadmap](/roadmap).

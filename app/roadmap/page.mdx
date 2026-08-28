@@ -1,0 +1,51 @@
+---
+title: Roadmap
+description: What is working now, and what is coming next.
+---
+
+# Roadmap
+
+Kora is being built in small, runnable steps. Here is the honest snapshot.
+
+## Working now
+
+The current repository includes the Python-like core, static types, good source errors, typed `analyze`, OpenAI and Ollama providers, record/replay cassettes, and VS Code basics.
+
+## Coming next
+
+### Agents and parallel work
+
+Agents will be isolated, resumable units of execution. `parallel for` will fan work out without making every function `async`.
+
+```kora
+results = parallel for ticket in tickets:
+    triage(ticket)
+```
+
+### Budgets
+
+Budgets will be part of the language, not a comment in a dashboard:
+
+```kora
+agent triage(raw: str) -> Ticket:
+    budget: max_tokens = 20_000, max_steps = 5
+```
+
+### Safer data flow
+
+Classified values will need a scoped, named declassification before they reach a model sink.
+
+```kora
+declassify emp.salary for local_model:
+    assessment: Assessment = analyze(emp.salary, "assess pay")
+```
+
+The compiler should make the unsafe path hard to miss.
+
+### Durability and human input
+
+An `ask_human(...)` call will pause a program safely and let it resume after approval, even after a restart.
+
+## A note on status
+
+The later examples on this site describe the design direction. They are labeled here as upcoming because the corresponding phases are not all implemented yet.

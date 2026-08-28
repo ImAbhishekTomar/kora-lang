@@ -1,0 +1,55 @@
+---
+title: Typed model calls
+description: Ask a model for data your program can actually use.
+---
+
+# Typed model calls
+
+`analyze(data, "prompt")` is Kora's model primitive. The type on the left tells the model what shape to return.
+
+```kora
+type Expense:
+    merchant: str
+    amount: float
+    category: str
+    policy_violation: bool
+
+def main():
+    row = "Steakhouse dinner, $680, client entertainment"
+    result: Expense = analyze(
+        row,
+        "extract the expense; flag meals over $200"
+    )
+
+    match result:
+        case Ok(expense):
+            if expense.policy_violation:
+                print(f"FLAG: {expense.merchant} ${expense.amount}")
+        case Uncertain(reason):
+            print(f"Skip it: {reason}")
+```
+
+No raw JSON parsing. No confidence float to interpret. A model can give you a useful answer or say it is not sure.
+
+## Try it with a cassette
+
+For a live run, configure an OpenAI key or a local Ollama model in `kora.toml`.
+
+```bash
+kora run --record examples/01_expense_check.ko
+kora run --replay examples/01_expense_check.ko
+```
+
+The second command uses the saved response. It is fast, free, and deterministic, which makes it a nice default for tests and CI.
+
+## Where providers fit
+
+Kora currently supports OpenAI and Ollama. Pick the default in `kora.toml`:
+
+```toml
+[models]
+default = "local:llama3.2:latest"
+smart = "openai:gpt-4o"
+```
+
+Keep prompts short and let the result type do more of the work.
