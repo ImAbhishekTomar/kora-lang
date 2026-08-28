@@ -1,40 +1,45 @@
 {
   "entries": [
     {
-      "key": "b12c980de7369f2f",
+      "key": "1ece8ae53042b560",
       "site": "examples/01_expense_check.ko:18",
-      "model": "ollama:llama3.2:latest",
+      "model": "ollama:qwen3:8b",
       "prompt": "extract the expense; policy_violation is True if a single meal is over $200",
       "data": "\"AWS invoice, $4200, cloud hosting for production\"",
       "outcome": {
-        "kind": "uncertain",
-        "reason": "Policy_violation",
-        "tokens_in": 239,
-        "tokens_out": 43
+        "kind": "ok",
+        "fields": {
+          "amount": 4200.0,
+          "category": "cloud hosting",
+          "merchant": "AWS",
+          "policy_violation": false
+        },
+        "tokens_in": 487,
+        "tokens_out": 47
       }
     },
     {
-      "key": "e987c90c2ced2812",
+      "key": "e4f97dd8f4686497",
       "site": "examples/01_expense_check.ko:18",
-      "model": "ollama:llama3.2:latest",
+      "model": "ollama:qwen3:8b",
       "prompt": "extract the expense; policy_violation is True if a single meal is over $200",
       "data": "\"Steakhouse dinner for 2, $680, client entertainment\"",
       "outcome": {
         "kind": "ok",
         "fields": {
-          "amount": 680,
-          "category": "client entertainment",
-          "merchant": "Steakhouse dinner for 2",
+          "amount": 680.0,
+          "category": "Entertainment",
+          "merchant": "Steakhouse",
           "policy_violation": true
         },
-        "tokens_in": 241,
-        "tokens_out": 41
+        "tokens_in": 587,
+        "tokens_out": 48
       }
     },
     {
-      "key": "4eaf37e6b9a2ba1c",
+      "key": "afb968fbb5ed6f79",
       "site": "examples/01_expense_check.ko:18",
-      "model": "ollama:llama3.2:latest",
+      "model": "ollama:qwen3:8b",
       "prompt": "extract the expense; policy_violation is True if a single meal is over $200",
       "data": "\"Notebook and pens, $23, office supplies\"",
       "outcome": {
@@ -45,8 +50,8 @@
           "merchant": "Notebook and pens",
           "policy_violation": false
         },
-        "tokens_in": 238,
-        "tokens_out": 40
+        "tokens_in": 544,
+        "tokens_out": 41
       }
     }
   ]
