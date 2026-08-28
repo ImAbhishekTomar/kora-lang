@@ -1,0 +1,39 @@
+name: Publish npm package
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version to publish, without the leading v
+        required: true
+        default: "0.0.2"
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish kora-cli to npm
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          registry-url: https://registry.npmjs.org
+
+      - name: Validate package
+        working-directory: npm
+        run: npm pack --dry-run
+
+      - name: Set package version
+        working-directory: npm
+        run: npm version --no-git-tag-version --allow-same-version "${{ inputs.version }}"
+
+      - name: Publish package
+        working-directory: npm
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+        run: npm publish --access public --provenance
