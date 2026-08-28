@@ -16,6 +16,7 @@ use std::sync::{Arc, Mutex};
 use crate::budget::Budget;
 use crate::cassette::{self, Cassette, Mode, RecordedOutcome};
 use crate::config::Config;
+use crate::debug::{self, Debugger, Frame, Resume};
 use crate::journal::{self, Effect, Journal, Lookup, PendingQuestion};
 use crate::label::{DeclassifySite, Label, SinkPolicy};
 use crate::modules::{self, ModuleId, ModuleSpace};
@@ -31,6 +32,9 @@ pub enum StopKind {
     /// The program asked a person a question and is waiting. Not a failure —
     /// the run is parked and resumes when the answer arrives.
     Suspended,
+    /// A debugger client asked for the run to stop. Not a failure either: the
+    /// program did nothing wrong, somebody pressed stop.
+    Terminated,
 }
 
 /// A runtime error, source-anchored like syntax errors.
@@ -73,6 +77,21 @@ impl RuntimeError {
 
     pub fn is_suspension(&self) -> bool {
         self.kind == StopKind::Suspended
+    }
+
+    /// Raised when a debugger client stops the run.
+    fn terminated(span: Span) -> Self {
+        RuntimeError {
+            message: "stopped by the debugger".into(),
+            hint: None,
+            span,
+            kind: StopKind::Terminated,
+            file: None,
+        }
+    }
+
+    pub fn is_terminated(&self) -> bool {
+        self.kind == StopKind::Terminated
     }
 
     pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
@@ -194,6 +213,14 @@ pub struct Interpreter {
     /// worker per run rather than one per call, since starting an
     /// interpreter is the expensive part.
     pub python: Arc<Mutex<Option<kora_python::Worker>>>,
+    /// Attached debugger, if any. `None` costs one branch per statement.
+    ///
+    /// Taken out of the interpreter while it is being called, so the debugger
+    /// may be handed the frames it needs to describe.
+    debugger: Option<Box<dyn Debugger>>,
+    /// Frames, breakpoints, and step state. Untouched unless a debugger is
+    /// attached.
+    debug: debug::Session,
 }
 
 /// Tags a program may construct directly: the outcomes of a model call and
@@ -268,6 +295,8 @@ impl Interpreter {
             parent_span: Option::None,
             mcp: Arc::new(Mutex::new(HashMap::new())),
             python: Arc::new(Mutex::new(Option::None)),
+            debugger: Option::None,
+            debug: debug::Session::default(),
         }
     }
 
@@ -281,6 +310,7 @@ impl Interpreter {
         // that imports it back is reported as the cycle it is rather than
         // silently seeing a half-built namespace.
         self.loading.push(modules::ROOT);
+        self.debug_enter(&top_level_name(&self.program_name), 1);
         let mut scope = HashMap::new();
         let mut outcome = Ok(());
         for stmt in &program.items {
@@ -293,6 +323,7 @@ impl Interpreter {
                 }
             }
         }
+        self.debug_leave();
         self.loading.pop();
         self.globals.extend(scope);
         outcome
@@ -324,6 +355,9 @@ impl Interpreter {
     // --- statements ---
 
     fn exec(&mut self, stmt: &Stmt, scope: &mut Scope) -> Result<Flow, RuntimeError> {
+        if self.debugger.is_some() {
+            self.debug_before(stmt, scope)?;
+        }
         match &stmt.kind {
             StmtKind::Expr(e) => {
                 self.eval(e, scope)?;
@@ -1318,9 +1352,11 @@ impl Interpreter {
         // A function body reads its own file's top level, so entering one
         // defined elsewhere switches namespaces for the duration of the call.
         let outer_module = self.enter_module(home);
+        self.debug_enter(&f.name, span.line);
         let flow = self
             .exec_block(&f.body, &mut local)
             .map_err(|e| self.blame_current_file(e));
+        self.debug_leave();
         self.leave_module(outer_module);
         self.budget = outer_budget;
 
@@ -1602,9 +1638,14 @@ impl Interpreter {
                 if !self.record_output(&line, span)? {
                     return Ok(Value::None);
                 }
+                // A debugger wants the line as it happens, not at the end of
+                // the run, or its console lags behind the highlighted stack.
+                // It also takes ownership of the line: buffering it as well
+                // would show every line twice.
+                let shown = self.debug_output(&line);
                 if self.direct_stdout {
                     println!("{line}");
-                } else {
+                } else if !shown {
                     self.output.push(line);
                 }
                 Ok(Value::None)
@@ -3008,6 +3049,116 @@ struct ModuleSnapshot {
     names: Vec<(String, Portable)>,
 }
 
+// --- debugger ---
+
+impl Interpreter {
+    /// Attach a debugger. The controls are shared, so the caller can add
+    /// breakpoints and ask for a pause while the program runs.
+    pub fn attach_debugger(
+        &mut self,
+        debugger: Box<dyn Debugger>,
+        controls: crate::debug::Controls,
+        stop_on_entry: bool,
+    ) {
+        self.debugger = Some(debugger);
+        self.debug.controls = controls;
+        self.debug.stop_on_entry = stop_on_entry;
+    }
+
+    /// Whether a debugger is listening. Used to skip work that only it needs.
+    pub fn is_debugging(&self) -> bool {
+        self.debugger.is_some()
+    }
+
+    /// Push a frame. A no-op with no debugger attached, so ordinary runs pay
+    /// nothing for the bookkeeping.
+    fn debug_enter(&mut self, name: &str, line: u32) {
+        if self.debugger.is_none() {
+            return;
+        }
+        self.debug.frames.push(Frame {
+            name: name.to_string(),
+            file: self.current_file(),
+            line,
+            vars: Vec::new(),
+        });
+    }
+
+    fn debug_leave(&mut self) {
+        if self.debugger.is_none() {
+            return;
+        }
+        self.debug.frames.pop();
+    }
+
+    /// Decide whether to stop before `stmt`, and block while stopped.
+    fn debug_before(&mut self, stmt: &Stmt, scope: &Scope) -> Result<(), RuntimeError> {
+        let file = self.current_file();
+        let line = stmt.span.line;
+
+        // The snapshot is what a paused parent frame will show. Taking it
+        // before every statement means a frame that has called into another
+        // shows its names as they stood at the call, which is what a stack
+        // view should show.
+        if let Some(frame) = self.debug.frames.last_mut() {
+            frame.file = file.clone();
+            frame.line = line;
+            frame.vars = sorted_vars(scope);
+        }
+
+        let Some(reason) = self.debug.should_stop(&file, line) else {
+            if self.debug.is_terminating() {
+                return Err(RuntimeError::terminated(stmt.span));
+            }
+            return Ok(());
+        };
+
+        let globals = sorted_vars(&self.globals);
+        // The debugger is handed the frames, so it cannot be borrowed from
+        // the interpreter at the same time: take it out for the call.
+        let mut debugger = self.debugger.take().expect("checked by the caller");
+        let resume = debugger.stopped(reason, &self.debug.frames, &globals);
+        self.debugger = Some(debugger);
+        self.debug.resume(resume);
+
+        if resume == Resume::Terminate {
+            return Err(RuntimeError::terminated(stmt.span));
+        }
+        Ok(())
+    }
+
+    /// Forward a printed line to the debugger. `true` if one took it.
+    fn debug_output(&mut self, line: &str) -> bool {
+        match &mut self.debugger {
+            Some(debugger) => {
+                debugger.output(line);
+                true
+            }
+            Option::None => false,
+        }
+    }
+}
+
+/// What to call a file's top-level frame in a stack view.
+fn top_level_name(path: &str) -> String {
+    let name = Path::new(path)
+        .file_name()
+        .map(|n| n.to_string_lossy().to_string())
+        .unwrap_or_else(|| path.to_string());
+    format!("{name} (top level)")
+}
+
+/// A scope as a sorted name/value list, so the editor shows a stable order.
+fn sorted_vars(scope: &Scope) -> Vec<(String, Value)> {
+    let mut out: Vec<(String, Value)> = scope
+        .iter()
+        .filter(|(name, _)| !name.starts_with("__"))
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    out.sort_by(|a, b| a.0.cmp(&b.0));
+    out
+}
+
 // --- file modules ---
 
 impl Interpreter {
@@ -3198,6 +3349,7 @@ impl Interpreter {
 
         let outer = self.enter_module(id);
         self.loading.push(id);
+        self.debug_enter(&top_level_name(&display), 1);
         let mut scope: Scope = HashMap::new();
         let mut outcome = Ok(());
         for stmt in &program.items {
@@ -3213,6 +3365,7 @@ impl Interpreter {
             }
         }
         self.globals.extend(scope);
+        self.debug_leave();
         self.loading.pop();
         self.leave_module(outer);
         outcome?;
