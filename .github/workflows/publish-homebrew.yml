@@ -1,0 +1,45 @@
+name: Publish Homebrew formula
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version to publish, for example 0.0.2"
+        required: true
+        type: string
+
+jobs:
+  publish:
+    name: Publish formula to Homebrew tap
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out Homebrew tap
+        uses: actions/checkout@v4
+        with:
+          repository: ImAbhishekTomar/homebrew-tap
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: tap
+
+      - name: Download release formula
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          mkdir -p tap/Formula
+          curl -fsSL "https://github.com/ImAbhishekTomar/kora-lang/releases/download/v${VERSION}/kora.rb" \
+            -o tap/Formula/kora.rb
+
+      - name: Commit and push formula
+        env:
+          VERSION: ${{ inputs.version }}
+        run: |
+          set -euo pipefail
+          git -C tap config user.name "kora-release-bot"
+          git -C tap config user.email "actions@github.com"
+          git -C tap add Formula/kora.rb
+          if git -C tap diff --cached --quiet; then
+            echo "Formula is already current"
+          else
+            git -C tap commit -m "kora ${VERSION}"
+            git -C tap push
+          fi
