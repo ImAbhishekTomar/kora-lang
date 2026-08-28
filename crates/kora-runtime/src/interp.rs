@@ -2160,6 +2160,11 @@ impl Interpreter {
         let parent_scope = self.scope.clone();
         let tracer = self.tracer.clone();
         let parent_span = self.parent_span.clone();
+        // Connections are shared, not re-made per branch: a server or a
+        // Python interpreter is a process, and one per agent would be both
+        // slow and wrong.
+        let mcp = self.mcp.clone();
+        let python = self.python.clone();
         let program_name = self.program_name.clone();
         let body: Vec<Stmt> = body.to_vec();
         let budget = self.budget.clone();
@@ -2198,6 +2203,8 @@ impl Interpreter {
                         &parent_scope,
                         &tracer,
                         &parent_span,
+                        &mcp,
+                        &python,
                     );
                     *slots[index].lock().unwrap() = Some(outcome);
                 });
@@ -2266,6 +2273,8 @@ fn run_one(
     parent_scope: &journal::Scope,
     tracer: &Arc<Tracer>,
     parent_span: &Option<String>,
+    mcp: &Arc<Mutex<HashMap<String, kora_mcp::Server>>>,
+    python: &Arc<Mutex<Option<kora_python::Worker>>>,
 ) -> WorkerResult {
     let mut interp = Interpreter::new();
     interp.types = types.clone();
@@ -2285,6 +2294,8 @@ fn run_one(
     // One trace covers the whole run, so parallel branches hang off the span
     // that spawned them rather than starting traces of their own.
     interp.tracer = tracer.clone();
+    interp.mcp = mcp.clone();
+    interp.python = python.clone();
     interp.parent_span = parent_span.clone();
     // Each branch counts its own journal steps, so a resumed run replays
     // correctly no matter how the threads interleaved.

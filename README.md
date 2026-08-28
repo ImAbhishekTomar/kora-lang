@@ -62,6 +62,47 @@ Changing the configured model invalidates existing cassettes, since a
 cassette is keyed on the model as well as the prompt. Re-record with
 `--record`.
 
+## How it fits together
+
+One program, all four pillars:
+
+```python
+use mcp github as gh
+
+type Assessment:
+    risk: str
+    rationale: str
+
+agent review(customer: Customer) -> str:
+    budget: max_tokens = 4000                    # bounded, and shared
+
+    declassify customer.account as acct for local_model:
+        a: Assessment = analyze(                 # typed result, or Uncertain
+            {"account": acct},
+            "assess refund risk",
+            tools=gh.tools                       # refused: gh is its own sink
+        )
+
+    match a:
+        case Ok(assessment):
+            if assessment.risk != "low":
+                # stops here for hours or days; the process may exit
+                decision = ask_human("approve?", assessment.rationale)
+                return decision
+            return "auto-approved"
+        case Uncertain(why):    return f"needs a human: {why}"
+        case Exhausted(meter):  return f"out of {meter}"
+
+def main():
+    with budget(max_tokens = 50000):
+        results = parallel for c in customers:   # real threads, isolated heaps
+            return review(c)
+```
+
+Each guarantee comes from a different layer, and they compose: the budget is
+atomic across the fan-out, the account number can reach the on-box model but
+not GitHub, and killing the process mid-`ask_human` loses nothing.
+
 ## Documentation
 
 | | |
