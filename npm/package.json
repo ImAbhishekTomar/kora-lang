@@ -1,0 +1,26 @@
+{
+  "name": "kora-cli",
+  "version": "0.0.2",
+  "description": "kora: CLI for the Kora agent-first programming language",
+  "homepage": "https://github.com/ImAbhishekTomar/kora-lang",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ImAbhishekTomar/kora-lang.git"
+  },
+  "license": "MIT",
+  "bin": {
+    "kora": "bin/kora.js"
+  },
+  "files": [
+    "bin/kora.js",
+    "install.js"
+  ],
+  "scripts": {
+    "postinstall": "node install.js"
+  },
+  "os": ["darwin", "linux", "win32"],
+  "cpu": ["x64", "arm64"],
+  "dependencies": {
+    "tar": "^7.4.3"
+  }
+}

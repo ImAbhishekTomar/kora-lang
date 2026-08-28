@@ -12,7 +12,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.0.1"
+version = "0.0.2"
 edition = "2021"
 # Driven by dependencies (icu, via url via ureq), not by this code.
 # The CI job pins the same version, so the two cannot drift.
@@ -21,13 +21,15 @@ license = "MIT"
 repository = "https://github.com/abhishektomar/kora-lang"
 
 [workspace.dependencies]
-kora-syntax = { path = "crates/kora-syntax" }
-kora-types = { path = "crates/kora-types" }
-kora-runtime = { path = "crates/kora-runtime" }
-kora-models = { path = "crates/kora-models" }
-kora-lsp = { path = "crates/kora-lsp" }
-kora-mcp = { path = "crates/kora-mcp" }
-kora-python = { path = "crates/kora-python" }
+# `version` here must track workspace.package.version: crates.io requires a
+# version on every dependency, path or not. The release workflow checks it.
+kora-syntax = { path = "crates/kora-syntax", version = "0.0.2" }
+kora-types = { path = "crates/kora-types", version = "0.0.2" }
+kora-runtime = { path = "crates/kora-runtime", version = "0.0.2" }
+kora-models = { path = "crates/kora-models", version = "0.0.2" }
+kora-lsp = { path = "crates/kora-lsp", version = "0.0.2" }
+kora-mcp = { path = "crates/kora-mcp", version = "0.0.2" }
+kora-python = { path = "crates/kora-python", version = "0.0.2" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "2", features = ["json"] }
