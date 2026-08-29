@@ -229,7 +229,8 @@ So:
   have to agree
 - the Vercel project's **Root Directory must stay unset**: the workflow
   already runs the CLI from inside `site/`, so setting it would resolve to
-  `site/site`
+  `site/site`. `docs-site.yml` reads the setting out of the `vercel pull`
+  output and fails the job if someone sets it, rather than deploying a 404
 
 ## Releasing
 

@@ -59,6 +59,26 @@ jobs:
         env:
           VERCEL_TOKEN: ${{ secrets.VERCEL_TOKEN }}
 
+      # `vercel pull` brings the project settings down with it, so the one
+      # setting this workflow cannot survive is checkable rather than
+      # folklore. The CLI already runs from `site/`; a Root Directory of
+      # `site` in the dashboard would be applied on top of that and resolve
+      # to `site/site`. Failing here says so, instead of deploying a 404.
+      - name: Vercel Root Directory is unset
+        run: |
+          set -euo pipefail
+          root=$(node -e "
+            const s = require('./.vercel/project.json').settings || {};
+            process.stdout.write(s.rootDirectory ?? '');
+          ")
+          if [ -n "$root" ]; then
+            echo "::error::the Vercel project's Root Directory is '$root'," \
+                 "but this workflow already runs from site/. Clear it in the" \
+                 "project settings, or drop the working-directory here." >&2
+            exit 1
+          fi
+          echo "Root Directory is unset, as this workflow needs"
+
       - name: Build Vercel output
         run: pnpm exec vercel build ${{ github.ref == 'refs/heads/main' && '--prod' || '' }} --token="$VERCEL_TOKEN"
         env:
