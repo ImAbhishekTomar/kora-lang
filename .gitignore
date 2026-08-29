@@ -18,6 +18,9 @@
 # Runtime-generated artifacts
 /cassettes/
 *.trace
+
+# Python bytecode cache
+__pycache__/
 # `05_stdlib.ko` writes this next to the working directory when it runs
 /greeting.txt
 # Durable run journals

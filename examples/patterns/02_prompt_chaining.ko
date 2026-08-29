@@ -1,0 +1,51 @@
+# Pattern: prompt chaining.
+#
+# Each call processes the previous call's output, with a gate in the middle
+# that can end the chain early.
+#
+# LangGraph builds this as a `StateGraph` with three nodes, a shared `State`
+# TypedDict, and a conditional edge for the gate. Here the chain is the code:
+# three statements, an `if`, and one `else` block per call saying what to fall
+# back to. Note that every step degrades to the previous step's result rather
+# than failing — including when the provider is down, which the graph version
+# needs a try block per node to survive.
+
+type Joke:
+    text: str
+    has_punchline: bool @description("True when the joke actually lands a punchline")
+
+agent joke_pipeline(topic: str) -> str:
+    budget: max_tokens = 8000, max_calls = 3
+
+    first: Joke = analyze(topic, "write a short joke about this topic, and say whether it has a punchline") else (why):
+        return f"no joke: {why}"
+
+    # The gate. A joke that already lands is finished.
+    if first.has_punchline:
+        return first.text
+
+    improved: Joke = analyze(first.text, "make this joke funnier by adding wordplay") else:
+        return first.text
+
+    polished: Joke = analyze(improved.text, "add a surprising twist to this joke") else:
+        return improved.text
+
+    return polished.text
+
+def main():
+    print(joke_pipeline("cats"))
+
+test "the gate ends the chain when the joke already lands":
+    with mock analyze -> Ok(Joke("why did the cat sit on the keyboard?", True)):
+        result = joke_pipeline("cats")
+        assert result == "why did the cat sit on the keyboard?", f"got: {result}"
+
+test "a joke with no punchline goes through the rest of the chain":
+    # Every call in this chain declares the same type, so one mock stands for
+    # all three: the third call's result is what comes back.
+    with mock analyze -> Ok(Joke("cats are fine", False)):
+        assert joke_pipeline("cats") == "cats are fine"
+
+test "a provider outage keeps whatever the chain had already produced":
+    with mock analyze -> Failed("connection refused"):
+        assert joke_pipeline("cats") == "no joke: connection refused"

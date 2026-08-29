@@ -1,0 +1,78 @@
+# Pattern: routing.
+#
+# One call classifies the request, and the classification decides which
+# specialised path runs.
+#
+# LangGraph needs a router node, a `route_decision` function, and an
+# `add_conditional_edges` table mapping names to nodes. Here the decision is a
+# value and the routing is a `match`.
+#
+# Two things worth reading closely. `@pattern` constrains the model's answer
+# to the three routes at the schema level, so an off-menu route is refused
+# before it reaches this code. And the guard on the first arm — `if
+# d.confidence < 0.6` — sends a low-confidence route to a person instead,
+# which stops the program until someone answers and survives the process
+# exiting in between.
+
+type Route:
+    step: str
+        description: "Which specialist should handle this: story, joke, or poem"
+        pattern: "^(story|joke|poem)$"
+    confidence: float @description("0.0 to 1.0, how sure this route is")
+
+type Piece:
+    body: str
+
+# The threshold lives in a function so the guard can be read, tested, and
+# changed in one place. A guard may call an ordinary `def`; what it may not do
+# is call a model, since arms are tried in order and a guard can run for an arm
+# that never executes.
+def is_confident(confidence: float) -> bool:
+    return confidence >= 0.6
+
+def write(kind: str, request: str) -> str:
+    p: Piece = analyze(request, f"write a {kind} for this request") else (why):
+        return f"(nothing written: {why})"
+    return p.body
+
+agent router(request: str) -> str:
+    budget: max_tokens = 6000, max_calls = 2
+
+    r: Route = analyze(request, "route this request to story, joke, or poem")
+    match r:
+        # A guard reads what the pattern just bound. Arms are tried in order,
+        # so the uncertain case is checked before the confident one.
+        case Ok(d) if not is_confident(d.confidence):
+            return ask_human(f"not sure how to route this (guessed {d.step})", request)
+        case Ok(d):
+            return write(d.step, request)
+        case Uncertain(why):
+            return f"cannot route: {why}"
+        case Exhausted(meter):
+            return f"out of {meter}"
+        case Failed(why):
+            return f"provider did not answer, try later: {why}"
+
+def main():
+    print(router("Write me a joke about cats"))
+
+test "the guard sends a low-confidence route to a person":
+    assert is_confident(0.95), "a confident route runs itself"
+    assert not is_confident(0.42), "an unsure route goes to a human"
+    assert is_confident(0.6), "the threshold itself counts as confident"
+
+test "a specialist writes its piece":
+    with mock analyze -> Ok(Piece("a cat walks into a bar")):
+        assert write("joke", "write me a joke") == "a cat walks into a bar"
+
+test "an unroutable request does not crash":
+    with mock analyze -> Uncertain("this is not a writing request"):
+        assert router("what is 2 + 2?") == "cannot route: this is not a writing request"
+
+test "a provider outage says to try later rather than failing the run":
+    with mock analyze -> Failed("connection refused"):
+        assert router("write me a joke") == "provider did not answer, try later: connection refused"
+
+test "an exhausted budget is its own outcome, not an error":
+    with mock analyze -> Exhausted("tokens"):
+        assert router("write me a joke") == "out of tokens"

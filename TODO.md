@@ -94,6 +94,26 @@ model transport; the tool side of the same loop still had no timeout at all.
       transport, including one that proves the side effect ran exactly once.
       Docs, site, `DECISIONS.md`, and the example.
 
+### The pattern set (shipped)
+
+- [x] **`examples/patterns/`** — the seven agent and workflow patterns from
+      LangGraph's *Workflows and agents* guide, written in Kora so the two can
+      be read side by side: augmented LLM, prompt chaining, parallelization,
+      routing, orchestrator-worker, evaluator-optimizer, and the agent loop.
+- [x] Each carries its own `test` blocks and needs no model, no API key, and
+      no cassette, so all 29 run on every push. Every pattern forces
+      `Uncertain`, `Exhausted`, and `Failed` — the paths nobody tests, because
+      provoking them normally means making a real model misbehave.
+- [x] **A mock now crosses a `parallel for` boundary.** Workers inherited the
+      budget, the cassette, and the journal but not the mock stack, so a test
+      that fanned out reached for a real model and failed in replay mode. The
+      fan-out was the one path most worth testing and the one that could not
+      be.
+- [x] `patterns/README.md` states what is *not* good yet — nested schemas, the
+      closed tool loop, single-valued mocks, agents not being tools, no
+      streaming — since the honest half of a comparison is the half that says
+      where it loses.
+
 ## Development
 
 - [x] Refresh the documentation welcome page with a more playful guided
@@ -110,6 +130,8 @@ model transport; the tool side of the same loop still had no timeout at all.
 - [x] Add and connect every sidebar page shown in the selected documentation
       reference, then verify the full navigation.
 - [x] Run the site build and documentation checks after the content refresh.
+- [x] Build the standalone React marketing landing page from the approved Kora
+      visual, with direct links to Getting started and the documentation.
 
 ## Queue
 
