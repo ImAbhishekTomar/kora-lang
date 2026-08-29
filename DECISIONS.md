@@ -343,11 +343,14 @@ Four decisions distinguish it from what everyone else ships:
   refused: the union would let a permissive importer widen what a careful one
   withheld, and the intersection would break the permissive one's code.
 
-Ordering from here: type namespacing per package (a flat type table collides
-the moment two third parties both declare `Config`, and the consumer cannot
-fix either), then capability grants, then git dependencies with a
-content-hashed lockfile, then an append-only checksum log so a version number
-cannot come to mean different bytes over its lifetime.
+The lockfile is **authoritative**: once a repository is locked, its commit is
+what gets fetched, never the tag again. Re-resolving the reference is how a
+force-pushed tag lands on a machine with a cold cache — the lockfile would be
+rewritten to the attacker's commit and nothing would look wrong. That case is
+a test, because it is the whole reason the file exists.
+
+What remains is an append-only checksum log, so a first fetch by anyone fixes
+what a version means for everyone after.
 
 A manifest has **no field for install scripts**, and will not gain one. That
 is the whole of the `postinstall` attack class, refused by the file format
@@ -375,8 +378,8 @@ Layers 1 through 3 are built. Packages are under way; WASM components wait.
 
 Phases 0 through 6 are complete, as are the standard library, MCP
 integration, the Python sidecar, and images as values. Packages have begun
-with local path dependencies and capability grants; what remains is fetched
-dependencies and WASM components — see the ecosystem strategy above.
+with path and git dependencies, capability grants, and a content-hashed
+lockfile; what remains is the checksum log and WASM components — see the ecosystem strategy above.
 
 Reference documentation lives in [docs/](docs): the
 [language](docs/language.md), the [standard library](docs/stdlib.md), and the
@@ -405,7 +408,8 @@ Ecosystem work, sequenced alongside the phases above:
   graph) — **done**
 - Per-package type namespacing — **done**
 - Per-package capability grants — **done**
-- Git dependencies, lockfile, checksum log — next
+- Git dependencies, content-hashed lockfile, parallel fetch — **done**
+- Append-only checksum log — next
 - WASM components — later
 
 Each phase ends with a runnable demo program. Demo programs live in

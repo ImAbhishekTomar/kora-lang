@@ -10,15 +10,19 @@
 //! a literal token in the source. Kora has no dynamic import, so a scan of
 //! the syntax tree cannot miss a use, and nothing has to be guessed.
 
+pub(crate) mod fetch;
 mod grants;
-mod hash;
-mod lock;
-mod manifest;
-mod resolve;
+pub(crate) mod hash;
+mod install;
+pub(crate) mod lock;
+pub(crate) mod manifest;
+pub(crate) mod resolve;
 mod scan;
 
+pub use fetch::{all as fetch_all, default_jobs, Fetched, Request};
 pub use grants::{Capability, Grants};
 pub use hash::tree as hash_tree;
+pub use install::{install, Installed};
 pub use lock::{deps_dir, Lock, Locked};
 pub use manifest::{is_valid_name, Dep, DepSpec, GitRef, Manifest, ManifestError, DEFAULT_ENTRY};
 pub use resolve::{resolve, MissingDep, PackageId, Resolution, ResolvedPackage, UnusedDep, ROOT};

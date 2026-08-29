@@ -79,6 +79,26 @@ kora audit examples/03_salary_review.ko
 1 declassification site
 ```
 
+### `kora install <file.ko>`
+
+Fetch the git dependencies the program actually uses. A dependency declared
+and never imported is not downloaded, so a typo'd name never reaches the disk
+at all.
+
+```bash
+kora install program.ko
+kora install --jobs 4 program.ko
+```
+
+Sources land in `.kora/deps/<repository>@<commit>/` and `kora.lock` records
+what was resolved. Fetching is IO-bound, so the default width is not the core
+count; `[install] jobs` sets it.
+
+Cold resolution is wave-shaped — what a package depends on is unknowable
+until it is on disk — but once the lockfile exists the whole graph is known,
+so a warm install is one flat fan-out. Deep chains cost only on the first
+resolve, never in CI.
+
 ### `kora tree <file.ko>`
 
 The packages the program actually uses. Kora derives the graph from the
@@ -198,6 +218,10 @@ openai      = { allow = ["internal"], deny = ["classified"] }
 name    = "receipts"
 version = "0.1.0"
 entry   = "src/lib.ko"              # the default
+
+[install]
+jobs = 16                           # parallel fetches; IO-bound, so not the
+                                    # core count. Default max(8, cores * 2)
 
 [dependencies.receipts]             # where a package comes from. Whether it
 path = "./receipts"                 # is used is decided by the source, so

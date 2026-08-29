@@ -19,6 +19,8 @@ usage:
   kora test <file.ko>          run the `test` blocks in a file
   kora audit <file.ko>         list every declassification site
   kora tree <file.ko>          show the packages the program actually uses
+  kora install <file.ko>       fetch the dependencies the program uses
+    --jobs <n>                 how many fetches at once
   kora runs <file.ko>          list durable runs and their status
   kora answer <file.ko> <id> <text>
                                answer a suspended run and resume it
@@ -108,6 +110,16 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         },
+        Some("install") => {
+            let jobs = flag_value(&args, "--jobs").and_then(|v| v.parse().ok());
+            match args[1..].iter().find(|a| !a.starts_with("--")) {
+                Some(path) => install_packages(path, jobs),
+                None => {
+                    eprintln!("usage: kora install [--jobs <n>] <file.ko>");
+                    ExitCode::from(2)
+                }
+            }
+        }
         Some("tree") => match args.get(1) {
             Some(path) => package_tree(path),
             None => {
@@ -182,6 +194,55 @@ fn run_args(args: &[String]) -> ExitCode {
 ///
 /// The same analysis the editor shows, as a command: useful in CI, and the
 /// only way to check a file that needs resources this machine does not have.
+/// The value after a `--flag`, when one was given.
+fn flag_value(args: &[String], flag: &str) -> Option<String> {
+    let index = args.iter().position(|a| a == flag)?;
+    args.get(index + 1)
+        .filter(|v| !v.starts_with("--"))
+        .cloned()
+}
+
+/// `kora install` — fetch the dependencies the program actually uses.
+///
+/// Only what the source imports is fetched: a dependency declared and never
+/// imported is not downloaded, so a typo'd name never reaches the disk.
+fn install_packages(path: &str, jobs: Option<usize>) -> ExitCode {
+    let program_path = Path::new(path);
+    if !program_path.is_file() {
+        eprintln!("error: cannot read `{path}`");
+        return ExitCode::from(1);
+    }
+    let config = Config::discover(program_path);
+    let jobs = jobs.unwrap_or(config.install_jobs);
+
+    let outcome = kora_pkg::install(program_path, jobs, true);
+    for url in &outcome.fetched {
+        println!("  fetched  {url}");
+    }
+    for (url, why) in &outcome.failed {
+        eprintln!("error: cannot fetch {url}");
+        for line in why.lines().take(4) {
+            eprintln!("   {}", line.trim());
+        }
+        eprintln!();
+    }
+    if outcome.lock_changed {
+        println!("  updated  {}", kora_pkg::Lock::FILE);
+    }
+
+    let used = outcome.resolution.needed().len();
+    if outcome.failed.is_empty() {
+        println!("{used} package{} in use", if used == 1 { "" } else { "s" });
+    }
+
+    let problems = report_package_problems(&outcome.resolution);
+    if outcome.failed.is_empty() && !problems {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
 /// `kora tree` — the packages a program actually uses, and why.
 ///
 /// The graph is derived from the source, so this is the list that would be
@@ -242,7 +303,7 @@ fn package_tree(path: &str) -> ExitCode {
         );
         failed = true;
     }
-    failed |= report_grant_problems(&resolution);
+    failed |= report_package_problems(&resolution);
 
     if failed {
         ExitCode::from(1)
@@ -258,8 +319,30 @@ fn package_tree(path: &str) -> ExitCode {
 /// conflict means one package was granted two different ways: taking the
 /// union would let a permissive importer widen what a careful one withheld,
 /// and taking the intersection would break the permissive one's working code.
-fn report_grant_problems(resolution: &kora_pkg::Resolution) -> bool {
+fn report_package_problems(resolution: &kora_pkg::Resolution) -> bool {
     let mut failed = false;
+
+    for unfetched in &resolution.unfetched {
+        eprintln!(
+            "error: package `{}` ({} at {}) is not fetched",
+            unfetched.name, unfetched.url, unfetched.reference
+        );
+        eprintln!("   = hint: run `kora install <file.ko>`");
+        eprintln!();
+        failed = true;
+    }
+
+    for (url, expected, actual) in &resolution.tampered {
+        // The lockfile is what the bytes were when they were fetched and
+        // verified. Different bytes under the same name is the shape of a
+        // moved tag, a rewritten repository, or an edited cache.
+        eprintln!("error: {url} does not match the lockfile");
+        eprintln!("   expected {expected}");
+        eprintln!("   found    {actual}");
+        eprintln!("   = hint: re-fetch with `kora install`, or restore the checkout");
+        eprintln!();
+        failed = true;
+    }
 
     for (path, why) in &resolution.bad_manifests {
         // Silently treating this as an empty manifest would read as "this
@@ -362,7 +445,7 @@ fn check_files(paths: &[String], syntax_only: bool) -> ExitCode {
                         }
                     }
                 }
-                if report_grant_problems(&resolution) {
+                if report_package_problems(&resolution) {
                     problems += 1;
                 }
                 for missing in &resolution.missing {
@@ -432,7 +515,11 @@ fn test_file(path: &str) -> ExitCode {
 
     let program_path = Path::new(path);
     let config = Config::discover(program_path);
-    let packages = std::sync::Arc::new(kora_pkg::resolve(program_path));
+    let resolution = kora_pkg::resolve(program_path);
+    if report_package_problems(&resolution) {
+        return ExitCode::from(1);
+    }
+    let packages = std::sync::Arc::new(resolution);
 
     // Collect the tests by running the file's top level once.
     let mut collector = Interpreter::new();
@@ -694,7 +781,14 @@ fn run_file(
     let mut interp = Interpreter::new();
     interp.direct_stdout = true;
     interp.program_name = path.to_string();
-    interp.packages = std::sync::Arc::new(kora_pkg::resolve(program_path));
+    // Verified before anything runs: an unfetched or tampered dependency
+    // must stop the program, not surface at whichever import reaches it
+    // first — by then the top level of other packages has already run.
+    let packages = kora_pkg::resolve(program_path);
+    if report_package_problems(&packages) {
+        return ExitCode::from(1);
+    }
+    interp.packages = std::sync::Arc::new(packages);
     interp.config = Config::discover(program_path);
     interp.sinks = interp.config.sinks.clone();
     interp.allow_private_hosts = interp.config.http_allow_private;

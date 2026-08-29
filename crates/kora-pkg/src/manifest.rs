@@ -258,6 +258,12 @@ fn parse_dep(name: &str, spec: &toml::Value) -> Result<Dep, ManifestError> {
 /// `https://github.com/org/x.git` name the same thing. Treating them as three
 /// would put three copies in the graph and three rows in the lockfile.
 fn normalize_git_url(url: &str) -> String {
+    // A local path is left exactly as written: stripping a scheme it never
+    // had, or a trailing slash that is part of it, would name a different
+    // directory.
+    if url.starts_with('/') || url.starts_with('.') {
+        return url.to_string();
+    }
     let url = url
         .strip_prefix("https://")
         .or_else(|| url.strip_prefix("http://"))

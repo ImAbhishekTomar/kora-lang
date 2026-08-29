@@ -555,6 +555,38 @@ error: expected `Config`, got `Config`
            they are different types with the same name
 ```
 
+**A fetched package is named by its repository, and pinned by its commit:**
+
+```toml
+[dependencies.receipts]
+git = "github.com/org/receipts"
+tag = "v0.3.1"
+grants = { net = true }
+```
+
+```bash
+kora install program.ko    # fetch what the source imports
+```
+
+Identity is the full repository path, never a short name — there is no flat
+namespace to squat in, which is where dependency-confusion attacks begin.
+
+`kora.lock` records the reference you wrote, the commit it resolved to, and a
+hash of the tree's contents. It is generated, committed, and never
+hand-edited. **Once a repository is locked, its commit is what gets fetched —
+never the tag again.** A maintainer account taken over and a tag force-pushed
+to a backdoor changes nothing about what runs, including on a machine with a
+cold cache, which is where re-resolving the tag would otherwise land it.
+
+Hashes are checked on every `run`, `test`, and `check`, not only at install:
+a cached dependency edited on disk must not run just because the directory is
+there.
+
+Fetched sources live in `.kora/deps/<repository>@<commit>/`, keyed by commit
+so a moved tag gets its own directory instead of reusing bytes already there.
+The directory is tool-owned and reproducible from the lockfile; `kora.lock`
+is what belongs in version control.
+
 **A dependency has no ambient authority.** It reaches the network, the
 filesystem, a database, the environment, a Python worker, or an MCP server
 only where the importing program said so:

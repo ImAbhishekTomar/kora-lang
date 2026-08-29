@@ -34,6 +34,9 @@ pub struct Config {
     pub mcp_servers: HashMap<String, kora_mcp::ServerConfig>,
     /// `[python]` — which interpreter the sidecar uses.
     pub python: kora_python::Config,
+    /// `[install] jobs` — how many dependency fetches run at once. Zero
+    /// means the default, which suits IO rather than core count.
+    pub install_jobs: usize,
 }
 
 impl Config {
@@ -68,6 +71,11 @@ impl Config {
             http_timeout_secs: 30,
             ..Default::default()
         };
+        if let Some(section) = root.get("install").and_then(|v| v.as_table()) {
+            if let Some(jobs) = section.get("jobs").and_then(|v| v.as_integer()) {
+                config.install_jobs = jobs.max(0) as usize;
+            }
+        }
         if let Some(section) = root.get("python").and_then(|v| v.as_table()) {
             if let Some(command) = section.get("command").and_then(|v| v.as_str()) {
                 config.python.command = command.to_string();
