@@ -19,6 +19,7 @@ use std::path::{Path, PathBuf};
 
 use kora_syntax::token::Span;
 
+use crate::grants::Grants;
 use crate::manifest::{DepSpec, Manifest};
 use crate::scan;
 
@@ -40,6 +41,9 @@ pub struct ResolvedPackage {
     /// Entry file, absolute.
     pub entry: PathBuf,
     pub manifest: Manifest,
+    /// The authority this package actually holds, after being capped by
+    /// every parent that granted to it.
+    pub grants: Grants,
 }
 
 /// A dependency declared in a manifest that no source file imports.
@@ -48,6 +52,26 @@ pub struct UnusedDep {
     /// Which package declared it.
     pub declared_by: PackageId,
     pub name: String,
+}
+
+/// One package granted two different sets of authority by two importers.
+///
+/// Silently taking the union would let a permissive importer widen what a
+/// careful one allowed; silently taking the intersection would break the
+/// permissive one's working code. Both are worse than saying so.
+#[derive(Debug, Clone)]
+pub struct GrantConflict {
+    pub package: String,
+    pub first: String,
+    pub second: String,
+}
+
+/// A package that needs authority nobody granted it.
+#[derive(Debug, Clone)]
+pub struct GrantShortfall {
+    pub package: String,
+    pub missing: Vec<String>,
+    pub granted: String,
 }
 
 /// A `use pkg` that names something the manifest does not declare.
@@ -68,9 +92,17 @@ pub struct Resolution {
     pub dev_only: HashSet<PackageId>,
     pub unused: Vec<UnusedDep>,
     pub missing: Vec<MissingDep>,
+    /// One package granted differently by two importers.
+    pub grant_conflicts: Vec<GrantConflict>,
+    /// Packages whose `[package.requires]` exceeds what they were granted.
+    pub shortfalls: Vec<GrantShortfall>,
     /// Files that could not be read or parsed, reported rather than fatal so
     /// one bad file does not hide the rest of the graph.
     pub unreadable: Vec<(PathBuf, String)>,
+    /// Manifests that could not be parsed. A swallowed error here reads as
+    /// "this package has no dependencies", which is exactly the wrong
+    /// conclusion to draw from a typo.
+    pub bad_manifests: Vec<(PathBuf, String)>,
 }
 
 impl Resolution {
@@ -123,6 +155,8 @@ pub fn resolve(entry: &Path) -> Resolution {
         root: canonical(&root_dir),
         entry: canonical(entry),
         manifest: root_manifest,
+        // The program is bounded by its own kora.toml and nothing else.
+        grants: Grants::unrestricted(),
     });
     state.by_root.insert(canonical(&root_dir), ROOT);
 
@@ -138,7 +172,10 @@ pub fn resolve(entry: &Path) -> Resolution {
         packages: std::mem::take(&mut state.packages),
         unused: Vec::new(),
         missing: std::mem::take(&mut state.missing),
+        grant_conflicts: std::mem::take(&mut state.grant_conflicts),
+        shortfalls: Vec::new(),
         unreadable: std::mem::take(&mut state.unreadable),
+        bad_manifests: std::mem::take(&mut state.bad_manifests),
     };
 
     // A dependency is unused when the package that declared it never names
@@ -154,6 +191,25 @@ pub fn resolve(entry: &Path) -> Resolution {
                     name: name.clone(),
                 });
             }
+        }
+    }
+
+    // A package that asks for authority nobody gave it fails here, before
+    // the run, rather than at whichever call first needs it.
+    for package in &out.packages {
+        if package.id == ROOT {
+            continue;
+        }
+        let missing = package.manifest.requires.missing_from(&package.grants);
+        if !missing.is_empty() {
+            out.shortfalls.push(GrantShortfall {
+                package: package
+                    .name
+                    .clone()
+                    .unwrap_or_else(|| package.root.display().to_string()),
+                missing,
+                granted: package.grants.describe(),
+            });
         }
     }
 
@@ -173,6 +229,8 @@ struct State {
     used: HashMap<PackageId, HashSet<String>>,
     missing: Vec<MissingDep>,
     unreadable: Vec<(PathBuf, String)>,
+    grant_conflicts: Vec<GrantConflict>,
+    bad_manifests: Vec<(PathBuf, String)>,
 }
 
 impl State {
@@ -262,11 +320,30 @@ impl State {
         let DepSpec::Path { path } = &dep.spec;
         let root = canonical(&self.packages[from.0].root.join(path));
 
+        // A parent may only pass on what it holds, so an attacker who
+        // compromises a leaf gains nothing that every link above it lacked.
+        let effective = dep.grants.capped_by(&self.packages[from.0].grants);
+
         if let Some(id) = self.by_root.get(&root) {
+            let existing = &self.packages[id.0];
+            if existing.grants != effective {
+                self.grant_conflicts.push(GrantConflict {
+                    package: name.to_string(),
+                    first: existing.grants.describe(),
+                    second: effective.describe(),
+                });
+            }
             return Some(*id);
         }
 
-        let manifest = Manifest::at(&root).unwrap_or_default();
+        let manifest = match Manifest::at(&root) {
+            Ok(manifest) => manifest,
+            Err(why) => {
+                self.bad_manifests
+                    .push((root.join("kora.toml"), why.message));
+                Manifest::default()
+            }
+        };
         let entry = canonical(&root.join(manifest.entry()));
         let id = PackageId(self.packages.len());
         self.packages.push(ResolvedPackage {
@@ -275,6 +352,7 @@ impl State {
             root: root.clone(),
             entry,
             manifest,
+            grants: effective,
         });
         self.by_root.insert(root, id);
         Some(id)
@@ -310,12 +388,12 @@ mod tests {
     ///
     /// Each entry is (relative path, contents). Directories are created as
     /// needed, so a test reads as the layout it is describing.
-    struct Tree {
+    pub(super) struct Tree {
         root: PathBuf,
     }
 
     impl Tree {
-        fn new(label: &str, files: &[(&str, &str)]) -> Tree {
+        pub(super) fn new(label: &str, files: &[(&str, &str)]) -> Tree {
             let root = std::env::temp_dir().join(format!("kora-pkg-{label}"));
             let _ = std::fs::remove_dir_all(&root);
             for (path, contents) in files {
@@ -326,7 +404,7 @@ mod tests {
             Tree { root }
         }
 
-        fn resolve(&self, entry: &str) -> Resolution {
+        pub(super) fn resolve(&self, entry: &str) -> Resolution {
             super::resolve(&self.root.join(entry))
         }
     }
@@ -543,5 +621,158 @@ mod tests {
         );
         let r = tree.resolve("main.ko");
         assert_eq!(names(&r.needed()), ["receipts"]);
+    }
+}
+
+#[cfg(test)]
+mod grant_tests {
+    use super::tests::Tree;
+    use super::*;
+    use crate::grants::Capability;
+
+    #[test]
+    fn a_dependency_holds_only_what_the_program_granted() {
+        let tree = Tree::new(
+            "granted",
+            &[
+                (
+                    "kora.toml",
+                    "[dependencies.receipts]\npath = \"./receipts\"\ngrants = { net = true }\n",
+                ),
+                ("main.ko", "use pkg receipts as r\n"),
+                ("receipts/kora.toml", "[package]\nname = \"receipts\"\n"),
+                ("receipts/src/lib.ko", "def read() -> int:\n    return 1\n"),
+            ],
+        );
+        let r = tree.resolve("main.ko");
+        let receipts = r.needed()[0];
+        assert!(receipts.grants.allows(Capability::Net));
+        assert!(!receipts.grants.allows(Capability::Fs));
+        assert!(!receipts.grants.allows_declassify());
+    }
+
+    #[test]
+    fn a_dependency_cannot_pass_on_what_it_lacks() {
+        // `receipts` was granted only net, so the fs it hands `helper` is
+        // not its to give.
+        let tree = Tree::new(
+            "capped",
+            &[
+                (
+                    "kora.toml",
+                    "[dependencies.receipts]\npath = \"./receipts\"\ngrants = { net = true }\n",
+                ),
+                ("main.ko", "use pkg receipts as r\n"),
+                (
+                    "receipts/kora.toml",
+                    "[package]\nname = \"receipts\"\n\n[dependencies.helper]\npath = \"../helper\"\ngrants = { net = true, fs = true }\n",
+                ),
+                ("receipts/src/lib.ko", "use pkg helper as h\n"),
+                ("helper/kora.toml", "[package]\nname = \"helper\"\n"),
+                ("helper/src/lib.ko", "def x() -> int:\n    return 1\n"),
+            ],
+        );
+        let r = tree.resolve("main.ko");
+        let helper = r
+            .needed()
+            .into_iter()
+            .find(|p| p.name.as_deref() == Some("helper"))
+            .expect("helper resolved");
+        assert!(helper.grants.allows(Capability::Net));
+        assert!(
+            !helper.grants.allows(Capability::Fs),
+            "fs was never receipts' to grant"
+        );
+    }
+
+    #[test]
+    fn a_package_asking_for_more_than_it_was_given_is_reported() {
+        let tree = Tree::new(
+            "shortfall",
+            &[
+                (
+                    "kora.toml",
+                    "[dependencies]\nreceipts = { path = \"./receipts\" }\n",
+                ),
+                ("main.ko", "use pkg receipts as r\n"),
+                (
+                    "receipts/kora.toml",
+                    "[package]\nname = \"receipts\"\n\n[package.requires]\nnet = true\nsinks = [\"stripe\"]\n",
+                ),
+                ("receipts/src/lib.ko", "def read() -> int:\n    return 1\n"),
+            ],
+        );
+        let r = tree.resolve("main.ko");
+        assert_eq!(r.shortfalls.len(), 1, "{:?}", r.shortfalls);
+        assert!(r.shortfalls[0].missing.contains(&"net".to_string()));
+        assert!(r.shortfalls[0]
+            .missing
+            .contains(&"sink `stripe`".to_string()));
+    }
+
+    #[test]
+    fn one_package_granted_two_different_ways_is_a_conflict() {
+        // Union would let `right` widen what `left` carefully withheld;
+        // intersection would break `right`. Saying so beats both.
+        let tree = Tree::new(
+            "conflict",
+            &[
+                (
+                    "kora.toml",
+                    "[dependencies.left]\npath = \"./left\"\ngrants = { net = true, fs = true }\n\n[dependencies.right]\npath = \"./right\"\ngrants = { net = true, fs = true }\n",
+                ),
+                ("main.ko", "use pkg left as l\nuse pkg right as r\n"),
+                (
+                    "left/kora.toml",
+                    "[package]\nname = \"left\"\n\n[dependencies.shared]\npath = \"../shared\"\ngrants = { net = true }\n",
+                ),
+                ("left/src/lib.ko", "use pkg shared as s\n"),
+                (
+                    "right/kora.toml",
+                    "[package]\nname = \"right\"\n\n[dependencies.shared]\npath = \"../shared\"\ngrants = { fs = true }\n",
+                ),
+                ("right/src/lib.ko", "use pkg shared as s\n"),
+                ("shared/kora.toml", "[package]\nname = \"shared\"\n"),
+                ("shared/src/lib.ko", "def x() -> int:\n    return 1\n"),
+            ],
+        );
+        let r = tree.resolve("main.ko");
+        assert!(!r.grant_conflicts.is_empty(), "expected a conflict");
+        assert_eq!(r.grant_conflicts[0].package, "shared");
+    }
+
+    #[test]
+    fn a_manifest_that_does_not_parse_is_reported_not_swallowed() {
+        // Treating a broken manifest as an empty one reads as "this package
+        // has no dependencies", which is the wrong conclusion to draw from a
+        // typo — and, with grants, the wrong conclusion to draw about what a
+        // package was allowed to do.
+        let tree = Tree::new(
+            "badmanifest",
+            &[
+                (
+                    "kora.toml",
+                    "[dependencies]\nbroken = { path = \"./broken\" }\n",
+                ),
+                ("main.ko", "use pkg broken as b\n"),
+                ("broken/kora.toml", "[package\nname = oops\n"),
+                ("broken/src/lib.ko", "def x() -> int:\n    return 1\n"),
+            ],
+        );
+        let r = tree.resolve("main.ko");
+        assert_eq!(r.bad_manifests.len(), 1, "{:?}", r.bad_manifests);
+    }
+
+    #[test]
+    fn the_root_program_is_unrestricted() {
+        let tree = Tree::new(
+            "rootfree",
+            &[
+                ("kora.toml", "[dependencies]\n"),
+                ("main.ko", "def main():\n    print(1)\n"),
+            ],
+        );
+        let r = tree.resolve("main.ko");
+        assert!(r.packages[ROOT.0].grants.is_unrestricted());
     }
 }

@@ -6,6 +6,7 @@
 //! `kora.toml` happens to sit above it — often the consumer's — and silently
 //! resolve that package's imports against the wrong `[dependencies]` table.
 
+use crate::grants::Grants;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
@@ -29,6 +30,10 @@ pub enum DepSpec {
 pub struct Dep {
     pub name: String,
     pub spec: DepSpec,
+    /// `[dependencies.<name>.grants]` — the authority this program hands to
+    /// that package. Absent means nothing, which is the safe default: a
+    /// dependency that was never given the network cannot reach it.
+    pub grants: Grants,
 }
 
 /// A parsed `kora.toml`, from the package's point of view.
@@ -42,6 +47,10 @@ pub struct Manifest {
     /// Relative to the package root.
     pub entry: Option<PathBuf>,
     pub deps: HashMap<String, Dep>,
+    /// `[package.requires]` — what this package needs from whoever imports
+    /// it. Checked against what it was actually granted, so a shortfall is
+    /// reported before the program runs rather than at the first call.
+    pub requires: Grants,
 }
 
 /// Why a manifest could not be read.
@@ -108,9 +117,10 @@ impl Manifest {
         };
         while let Some(d) = dir {
             if d.join("kora.toml").is_file() {
-                if let Ok(manifest) = Manifest::at(&d) {
-                    return (d, manifest);
-                }
+                // A manifest that does not parse still *is* the manifest.
+                // Walking past it would resolve against whichever one sits
+                // further up, which is a stranger answer than an empty one.
+                return (d.clone(), Manifest::at(&d).unwrap_or_default());
             }
             dir = d.parent().map(PathBuf::from);
         }
@@ -141,6 +151,9 @@ impl Manifest {
                 .get("entry")
                 .and_then(|v| v.as_str())
                 .map(PathBuf::from);
+            if let Some(requires) = section.get("requires").and_then(|v| v.as_table()) {
+                manifest.requires = Grants::from_toml(requires);
+            }
         }
 
         if let Some(section) = root.get("dependencies").and_then(|v| v.as_table()) {
@@ -174,11 +187,18 @@ fn parse_dep(name: &str, spec: &toml::Value) -> Result<Dep, ManifestError> {
         );
     };
 
+    let grants = table
+        .get("grants")
+        .and_then(|v| v.as_table())
+        .map(Grants::from_toml)
+        .unwrap_or_default();
+
     Ok(Dep {
         name: name.to_string(),
         spec: DepSpec::Path {
             path: PathBuf::from(path),
         },
+        grants,
     })
 }
 
