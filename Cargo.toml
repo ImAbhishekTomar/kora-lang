@@ -5,6 +5,7 @@ members = [
     "crates/kora-types",
     "crates/kora-runtime",
     "crates/kora-models",
+    "crates/kora-pkg",
     "crates/kora-lsp",
     "crates/kora-dap",
     "crates/kora-mcp",
@@ -31,6 +32,7 @@ kora-syntax = { path = "crates/kora-syntax", version = "0.0.2" } # x-release-ple
 kora-types = { path = "crates/kora-types", version = "0.0.2" } # x-release-please-version
 kora-runtime = { path = "crates/kora-runtime", version = "0.0.2" } # x-release-please-version
 kora-models = { path = "crates/kora-models", version = "0.0.2" } # x-release-please-version
+kora-pkg = { path = "crates/kora-pkg", version = "0.0.2" } # x-release-please-version
 kora-lsp = { path = "crates/kora-lsp", version = "0.0.2" } # x-release-please-version
 kora-dap = { path = "crates/kora-dap", version = "0.0.2" } # x-release-please-version
 kora-mcp = { path = "crates/kora-mcp", version = "0.0.2" } # x-release-please-version

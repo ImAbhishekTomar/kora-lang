@@ -348,6 +348,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kora-pkg"
+version = "0.0.2"
+dependencies = [
+ "kora-syntax",
+ "toml",
+]
+
+[[package]]
 name = "kora-python"
 version = "0.0.2"
 dependencies = [
