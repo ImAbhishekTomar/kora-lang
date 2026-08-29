@@ -9,6 +9,14 @@ env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: "1"
 
+# Nothing here reads or writes anything through the GitHub API: every job
+# checks the repository out, builds it, and runs something. Saying so is what
+# keeps a compromised dependency in a build step from having a token that can
+# push, comment, or publish -- the default token is broader than any job below
+# needs, and the default is what an attacker inherits.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}

@@ -48,37 +48,13 @@ DOCS = [
     ("docs/stdlib.md", MARKDOWN),
     ("docs/cli.md", MARKDOWN),
     ("examples/README.md", MARKDOWN),
-    ("site/app/page.mdx", SITE),
     ("site/app/comparison/page.mdx", SITE),
-    ("site/app/agents/page.mdx", SITE),
-    ("site/app/changelog/page.mdx", SITE),
-    ("site/app/cli/page.mdx", SITE),
-    ("site/app/configuration/page.mdx", SITE),
-    ("site/app/concurrency/page.mdx", SITE),
-    ("site/app/control-flow/page.mdx", SITE),
-    ("site/app/core-concepts/page.mdx", SITE),
-    ("site/app/data-structures/page.mdx", SITE),
-    ("site/app/developer-guide/page.mdx", SITE),
-    ("site/app/error-handling/page.mdx", SITE),
     ("site/app/ecosystem/page.mdx", SITE),
-    ("site/app/events/page.mdx", SITE),
-    ("site/app/examples/page.mdx", SITE),
-    ("site/app/faq/page.mdx", SITE),
-    ("site/app/first-program/page.mdx", SITE),
-    ("site/app/functions/page.mdx", SITE),
     ("site/app/installation/page.mdx", SITE),
     ("site/app/language/page.mdx", SITE),
     ("site/app/model-calls/page.mdx", SITE),
-    ("site/app/memory/page.mdx", SITE),
-    ("site/app/packages/page.mdx", SITE),
-    ("site/app/plans/page.mdx", SITE),
-    ("site/app/quick-tour/page.mdx", SITE),
     ("site/app/reference/page.mdx", SITE),
     ("site/app/roadmap/page.mdx", SITE),
-    ("site/app/standard-library/page.mdx", SITE),
-    ("site/app/syntax/page.mdx", SITE),
-    ("site/app/tools/page.mdx", SITE),
-    ("site/app/types/page.mdx", SITE),
     ("site/app/releases/page.mdx", SITE),
     ("site/app/releases/0.0.1/page.mdx", SITE),
     ("site/app/releases/0.0.2/page.mdx", SITE),
@@ -128,6 +104,9 @@ def check_code_blocks(kora: str) -> None:
     print("Kora code blocks")
     checked = skipped = 0
     for doc, kind in DOCS:
+        if not os.path.exists(os.path.join(ROOT, doc)):
+            # check_site_coverage names this properly; do not mask it here.
+            continue
         for line_no, block in code_blocks(read(doc), FENCE[kind]):
             if any(marker in block for marker in SKIP_MARKERS):
                 skipped += 1
@@ -221,11 +200,20 @@ def check_stdlib() -> None:
 
 
 def route_exists(route: str) -> bool:
-    """Does `/foo` correspond to a page the site actually serves?"""
+    """Does `/foo` correspond to a page the site actually serves?
+
+    A route is a directory holding a `page.*`, and Next.js does not care which
+    extension that is: the landing page is React, the reference pages are MDX,
+    and both are routes. Checking only for `.mdx` reported the landing page as
+    missing the moment it stopped being Markdown.
+    """
     slug = route.strip("/")
-    page = os.path.join(ROOT, SITE_APP, slug, "page.mdx") if slug else \
-        os.path.join(ROOT, SITE_APP, "page.mdx")
-    return os.path.exists(page)
+    directory = os.path.join(ROOT, SITE_APP, slug) if slug else \
+        os.path.join(ROOT, SITE_APP)
+    return any(
+        os.path.exists(os.path.join(directory, f"page{ext}"))
+        for ext in (".mdx", ".md", ".tsx", ".jsx", ".ts", ".js")
+    )
 
 
 def check_links() -> None:
@@ -233,6 +221,8 @@ def check_links() -> None:
     print("Internal links")
     count = 0
     for doc, kind in DOCS:
+        if not os.path.exists(os.path.join(ROOT, doc)):
+            continue
         text = read(doc)
         links = re.findall(r"\[([^\]]+)\]\(([^)]+)\)", text)
         # The site pages are MDX, so some links are JSX attributes rather
