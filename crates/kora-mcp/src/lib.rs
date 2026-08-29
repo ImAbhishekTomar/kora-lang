@@ -17,9 +17,22 @@
 
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Write};
-use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::mpsc::{Receiver, RecvTimeoutError};
+use std::time::{Duration, Instant};
 
 use serde_json::{json, Value};
+
+/// How long one request may wait for its answer.
+///
+/// A tool that reaches a slow API needs room, but a server which has wedged
+/// must not take the program down with it -- and the failure a wedged server
+/// produces today is no failure at all, just a run that never ends.
+pub const DEFAULT_TIMEOUT_SECS: u64 = 60;
+/// Three attempts total, for the parts that are safe to attempt twice.
+pub const DEFAULT_MAX_RETRIES: u32 = 2;
+/// Wait before the first retry. Doubles each attempt.
+const RETRY_BASE_MS: u64 = 500;
 
 /// What a server says it can do.
 #[derive(Debug, Clone, PartialEq)]
@@ -46,12 +59,28 @@ pub enum ParamType {
 #[derive(Debug)]
 pub struct McpError {
     pub message: String,
+    /// Whether attempting the same request again could plausibly succeed.
+    ///
+    /// This describes the *failure*, not the request. Whether the request may
+    /// be repeated is a separate question, and the answer for `tools/call` is
+    /// no -- see `Server::call`.
+    pub retryable: bool,
 }
 
 impl McpError {
     fn new(message: impl Into<String>) -> McpError {
         McpError {
             message: message.into(),
+            retryable: false,
+        }
+    }
+
+    /// A failure that says nothing about the request: a server that has not
+    /// started yet, has not answered yet, or has gone away.
+    fn retryable(message: impl Into<String>) -> McpError {
+        McpError {
+            message: message.into(),
+            retryable: true,
         }
     }
 }
@@ -71,11 +100,28 @@ pub trait Transport: Send {
 }
 
 /// A configured server, from `[mcp.<name>]` in kora.toml.
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct ServerConfig {
     pub command: String,
     pub args: Vec<String>,
     pub env: HashMap<String, String>,
+    /// How long any one request waits for its answer.
+    pub timeout_secs: u64,
+    /// How many times starting the server and shaking hands is attempted.
+    /// Does not apply to `tools/call` -- see `Server::call`.
+    pub max_retries: u32,
+}
+
+impl Default for ServerConfig {
+    fn default() -> ServerConfig {
+        ServerConfig {
+            command: String::new(),
+            args: Vec::new(),
+            env: HashMap::new(),
+            timeout_secs: DEFAULT_TIMEOUT_SECS,
+            max_retries: DEFAULT_MAX_RETRIES,
+        }
+    }
 }
 
 /// A connected server.
@@ -96,9 +142,26 @@ impl std::fmt::Debug for Server {
 
 impl Server {
     /// Start a server and complete the handshake.
+    ///
+    /// Retried, unlike a tool call: nothing has run yet, so a second attempt
+    /// cannot repeat an effect. A server that crashes on start or is slow to
+    /// come up is the ordinary case this rides out.
     pub fn connect(name: &str, config: &ServerConfig) -> Result<Server, McpError> {
-        let transport = StdioTransport::spawn(config)?;
-        Server::with_transport(name, Box::new(transport))
+        let attempts = config.max_retries.saturating_add(1);
+        let mut attempt = 0;
+        loop {
+            attempt += 1;
+            let error = match StdioTransport::spawn(config)
+                .and_then(|t| Server::with_transport(name, Box::new(t)))
+            {
+                Ok(server) => return Ok(server),
+                Err(e) => e,
+            };
+            if !error.retryable || attempt >= attempts {
+                return Err(error);
+            }
+            std::thread::sleep(retry_delay(attempt));
+        }
     }
 
     /// Handshake over an already-built transport. Tests use this.
@@ -171,6 +234,16 @@ impl Server {
 
     /// Run a tool. The result is JSON text, which the caller labels as
     /// unverified: it came from outside the program.
+    ///
+    /// Deliberately not retried. A model call may be repeated because
+    /// generating twice costs tokens and nothing else; a tool call may have
+    /// opened an issue, sent a message, or charged a card, and a timeout is
+    /// precisely the case where whether it ran is unknown. MCP does carry
+    /// `readOnlyHint` and `idempotentHint`, but those are claims made by the
+    /// server, which sits outside the trust boundary -- believing one to
+    /// decide whether to run a side effect a second time is not a trade worth
+    /// making. So the timeout is the whole protection here: the call ends,
+    /// and the program is told the server did not answer.
     pub fn call(&mut self, tool: &str, arguments: Value) -> Result<String, McpError> {
         let response = self.transport.request(
             "tools/call",
@@ -272,12 +345,40 @@ fn param_type(spec: &Value) -> ParamType {
     }
 }
 
+/// Exponential backoff with jitter.
+///
+/// The jitter is not decoration: a `parallel for` fans out across every core
+/// and every branch shares one server, so an unjittered backoff marches them
+/// all back into a struggling process together.
+fn retry_delay(attempt: u32) -> Duration {
+    let base = RETRY_BASE_MS.saturating_mul(1 << (attempt - 1).min(5));
+    Duration::from_millis(base + jitter_ms(base))
+}
+
+/// Up to a quarter of the wait, from the clock rather than a random source.
+/// Nothing here needs to be unpredictable, only for two threads to differ.
+fn jitter_ms(base: u64) -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0);
+    nanos % (base / 4).max(1)
+}
+
 /// JSON-RPC over a child process's stdin and stdout.
+///
+/// Reading happens on its own thread rather than inline. A blocking
+/// `read_line` on a pipe cannot be given a deadline portably, and without one
+/// a server that accepts a request and never answers stops the program
+/// forever -- no error, no exit, nothing to match on.
 struct StdioTransport {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    /// Lines the reader thread has pulled off stdout. Disconnected once the
+    /// server closes its end.
+    lines: Receiver<String>,
     next_id: u64,
+    timeout: Duration,
 }
 
 impl StdioTransport {
@@ -294,9 +395,9 @@ impl StdioTransport {
             command.env(key, value);
         }
 
-        let mut child = command
-            .spawn()
-            .map_err(|e| McpError::new(format!("could not start `{}`: {e}", config.command)))?;
+        let mut child = command.spawn().map_err(|e| {
+            McpError::retryable(format!("could not start `{}`: {e}", config.command))
+        })?;
         let stdin = child
             .stdin
             .take()
@@ -306,11 +407,33 @@ impl StdioTransport {
             .take()
             .ok_or_else(|| McpError::new("server has no stdout"))?;
 
+        // The thread ends when the server closes stdout or the receiver is
+        // dropped, so it cannot outlive the transport it belongs to.
+        let (tx, lines) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut reader = BufReader::new(stdout);
+            loop {
+                let mut line = String::new();
+                match reader.read_line(&mut line) {
+                    Ok(0) | Err(_) => return,
+                    Ok(_) => {
+                        if tx.send(line).is_err() {
+                            return;
+                        }
+                    }
+                }
+            }
+        });
+
         Ok(StdioTransport {
             child,
             stdin,
-            stdout: BufReader::new(stdout),
+            lines,
             next_id: 1,
+            // Zero is how "wait forever" sneaks back in, so it is clamped
+            // rather than honoured -- the same rule `http` and the model
+            // transport already apply.
+            timeout: Duration::from_secs(config.timeout_secs.max(1)),
         })
     }
 
@@ -319,7 +442,7 @@ impl StdioTransport {
             .map_err(|e| McpError::new(format!("could not encode request: {e}")))?;
         writeln!(self.stdin, "{line}")
             .and_then(|()| self.stdin.flush())
-            .map_err(|e| McpError::new(format!("could not write to server: {e}")))
+            .map_err(|e| McpError::retryable(format!("could not write to server: {e}")))
     }
 }
 
@@ -335,18 +458,30 @@ impl Transport for StdioTransport {
         }))?;
 
         // Read until the response with our id arrives, skipping the server's
-        // own notifications and any log lines.
+        // own notifications, any log lines, and late answers to requests that
+        // already timed out -- which is what keeps one timeout from making
+        // every later call read the wrong reply.
+        //
+        // The deadline covers the whole wait rather than each line, so a
+        // server that chatters on stdout cannot hold the request open past
+        // its timeout.
+        let deadline = Instant::now() + self.timeout;
         loop {
-            let mut line = String::new();
-            let read = self
-                .stdout
-                .read_line(&mut line)
-                .map_err(|e| McpError::new(format!("could not read from server: {e}")))?;
-            if read == 0 {
-                return Err(McpError::new(format!(
-                    "server closed the connection during `{method}`"
-                )));
-            }
+            let remaining = deadline.saturating_duration_since(Instant::now());
+            let line = match self.lines.recv_timeout(remaining) {
+                Ok(line) => line,
+                Err(RecvTimeoutError::Timeout) => {
+                    return Err(McpError::retryable(format!(
+                        "server did not answer `{method}` within {}s",
+                        self.timeout.as_secs()
+                    )))
+                }
+                Err(RecvTimeoutError::Disconnected) => {
+                    return Err(McpError::retryable(format!(
+                        "server closed the connection during `{method}`"
+                    )))
+                }
+            };
             let Ok(message) = serde_json::from_str::<Value>(line.trim()) else {
                 continue;
             };

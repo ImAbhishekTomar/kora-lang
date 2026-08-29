@@ -3183,7 +3183,24 @@ impl Interpreter {
                             span,
                         ));
                     }
-                    let result_json = self.run_tool(&name, &arguments_json, tool_funcs, span)?;
+                    // A server that never answered is the same shape of
+                    // failure as a provider that never answered, and ends the
+                    // call the same way. Handing it back to the model instead
+                    // would invite it to call the wedged tool again, paying
+                    // the timeout on every remaining turn until the budget is
+                    // gone -- and then reporting `Exhausted`, which names the
+                    // wrong cause.
+                    let result_json =
+                        match self.run_tool(&name, &arguments_json, tool_funcs, span)? {
+                            ToolRun::Result(text) => text,
+                            ToolRun::Unavailable(reason) => {
+                                return Ok(AnalyzeOutcome::Failed {
+                                    reason,
+                                    tokens_in: 0,
+                                    tokens_out: 0,
+                                })
+                            }
+                        };
                     history.push(ToolExchange {
                         name,
                         arguments_json,
@@ -3206,7 +3223,7 @@ impl Interpreter {
         arguments_json: &str,
         tool_funcs: &[ToolHandle],
         span: Span,
-    ) -> Result<String, RuntimeError> {
+    ) -> Result<ToolRun, RuntimeError> {
         let handle = tool_funcs
             .iter()
             .find(|h| h.model_name() == name)
@@ -3238,8 +3255,21 @@ impl Interpreter {
         }
 
         let result = self.call_function(&func, home, args, span)?;
-        Ok(serde_json::to_string(&value_to_json(&result)).unwrap_or_else(|_| "null".to_string()))
+        Ok(ToolRun::Result(
+            serde_json::to_string(&value_to_json(&result)).unwrap_or_else(|_| "null".to_string()),
+        ))
     }
+}
+
+/// What running one model-requested tool produced.
+enum ToolRun {
+    /// JSON text to hand back to the model, including a tool that ran and
+    /// reported its own failure -- that is an answer, and the model can act
+    /// on it.
+    Result(String),
+    /// The server did not answer at all. Not something the model can route
+    /// around, so the `analyze` call ends as `Failed(reason)`.
+    Unavailable(String),
 }
 
 /// Map a Kora type annotation onto a model-visible field type.
@@ -4484,17 +4514,22 @@ impl Interpreter {
         name: &str,
         arguments_json: &str,
         span: Span,
-    ) -> Result<String, RuntimeError> {
+    ) -> Result<ToolRun, RuntimeError> {
         let arguments: serde_json::Value =
             serde_json::from_str(arguments_json).unwrap_or(serde_json::json!({}));
 
         let mut servers = self.mcp.lock().unwrap_or_else(|e| e.into_inner());
+        // Not being connected is a bug in the runtime rather than a failure
+        // of the server, so it still raises.
         let connected = servers
             .get_mut(server)
             .ok_or_else(|| RuntimeError::new(format!("`{server}` is not connected"), span))?;
-        connected
-            .call(name, arguments)
-            .map_err(|e| RuntimeError::new(format!("`{server}.{name}` failed: {e}"), span))
+        match connected.call(name, arguments) {
+            Ok(text) => Ok(ToolRun::Result(text)),
+            Err(e) => Ok(ToolRun::Unavailable(format!(
+                "`{server}.{name}` failed: {e}"
+            ))),
+        }
     }
 }
 

@@ -831,6 +831,40 @@ declassify salary as pay for local_model:
 # error: classified data cannot reach MCP server `github`
 ```
 
+A server is a separate process, and a process can wedge. Every request carries
+a deadline — `[mcp] timeout_secs`, default 60, and settable per server for one
+that reaches a slow API:
+
+```toml
+[mcp]
+timeout_secs = 60
+
+[mcp.github]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+timeout_secs = 120
+```
+
+A server that does not answer ends the `analyze` call as `Failed(reason)`,
+naming the server and the tool — the same outcome an unreachable provider
+produces, handled in the same `case`:
+
+```python
+match analyze(issue, "triage this", tools=gh.tools):
+    case Ok(t):
+        print(t.summary)
+    case Failed(why):
+        print(why)      # `github.search_issues` failed: server did not answer within 60s
+```
+
+A tool that *runs* and reports its own failure is different: that is an
+answer, so the model sees it and can try something else.
+
+A tool call is never retried. Generating twice costs tokens; calling a tool
+twice may open two issues or charge a card twice, and a timeout is exactly the
+case where whether it ran is unknown. Starting a server is retried, because
+nothing has run yet.
+
 ### Python
 
 ```python
