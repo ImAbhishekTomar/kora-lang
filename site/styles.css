@@ -80,8 +80,8 @@ body:has(.kora-landing) article { padding:0 !important; }
   .landing-run-card pre { height:10.8rem; min-height:10.8rem; }
   .landing-footer { margin-top:.45rem; padding-top:.4rem; }
 }
-/* First feature card padding adjustment */
-section#community > div.landing-feature-list:nth-of-type(1) > article:nth-of-type(1) { padding: 10px !important; }
+/* Feature card padding adjustment - apply to all cards in the list */
+section#community > div.landing-feature-list:nth-of-type(1) > article { padding: 20px !important; }
 
 @media (max-width:650px) {
   .landing-hero-section { gap:1rem; padding-bottom:0; }
