@@ -69,6 +69,18 @@ pub struct GrantConflict {
     pub second: String,
 }
 
+/// One repository named at two different revisions.
+///
+/// A repository has one entry in the lockfile, so two references to it would
+/// silently collapse to whichever was fetched first — and a program that
+/// pinned `v1.0.0` would run `v2.0.0` with nothing saying so.
+#[derive(Debug, Clone)]
+pub struct RefConflict {
+    pub url: String,
+    pub first: String,
+    pub second: String,
+}
+
 /// A package that needs authority nobody granted it.
 #[derive(Debug, Clone)]
 pub struct GrantShortfall {
@@ -112,17 +124,25 @@ pub struct Resolution {
     pub grant_conflicts: Vec<GrantConflict>,
     /// Packages whose `[package.requires]` exceeds what they were granted.
     pub shortfalls: Vec<GrantShortfall>,
+    /// One repository named at two different revisions.
+    pub ref_conflicts: Vec<RefConflict>,
     /// Files that could not be read or parsed, reported rather than fatal so
     /// one bad file does not hide the rest of the graph.
     pub unreadable: Vec<(PathBuf, String)>,
-    /// Manifests that could not be parsed. A swallowed error here reads as
-    /// "this package has no dependencies", which is exactly the wrong
-    /// conclusion to draw from a typo.
-    pub bad_manifests: Vec<(PathBuf, String)>,
+    /// Inputs that could not be read: a manifest that does not parse, or a
+    /// tree that could not be hashed. A swallowed error here reads as "this
+    /// package has no dependencies and asked for nothing", which is exactly
+    /// the wrong conclusion to draw from a typo — or from a checkout whose
+    /// contents could not be verified at all.
+    pub unverifiable: Vec<(PathBuf, String)>,
     /// Git dependencies whose source is not on disk yet.
     pub unfetched: Vec<Unfetched>,
     /// Fetched trees whose bytes no longer match the lockfile.
     pub tampered: Vec<(String, String, String)>,
+    /// Which package each `(importer, dependency name)` pair resolved to.
+    /// This is the edge, and the only correct way to answer "what did this
+    /// import mean" after the fact.
+    edges: HashMap<(PackageId, String), PackageId>,
 }
 
 impl Resolution {
@@ -142,27 +162,14 @@ impl Resolution {
     /// never a global table, so two packages may bind the same bare name to
     /// different sources.
     pub fn dep_of(&self, from: PackageId, name: &str) -> Option<&ResolvedPackage> {
-        let parent = self.packages.get(from.0)?;
-        let dep = parent.manifest.deps.get(name)?;
-        // Every resolved package already knows its own root, so the name is
-        // matched against what resolution produced rather than recomputed.
-        // A git dependency's directory depends on the lockfile, and this
-        // must give the same answer resolution did.
-        self.packages
-            .iter()
-            .find(|p| p.name.as_deref() == Some(name) && self.parented_by(p, parent, dep))
-    }
-
-    fn parented_by(
-        &self,
-        candidate: &ResolvedPackage,
-        parent: &ResolvedPackage,
-        dep: &Dep,
-    ) -> bool {
-        match &dep.spec {
-            DepSpec::Path { path } => candidate.root == canonical(&parent.root.join(path)),
-            DepSpec::Git { url, .. } => candidate.git.as_deref() == Some(url),
-        }
+        // Looked up by the edge resolution actually followed, never by
+        // recomputing from the name. A local name is not an identity: one
+        // package may be imported as `helper` by one dependency and `util`
+        // by another. A git dependency's directory also depends on the
+        // lockfile, so recomputing risks a different answer than resolution
+        // reached.
+        let id = self.edges.get(&(from, name.to_string()))?;
+        self.packages.get(id.0)
     }
 
     /// What a shipped program needs. Test-only packages are excluded.
@@ -188,7 +195,7 @@ pub fn resolve(entry: &Path) -> Resolution {
     state.store = deps_dir(&root_dir);
     match Lock::at(&root_dir) {
         Ok(lock) => state.lock = lock,
-        Err(why) => state.bad_manifests.push((root_dir.join(Lock::FILE), why)),
+        Err(why) => state.unverifiable.push((root_dir.join(Lock::FILE), why)),
     }
     state.packages.push(ResolvedPackage {
         id: ROOT,
@@ -216,10 +223,12 @@ pub fn resolve(entry: &Path) -> Resolution {
         missing: std::mem::take(&mut state.missing),
         grant_conflicts: std::mem::take(&mut state.grant_conflicts),
         shortfalls: Vec::new(),
+        ref_conflicts: std::mem::take(&mut state.ref_conflicts),
         unreadable: std::mem::take(&mut state.unreadable),
-        bad_manifests: std::mem::take(&mut state.bad_manifests),
+        unverifiable: std::mem::take(&mut state.unverifiable),
         unfetched: std::mem::take(&mut state.unfetched),
         tampered: std::mem::take(&mut state.tampered),
+        edges: std::mem::take(&mut state.edges),
     };
 
     // A dependency is unused when the package that declared it never names
@@ -265,8 +274,12 @@ pub fn resolve(entry: &Path) -> Resolution {
         .dedup_by(|a, b| a.url == b.url && a.name == b.name);
     out.tampered.sort();
     out.tampered.dedup();
-    out.bad_manifests.sort();
-    out.bad_manifests.dedup();
+    out.unverifiable.sort();
+    out.unverifiable.dedup();
+    out.ref_conflicts
+        .sort_by(|a, b| (&a.url, &a.first, &a.second).cmp(&(&b.url, &b.first, &b.second)));
+    out.ref_conflicts
+        .dedup_by(|a, b| a.url == b.url && a.first == b.first && a.second == b.second);
     out.grant_conflicts
         .sort_by(|a, b| (&a.package, &a.first, &a.second).cmp(&(&b.package, &b.first, &b.second)));
     out.grant_conflicts
@@ -289,9 +302,14 @@ struct State {
     missing: Vec<MissingDep>,
     unreadable: Vec<(PathBuf, String)>,
     grant_conflicts: Vec<GrantConflict>,
-    bad_manifests: Vec<(PathBuf, String)>,
+    unverifiable: Vec<(PathBuf, String)>,
     unfetched: Vec<Unfetched>,
     tampered: Vec<(String, String, String)>,
+    edges: HashMap<(PackageId, String), PackageId>,
+    ref_conflicts: Vec<RefConflict>,
+    /// The revision each repository was first named at, so a second and
+    /// different one can be reported rather than silently ignored.
+    git_refs: HashMap<String, String>,
     /// Where fetched dependencies live, and what was locked.
     store: PathBuf,
     lock: Lock,
@@ -392,6 +410,23 @@ impl State {
         match &dep.spec {
             DepSpec::Path { path } => Some(canonical(&self.packages[from.0].root.join(path))),
             DepSpec::Git { url, reference } => {
+                // One repository, one lockfile entry. Two revisions of it
+                // would collapse to whichever was fetched first.
+                let written = reference.describe();
+                match self.git_refs.get(url) {
+                    Some(first) if first != &written => {
+                        self.ref_conflicts.push(RefConflict {
+                            url: url.clone(),
+                            first: first.clone(),
+                            second: written,
+                        });
+                        return None;
+                    }
+                    Some(_) => {}
+                    None => {
+                        self.git_refs.insert(url.clone(), written);
+                    }
+                }
                 let Some(locked) = self.lock.get(url).cloned() else {
                     self.unfetched.push(Unfetched {
                         name: dep.name.clone(),
@@ -424,7 +459,7 @@ impl State {
                                 false
                             }
                             Err(why) => {
-                                self.bad_manifests.push((root.clone(), why));
+                                self.unverifiable.push((root.clone(), why));
                                 false
                             }
                         };
@@ -445,7 +480,15 @@ impl State {
     fn load_dep(&mut self, from: PackageId, name: &str) -> Option<PackageId> {
         let dep = self.packages[from.0].manifest.deps.get(name)?.clone();
         let root = self.dep_root(from, &dep)?;
+        let id = self.register(from, &dep, root);
+        if let Some(id) = id {
+            self.edges.insert((from, name.to_string()), id);
+        }
+        id
+    }
 
+    /// Record a package at `root`, or return the one already there.
+    fn register(&mut self, from: PackageId, dep: &Dep, root: PathBuf) -> Option<PackageId> {
         // A parent may only pass on what it holds, so an attacker who
         // compromises a leaf gains nothing that every link above it lacked.
         let effective = dep.grants.capped_by(&self.packages[from.0].grants);
@@ -454,7 +497,7 @@ impl State {
             let existing = &self.packages[id.0];
             if existing.grants != effective {
                 self.grant_conflicts.push(GrantConflict {
-                    package: name.to_string(),
+                    package: dep.name.clone(),
                     first: existing.grants.describe(),
                     second: effective.describe(),
                 });
@@ -465,7 +508,7 @@ impl State {
         let manifest = match Manifest::at(&root) {
             Ok(manifest) => manifest,
             Err(why) => {
-                self.bad_manifests
+                self.unverifiable
                     .push((root.join("kora.toml"), why.message));
                 Manifest::default()
             }
@@ -474,7 +517,10 @@ impl State {
         let id = PackageId(self.packages.len());
         self.packages.push(ResolvedPackage {
             id,
-            name: Some(name.to_string()),
+            // The package's own name when it declares one. The importer's
+            // local name is only a binding, and two importers may choose
+            // different ones for the same package.
+            name: manifest.name.clone().or_else(|| Some(dep.name.clone())),
             root: root.clone(),
             entry,
             manifest,
@@ -721,6 +767,73 @@ mod tests {
     }
 
     #[test]
+    fn one_package_imported_under_two_names_resolves_for_both() {
+        // A local name is a binding, not an identity. Matching a dependency
+        // by the name its importer chose breaks the moment a second importer
+        // chooses a different one — and reports `no package named helper`
+        // right after listing `helper` as declared.
+        let tree = Tree::new(
+            "twonames",
+            &[
+                (
+                    "kora.toml",
+                    "[dependencies]\nleft = { path = \"./left\" }\nright = { path = \"./right\" }\n",
+                ),
+                ("main.ko", "use pkg left as l\nuse pkg right as r\n"),
+                (
+                    "left/kora.toml",
+                    "[package]\nname = \"left\"\n\n[dependencies]\nhelper = { path = \"../shared\" }\n",
+                ),
+                ("left/src/lib.ko", "use pkg helper as h\n"),
+                (
+                    "right/kora.toml",
+                    "[package]\nname = \"right\"\n\n[dependencies]\nutil = { path = \"../shared\" }\n",
+                ),
+                ("right/src/lib.ko", "use pkg util as u\n"),
+                ("shared/kora.toml", "[package]\nname = \"shared\"\n"),
+                ("shared/src/lib.ko", "def n() -> int:\n    return 7\n"),
+            ],
+        );
+        let r = tree.resolve("main.ko");
+        assert!(r.missing.is_empty(), "{:?}", r.missing);
+
+        // Both edges must land on the one shared package.
+        let left = r
+            .packages
+            .iter()
+            .find(|p| p.name.as_deref() == Some("left"))
+            .unwrap();
+        let right = r
+            .packages
+            .iter()
+            .find(|p| p.name.as_deref() == Some("right"))
+            .unwrap();
+        let via_left = r.dep_of(left.id, "helper").expect("left resolves `helper`");
+        let via_right = r.dep_of(right.id, "util").expect("right resolves `util`");
+        assert_eq!(via_left.id, via_right.id, "one package, reached two ways");
+    }
+
+    #[test]
+    fn one_repository_at_two_revisions_is_refused() {
+        // A repository has one lockfile entry, so two revisions of it would
+        // collapse to whichever was fetched first: a program that pinned
+        // v1.0.0 would run v2.0.0 with nothing saying so.
+        let tree = Tree::new(
+            "tworefs",
+            &[
+                (
+                    "kora.toml",
+                    "[dependencies.a]\ngit = \"github.com/org/thing\"\ntag = \"v1.0.0\"\n\n[dependencies.b]\ngit = \"github.com/org/thing\"\ntag = \"v2.0.0\"\n",
+                ),
+                ("main.ko", "use pkg a as a\nuse pkg b as b\n"),
+            ],
+        );
+        let r = tree.resolve("main.ko");
+        assert_eq!(r.ref_conflicts.len(), 1, "{:?}", r.ref_conflicts);
+        assert_eq!(r.ref_conflicts[0].url, "github.com/org/thing");
+    }
+
+    #[test]
     fn a_use_of_an_undeclared_package_is_reported() {
         let tree = Tree::new(
             "missing",
@@ -890,7 +1003,7 @@ mod grant_tests {
             ],
         );
         let r = tree.resolve("main.ko");
-        assert_eq!(r.bad_manifests.len(), 1, "{:?}", r.bad_manifests);
+        assert_eq!(r.unverifiable.len(), 1, "{:?}", r.unverifiable);
     }
 
     #[test]

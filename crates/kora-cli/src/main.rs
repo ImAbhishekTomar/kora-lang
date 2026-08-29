@@ -344,7 +344,7 @@ fn report_package_problems(resolution: &kora_pkg::Resolution) -> bool {
         failed = true;
     }
 
-    for (path, why) in &resolution.bad_manifests {
+    for (path, why) in &resolution.unverifiable {
         // Silently treating this as an empty manifest would read as "this
         // package has no dependencies and asked for nothing".
         eprintln!("error: cannot read {}: {why}", path.display());
@@ -362,6 +362,16 @@ fn report_package_problems(resolution: &kora_pkg::Resolution) -> bool {
             "   = hint: grant it in kora.toml under `[dependencies.{}]`",
             shortfall.package
         );
+        eprintln!();
+        failed = true;
+    }
+
+    for conflict in &resolution.ref_conflicts {
+        eprintln!(
+            "error: {} is required at two revisions: {} and {}",
+            conflict.url, conflict.first, conflict.second
+        );
+        eprintln!("   = hint: a repository has one entry in the lockfile; pin one revision");
         eprintln!();
         failed = true;
     }
@@ -606,6 +616,14 @@ fn audit_file(path: &str) -> ExitCode {
     // covers them too: an inventory that stopped at the entry file would not
     // be the complete list it claims to be.
     let packages = kora_pkg::resolve(Path::new(path));
+    // And an audit over a graph with holes in it is worse than no audit.
+    // "No declassification sites" is a claim about code that was read; a
+    // dependency that was never fetched has not been read, so the command
+    // has to refuse rather than report a clean bill for it.
+    if report_package_problems(&packages) {
+        eprintln!("the audit was not run: it would not be the complete list it promises");
+        return ExitCode::from(1);
+    }
     let sites = kora_runtime::audit::audit_program(&program, path, &packages);
     print!("{}", kora_runtime::audit::render(&sites));
     ExitCode::SUCCESS
