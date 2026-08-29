@@ -87,6 +87,24 @@ impl Config {
             }
         }
         if let Some(servers) = root.get("mcp").and_then(|v| v.as_table()) {
+            // Scalars at the `[mcp]` level are settings for every server;
+            // sub-tables are the servers themselves. Same shape as `[models]`,
+            // so there is one thing to learn rather than two.
+            let default_timeout = servers
+                .get("timeout_secs")
+                .and_then(|v| v.as_integer())
+                // A zero timeout is how "wait forever" sneaks back in, which
+                // is the failure this setting exists to prevent.
+                .map(|secs| secs.clamp(1, 3600) as u64)
+                .unwrap_or(kora_mcp::DEFAULT_TIMEOUT_SECS);
+            // Zero is honoured, unlike a timeout: "do not retry starting it"
+            // is a real answer for a server that is simply not installed.
+            let default_retries = servers
+                .get("max_retries")
+                .and_then(|v| v.as_integer())
+                .map(|times| times.clamp(0, 10) as u32)
+                .unwrap_or(kora_mcp::DEFAULT_MAX_RETRIES);
+
             for (name, spec) in servers {
                 let Some(spec) = spec.as_table() else {
                     continue;
@@ -123,6 +141,18 @@ impl Config {
                             })
                             .unwrap_or_default(),
                         env,
+                        // A server that reaches a slow API can be given room
+                        // without loosening the deadline on every other one.
+                        timeout_secs: spec
+                            .get("timeout_secs")
+                            .and_then(|v| v.as_integer())
+                            .map(|secs| secs.clamp(1, 3600) as u64)
+                            .unwrap_or(default_timeout),
+                        max_retries: spec
+                            .get("max_retries")
+                            .and_then(|v| v.as_integer())
+                            .map(|times| times.clamp(0, 10) as u32)
+                            .unwrap_or(default_retries),
                     },
                 );
             }

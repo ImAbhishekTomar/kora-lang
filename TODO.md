@@ -63,6 +63,37 @@ The problem other ecosystems cannot fix, and what Kora does instead:
 - [x] Docs, site, `DECISIONS.md`, examples, and the unmatched-value hint that
       names the arm to add.
 
+### Tool-server failure is a value (shipped)
+
+The same rule, applied where it had been missed. `Failed(reason)` fixed the
+model transport; the tool side of the same loop still had no timeout at all.
+
+- [x] **Every MCP request has a deadline.** `[mcp] timeout_secs`, default 60,
+      overridable per server. There was none before, and a blocking read on a
+      pipe cannot be given one portably — so the transport reads on its own
+      thread and waits with a deadline. A server that accepted a request and
+      never answered used to stop the program forever: no error, no exit,
+      nothing to match on. That is a worse failure than crashing.
+- [x] **A server that does not answer is `Failed(reason)`, not a dead run.**
+      It ends the `analyze` call the way an unreachable provider does, naming
+      the server and the tool. Deliberately not handed back to the model as a
+      tool result: a model told "that tool failed" will try it again, pay the
+      timeout every remaining turn, and the call then reports `Exhausted` —
+      which names the wrong cause. A tool that *runs* and reports its own
+      failure is still a result the model sees.
+- [x] **A tool call is never retried.** Where MCP parts company with the model
+      transport: generating twice costs tokens, but calling a tool twice may
+      open two issues or charge a card twice, and a timeout is precisely when
+      whether it ran is unknown. MCP's `readOnlyHint` and `idempotentHint` are
+      claims by the server, which is outside the trust boundary. Starting a
+      server and shaking hands *is* retried, because nothing has run yet.
+- [x] A late answer to a timed-out request is matched by id and skipped, so it
+      cannot be read as the reply to the next call — a wrong answer being
+      worse than an error.
+- [x] End-to-end tests against a real child process and a real model
+      transport, including one that proves the side effect ran exactly once.
+      Docs, site, `DECISIONS.md`, and the example.
+
 ## Development
 
 - [x] Refresh the documentation welcome page with a more playful guided
