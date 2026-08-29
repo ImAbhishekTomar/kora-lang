@@ -4,21 +4,13 @@ on:
   push:
     branches: ["**"]
     paths:
-      - "app/**"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "next.config.mjs"
-      - "mdx-components.tsx"
-      - "styles.css"
+      - "site/**"
+      - "editors/vscode/syntaxes/kora.tmLanguage.json"
       - ".github/workflows/docs-site.yml"
   pull_request:
     paths:
-      - "app/**"
-      - "package.json"
-      - "pnpm-lock.yaml"
-      - "next.config.mjs"
-      - "mdx-components.tsx"
-      - "styles.css"
+      - "site/**"
+      - "editors/vscode/syntaxes/kora.tmLanguage.json"
       - ".github/workflows/docs-site.yml"
   workflow_dispatch:
 
@@ -38,17 +30,26 @@ jobs:
     name: Build and deploy docs
     if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
     runs-on: ubuntu-latest
+    # The site is a self-contained project under `site/`; everything below
+    # runs from there. `next.config.mjs` reaches back out to
+    # `editors/vscode/syntaxes/` for the Kora grammar, which is why that file
+    # is a trigger path too.
+    defaults:
+      run:
+        working-directory: site
     steps:
       - uses: actions/checkout@v4
 
       - uses: pnpm/action-setup@v4
         with:
           version: 11.0.8
+          package_json_file: site/package.json
 
       - uses: actions/setup-node@v4
         with:
           node-version: 22
           cache: pnpm
+          cache-dependency-path: site/pnpm-lock.yaml
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile

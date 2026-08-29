@@ -297,11 +297,11 @@ with budget(max_tokens = 5_000):
 
 ### `classified` and `declassify`
 
-Sensitive values stay labeled. A scoped `declassify` names the only sink allowed to receive them.
+Sensitive values stay labeled. A scoped `declassify` gives the released value a name and names the only sink allowed to receive it.
 
 ```kora
-declassify employee.salary for local_model:
-    review: Review = analyze(employee.salary, "assess pay")
+declassify employee.salary as pay for local_model:
+    review: Review = analyze(pay, "assess pay")
 ```
 
 The block ends the permission. There is no permanent “safe now” copy.

@@ -132,6 +132,7 @@ not GitHub, and killing the process mid-`ask_human` loses nothing.
 | [Language reference](docs/language.md) | syntax, semantics, and how it differs from Python |
 | [Standard library](docs/stdlib.md) | the eight modules and the defect each one fixes |
 | [CLI reference](docs/cli.md) | commands, flags, `kora.toml`, editor setup |
+| [Decisions](DECISIONS.md) | why the language is the way it is, and what was traded away |
 | [DECISIONS.md](DECISIONS.md) | the frozen design and why each call was made |
 | [AGENTS.md](AGENTS.md) | contributing: what a language change has to touch |
 | [examples/](examples) | twelve runnable programs, in order |
@@ -507,6 +508,8 @@ editors/vscode        VS Code extension
 examples/             runnable .ko programs
 benches/              performance benchmarks and their baseline
 docs/                 language, stdlib, and CLI references
+site/                 the public documentation site
+scripts/              documentation checks, benchmarks, packaging
 ```
 
 ## Build
@@ -525,6 +528,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 python3 scripts/check_docs.py     # the docs still describe the language
 kora check examples/*.ko
+```
+
+The documentation site lives in `site/` and is its own project:
+
+```bash
+cd site
+pnpm install
+pnpm dev
 ```
 
 ## Performance

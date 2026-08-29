@@ -202,8 +202,19 @@ jobs:
         run: cargo build --locked
       - name: Check the documentation
         run: python3 scripts/check_docs.py
+      # The site pages are included here too: `check_docs.py` verifies their
+      # routes and their Kora, but only lychee checks that the links leaving
+      # the site still resolve. `--root-dir` is what lets lychee understand a
+      # root-relative link like `/reference` as the page it serves. Images
+      # under `/marketing/` live in `site/public`, not `site/app`, so they are
+      # excluded here and checked by `check_docs.py` instead.
       - name: Check external links
         uses: lycheeverse/lychee-action@v2
         with:
-          args: --no-progress --max-concurrency 4 README.md DECISIONS.md docs/ examples/README.md
+          args: >-
+            --no-progress --max-concurrency 4
+            --root-dir ${{ github.workspace }}/site/app
+            --exclude '/marketing/'
+            README.md DECISIONS.md AGENTS.md docs/ examples/README.md
+            'site/app/**/*.mdx'
           fail: true

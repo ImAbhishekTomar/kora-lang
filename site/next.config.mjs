@@ -1,6 +1,6 @@
 import nextra from 'nextra'
 import { createHighlighter } from 'shiki'
-import koraGrammar from './editors/vscode/syntaxes/kora.tmLanguage.json' with { type: 'json' }
+import koraGrammar from '../editors/vscode/syntaxes/kora.tmLanguage.json' with { type: 'json' }
 
 const koraHighlighter = createHighlighter({
   themes: ['github-light', 'github-dark'],

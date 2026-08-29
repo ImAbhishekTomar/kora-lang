@@ -2,10 +2,10 @@
 /target/
 
 # Documentation site dependencies and build output
-/node_modules/
-/.next/
-/.vercel/
-/public/_pagefind/
+/site/node_modules/
+/site/.next/
+/site/.vercel/
+/site/public/_pagefind/
 
 # Local OS and editor files
 .DS_Store
