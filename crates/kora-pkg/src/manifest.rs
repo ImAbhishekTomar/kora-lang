@@ -252,6 +252,29 @@ fn parse_dep(name: &str, spec: &toml::Value) -> Result<Dep, ManifestError> {
     })
 }
 
+/// Whether a dependency's source names a directory rather than a remote.
+///
+/// One definition, because the manifest and the fetcher have to agree: if the
+/// manifest normalizes a path the fetcher then treats as local, a bare
+/// repository at `C:\\mirrors\\receipts.git` loses its suffix and points at a
+/// directory that does not exist.
+pub(crate) fn is_local_path(url: &str) -> bool {
+    // Deliberately not `Path::is_absolute()` alone: that answers for the
+    // *host*, so `C:\\mirrors\\receipts.git` reads as a relative name on Linux
+    // and an absolute one on Windows. A manifest is committed and shared, so
+    // what it means must not change with the machine reading it — the same
+    // reason listings are sorted and lockfiles are content-addressed.
+    url.starts_with('.') || Path::new(url).is_absolute() || has_drive_letter(url)
+}
+
+/// `C:\\...` or `C:/...`, the one absolute form Unix does not recognize.
+fn has_drive_letter(url: &str) -> bool {
+    let mut chars = url.chars();
+    matches!(chars.next(), Some(c) if c.is_ascii_alphabetic())
+        && chars.next() == Some(':')
+        && matches!(chars.next(), Some('\\') | Some('/'))
+}
+
 /// Strip a scheme and any trailing `.git`, so one repository is one identity.
 ///
 /// `https://github.com/org/x`, `github.com/org/x`, and
@@ -259,9 +282,10 @@ fn parse_dep(name: &str, spec: &toml::Value) -> Result<Dep, ManifestError> {
 /// would put three copies in the graph and three rows in the lockfile.
 fn normalize_git_url(url: &str) -> String {
     // A local path is left exactly as written: stripping a scheme it never
-    // had, or a trailing slash that is part of it, would name a different
-    // directory.
-    if url.starts_with('/') || url.starts_with('.') {
+    // had, a trailing separator that is part of it, or the `.git` suffix a
+    // bare repository is conventionally named with, would all name a
+    // different directory.
+    if is_local_path(url) {
         return url.to_string();
     }
     let url = url
@@ -341,6 +365,48 @@ retry = { path = "../retry" }
         // A manifest is read by older binaries than the one that wrote it.
         let m = Manifest::parse("[models]\ndefault = \"local:x\"\n").unwrap();
         assert!(m.deps.is_empty());
+    }
+
+    #[test]
+    fn a_local_bare_repository_keeps_its_git_suffix() {
+        // A bare repository is conventionally named `name.git`, and that
+        // suffix is part of the directory. Stripping it — as a remote URL's
+        // would be — points at a directory that does not exist.
+        let m = Manifest::parse(
+            "[dependencies.mirror]\ngit = \"/mirrors/receipts.git\"\ntag = \"v1\"\n",
+        )
+        .unwrap();
+        let DepSpec::Git { url, .. } = &m.deps["mirror"].spec else {
+            panic!("expected a git dependency");
+        };
+        assert_eq!(url, "/mirrors/receipts.git");
+    }
+
+    #[test]
+    fn a_windows_local_path_is_recognised_as_local() {
+        // The manifest and the fetcher must agree on what a local path is.
+        // While they disagreed, `C:\mirrors\receipts.git` was normalised as
+        // if it were a remote and lost its suffix.
+        assert!(is_local_path(r"C:\mirrors\receipts.git"));
+        assert!(is_local_path("C:/mirrors/receipts.git"));
+        // A scheme-like prefix is not a drive letter.
+        assert!(!is_local_path("git:github.com/org/x"));
+        assert!(is_local_path("/mirrors/receipts.git"));
+        assert!(is_local_path("./receipts"));
+        assert!(!is_local_path("github.com/org/receipts"));
+        assert!(!is_local_path("https://github.com/org/receipts.git"));
+    }
+
+    #[test]
+    fn a_remote_url_is_one_identity_however_it_is_written() {
+        for written in [
+            "https://github.com/org/x",
+            "github.com/org/x",
+            "https://github.com/org/x.git",
+            "github.com/org/x/",
+        ] {
+            assert_eq!(normalize_git_url(written), "github.com/org/x", "{written}");
+        }
     }
 
     #[test]
