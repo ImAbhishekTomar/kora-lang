@@ -8,6 +8,12 @@ on:
         required: true
         type: string
 
+# This workflow never touches *this* repository: it checks out the tap with a
+# dedicated token, downloads a published release asset over plain HTTPS, and
+# pushes with that same token. So the automatic token needs no scopes at all,
+# and the authority the job does carry is the one secret it was given.
+permissions: {}
+
 jobs:
   publish:
     name: Publish formula to Homebrew tap
