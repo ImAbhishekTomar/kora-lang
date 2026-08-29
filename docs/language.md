@@ -21,6 +21,7 @@ and the constructs Python has no equivalent for.
 - [Classified data](#classified-data)
 - [Durability](#durability)
 - [Modules](#modules)
+- [Packages](#packages)
 - [Tests](#tests)
 - [Built-in functions](#built-in-functions)
 - [Differences from Python](#differences-from-python)
@@ -803,7 +804,7 @@ suite costs nothing. Under `kora run`, `test` blocks are inert.
 | Dict keys are strings | no arbitrary hashable keys |
 | No classes | `type` blocks hold data; functions act on it |
 | No comprehensions yet | use a `for` loop |
-| Imports are paths, not package names | `use "./lib/tax.ko" as tax`; no package manager yet |
+| Local imports are paths; package imports are named | `use "./lib/tax.ko" as tax` or `use pkg receipts as r` |
 | No `export` keyword | every top-level name is public |
 | Methods are functions | `append(xs, v)`, not `xs.append(v)` |
 | Type annotations are checked | not hints |

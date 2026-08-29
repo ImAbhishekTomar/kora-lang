@@ -38,6 +38,25 @@ Kora extension
 Open a Kora project, install the extension and CLI, and start writing without
 assembling separate syntax and language-server tools.
 
+## Packages
+
+Kora packages are ordinary source directories with a `kora.toml` manifest.
+Use a package by name, then let the compiler derive exactly what the program
+needs:
+
+```kora
+use pkg receipts as r
+```
+
+The manifest records the source and the capabilities the package receives.
+`kora install` fetches only packages reached from `use pkg` statements,
+`kora.lock` pins their commits, and `kora.sums` records their content. That
+keeps unused declarations out of builds and gives a package no ambient access
+to the network, files, databases, or secrets.
+
+Read the [language guide](/language#packages) for the model and the
+[reference](/reference#packages) for manifest fields and commands.
+
 ## Runtime pieces
 
 The repository is organized into focused Rust crates:

@@ -409,6 +409,35 @@ rows = sql.query("app.db", "select * from users where id = ?", [user_id])
 
 `env.get(name)` reads an environment variable and `env.has(name)` checks whether it exists. Secret-looking names are classified automatically.
 
+### Packages
+
+A package is named, not pathed. Where it comes from and what it may do live in
+`kora.toml`.
+
+```kora
+use pkg receipts as r
+```
+
+```toml
+[dependencies.receipts]
+git = "github.com/org/receipts"
+tag = "v0.3.1"
+grants = { net = true, sinks = ["stripe"] }
+```
+
+Names resolve against the manifest that wrote them, never a global table, so
+a package may depend on something its consumer has never heard of and two
+packages may bind the same bare name to different sources. Types belong to
+their package, so two dependencies may each declare `Config`.
+
+Grants are `net`, `fs`, `sql`, `env`, and `python`, plus `sinks` and `mcp` as
+lists of names and `declassify` as a flag. Absent means nothing. A package
+states what it needs with `[package.requires]`, and a shortfall is reported
+before the program runs.
+
+Only what the source imports is fetched. `kora.lock` pins the commit;
+`kora.sums` records what that commit contained.
+
 ### Python and MCP bridges
 
 ```kora
@@ -428,6 +457,14 @@ default = "local:llama3.2:latest"
 
 [budget]
 program_max_tokens = 2_000_000
+
+[install]
+jobs = 16
+
+[dependencies.receipts]
+git = "github.com/org/receipts"
+tag = "v0.3.1"
+grants = { net = true }
 
 [telemetry]
 exporter = "file"

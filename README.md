@@ -36,6 +36,8 @@ def main():
   type or an explicit `Uncertain`. No raw-string parsing, no confidence theater.
 - **Record/replay + OpenTelemetry built into the runtime** — deterministic
   CI with zero tokens; every agent and call is a span.
+- **Source-derived packages** — only packages a program imports are fetched
+  or shipped, with a lockfile, checksums, and per-package capability grants.
 
 ## Install
 
@@ -487,8 +489,8 @@ Early development, pre-alpha, built for personal use first. Everything
 documented here works and is covered by tests; the test suite never touches
 the network.
 
-Not built yet: classes, list comprehensions, a package manager, documents
-(PDF) as values, and `try`/`except`. See
+Not built yet: classes, list comprehensions, documents (PDF) as values, and
+`try`/`except`. See
 [DECISIONS.md](DECISIONS.md) for what is planned and what is deliberately
 excluded.
 
