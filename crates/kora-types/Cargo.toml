@@ -9,4 +9,5 @@ description = "Name resolution and editor-facing checks for the Kora language"
 
 [dependencies]
 kora-syntax.workspace = true
+kora-pkg.workspace = true
 regex = { workspace = true }

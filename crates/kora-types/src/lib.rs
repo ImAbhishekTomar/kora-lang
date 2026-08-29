@@ -295,11 +295,26 @@ impl Checker<'_> {
                     });
                 }
                 StmtKind::UsePkg { package, alias } => {
+                    // A package is reached by name rather than by path, but
+                    // once resolved it is a file like any other — so the
+                    // editor can offer its exports and jump into them.
+                    let module = self.load_package_module(package, stmt.span);
+                    for (name, symbol) in &module.exports {
+                        if symbol.kind == SymbolKind::Type {
+                            self.type_names.insert(name.clone());
+                        }
+                    }
+                    let detail = if module.path.is_empty() {
+                        format!("use pkg {package}")
+                    } else {
+                        format!("use pkg {package}  ({})", module.path)
+                    };
+                    self.analysis.file_modules.insert(alias.clone(), module);
                     self.define_symbol(Symbol {
                         name: alias.clone(),
                         kind: SymbolKind::Module,
                         span: stmt.span,
-                        detail: format!("use pkg {package}"),
+                        detail,
                         doc: Some(
                             "A package dependency, resolved against this package's `[dependencies]`."
                                 .to_string(),
@@ -369,6 +384,80 @@ impl Checker<'_> {
     /// Diagnostics from inside the imported file are its own business: they
     /// belong to that file's spans, and the editor reports them when that file
     /// is open. Only the failure to load it is reported here.
+    /// Resolve `use pkg <name>` to the package's entry file, then read it the
+    /// way an imported file is read.
+    ///
+    /// Silent when the package cannot be found: whether a dependency is
+    /// declared, fetched, and verified is the resolver's answer, and the
+    /// editor reporting it as an unknown name would squiggle code that
+    /// `kora install` is about to make correct.
+    fn load_package_module(&mut self, name: &str, span: Span) -> FileModule {
+        let mut module = FileModule {
+            written: format!("pkg {name}"),
+            ..FileModule::default()
+        };
+        // Resolved from the file being edited, so the editor's answer is the
+        // one the runtime would reach — including which commit a git
+        // dependency is pinned to.
+        //
+        // `loading[0]` is the root program even while a nested file is being
+        // analysed. A `use pkg` written *inside* a dependency therefore
+        // resolves against the root's manifest rather than its own, and finds
+        // nothing when the two disagree. That fails silently, which is the
+        // right direction: no diagnostic and no completion, rather than
+        // confident wrong names.
+        let Some(entry) = self.loading.first().cloned() else {
+            return module;
+        };
+        let resolution = kora_pkg::resolve(&entry);
+        let Some(package) = resolution.dep_of(kora_pkg::ROOT, name) else {
+            return module;
+        };
+        let entry = package.entry.clone();
+        let Ok(source) = std::fs::read_to_string(&entry) else {
+            return module;
+        };
+        let Ok(program) = kora_syntax::parse(&source) else {
+            return module;
+        };
+        module.path = entry.display().to_string();
+
+        let key = entry.canonicalize().unwrap_or_else(|_| entry.clone());
+        if self.loading.contains(&key) {
+            return module;
+        }
+        let dir = key
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        self.loading.push(key);
+        let inner = analyze_inner(&program, Some(dir), self.loading);
+        self.loading.pop();
+
+        module.exports = inner.symbols;
+        module.exports.retain(|_, s| s.kind != SymbolKind::Test);
+        for stmt in &program.items {
+            let StmtKind::Assign { target, ty, .. } = &stmt.kind else {
+                continue;
+            };
+            let ExprKind::Name(name) = &target.kind else {
+                continue;
+            };
+            module.exports.entry(name.clone()).or_insert(Symbol {
+                name: name.clone(),
+                kind: SymbolKind::Variable,
+                span: stmt.span,
+                detail: match ty {
+                    Some(t) => format!("{name}: {}", t.display()),
+                    None => name.clone(),
+                },
+                doc: None,
+            });
+        }
+        let _ = span;
+        module
+    }
+
     fn load_file_module(&mut self, written: &str, span: Span) -> FileModule {
         let mut module = FileModule {
             written: written.to_string(),
