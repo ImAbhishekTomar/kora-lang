@@ -89,6 +89,22 @@ If genuinely ambiguous, say so and pick the smaller-blast-radius reading
 (package over compiler) rather than asking, unless the ambiguity changes
 what gets built enough to need a decision from the user.
 
+## Two answers that are already decided
+
+Both come up whenever packages are discussed. Neither is open.
+
+**Never load a native shared library.** A `.so` or `.dll` runs inside the
+process with full operating-system rights and does not pass through
+`call_module_fn`, so no capability grant ever sees it. One native package and
+the confinement the whole package system rests on is gone. Compiled
+third-party code arrives as WASM components or not at all — see
+[DECISIONS.md](DECISIONS.md#wasm-components-for-native-packages).
+
+**A manifest has no field for install scripts.** Not off by default, not
+gated: the format has nowhere to put one. That is the whole `postinstall`
+attack class, refused by the file format rather than by a setting somebody
+can turn on.
+
 ## Checklist for a language change
 
 Adding, changing, or removing syntax or semantics touches these, roughly in

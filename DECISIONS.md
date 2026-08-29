@@ -378,6 +378,61 @@ for pkg:weather` checks the same way MCP servers already do. Immature today.
 
 Layers 1 through 3 are built. Packages are under way; WASM components wait.
 
+## Deferred, and what would start them
+
+Neither of these is a hole in what exists. Both *extend* the package system,
+and each is waiting on something that is not code.
+
+### A hosted checksum log
+
+**What is built.** `kora.sums` records what a commit contained the first time
+it was seen, in two places: the project's own file, committed and shared with
+everyone who clones, and a machine-level one under `~/.kora` shared across
+every project on that computer. A later fetch that disagrees is refused.
+
+**The window it does not close.** If nobody in your world has ever fetched a
+package, and the attacker's version is live the first time anyone does, that
+version becomes the record. The log is protecting the wrong bytes and there
+was never anything to compare against.
+
+**What a hosted log adds.** One log everyone reports to, so the first fetch
+*by anyone* fixes what a version means for everyone after. Being the second
+person on Earth to fetch a package is then enough. This is what
+`sum.golang.org` does for Go.
+
+**Why it is deferred.** It is a server: somebody runs it, pays for it, keeps
+it up, and every Kora user has to trust it. That is an operational and trust
+commitment, not a coding decision, and committing code cannot make it.
+
+**What would start it.** Packages being fetched by people who did not write
+them — that is, a real third-party ecosystem rather than a handful of
+first-party ones. Until then the two local logs cover everyone who exists.
+
+### WASM components for native packages
+
+**The gap.** A package is `.ko` source. Someone who wants to ship a fast PDF
+parser or an image codec, written in Rust, cannot: there is no way to include
+compiled code.
+
+**The answer that must never be taken.** Loading a native shared library.
+A `.so` runs inside the process with full operating-system rights — it can
+read `~/.ssh`, open sockets, and write anywhere, and none of it passes through
+`call_module_fn`, so no grant check ever sees it. One native package and the
+capability system is gone. This is a permanent refusal, not a deferral.
+
+**Why WASM instead.** A component runs in a sandbox the runtime controls and
+can only touch what it is handed. A WASM package that declares `net` gets the
+network; one that does not, physically cannot reach it — the same rule `.ko`
+packages already follow, enforced by the sandbox rather than by our checks.
+Being language-agnostic is a bonus; being unable to escape is the reason.
+
+**Why it is deferred.** Nothing needs it yet. MCP covers tools, the Python
+sidecar covers the long tail, and the component tooling is still young.
+
+**What would start it.** A package that genuinely cannot be written in Kora or
+reached through MCP or Python — a codec, a parser, something CPU-bound enough
+that the sidecar's per-call serialization dominates.
+
 ## Parked / non-goals
 
 - Auto-parallelization (explicit `parallel for` only)
@@ -426,8 +481,8 @@ Ecosystem work, sequenced alongside the phases above:
 - Git dependencies, content-hashed lockfile, parallel fetch — **done**
 - Append-only checksum log — **done**
 - `kora add` / `remove` / `update` / `vendor`, `kora audit --deps` — **done**
-- A hosted checksum log, and WASM components — later
-- WASM components — later
+- A hosted checksum log, and WASM components — deferred; see
+  [Deferred, and what would start them](#deferred-and-what-would-start-them)
 
 Each phase ends with a runnable demo program. Demo programs live in
 `examples/`.
