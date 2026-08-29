@@ -2,6 +2,18 @@
 
 Notes for anyone — human or agent — changing this repository.
 
+## Feature Development Principle
+
+When building a new feature, always identify the problems that existing languages face—especially those they cannot solve because of legacy dependencies, backward-compatibility requirements, or ecosystem constraints.
+
+Since Kora is a new language, prioritize solving these problems at the language, compiler, or runtime level rather than adding workarounds.
+
+**Todo** Maintain a todo list during development like below, with all required details, file `TODO.md`:
+- [ ] Queue
+- [x] Completed
+- [ ] Development  (where we are, details of dev things etc)
+
+
 Read [DECISIONS.md](DECISIONS.md) first. It records *why* the language is the
 way it is; the docs record *what*. A change that contradicts a decision needs
 that file updated in the same commit, not a comment explaining the exception.

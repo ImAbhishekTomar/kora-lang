@@ -440,6 +440,7 @@ version = "0.1.0"
 name = "kora-types"
 version = "0.1.0"
 dependencies = [
+ "kora-pkg",
  "kora-syntax",
  "regex",
 ]

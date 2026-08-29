@@ -409,11 +409,22 @@ fn module_aliases(text: &str) -> HashMap<String, String> {
             continue;
         };
         let mut words = rest.split_whitespace();
-        let Some(module) = words.next() else { continue };
+        let Some(first) = words.next() else { continue };
         // `use "./lib.ko" as lib` is a file import, handled by the analysis.
-        if module.starts_with('"') || module.starts_with('\'') {
+        if first.starts_with('"') || first.starts_with('\'') {
             continue;
         }
+        // `use pkg receipts as r`, `use python statistics as stats`, and
+        // `use mcp github as gh` all name what kind of thing they are before
+        // naming it. Taking the first word as the module binds the alias to
+        // `pkg`, and nothing offered through it would be right.
+        let module = match first {
+            "pkg" | "python" | "mcp" => match words.next() {
+                Some(name) => name,
+                None => continue,
+            },
+            other => other,
+        };
         let alias = match (words.next(), words.next()) {
             (Some("as"), Some(alias)) => alias,
             _ => module,
@@ -460,6 +471,32 @@ fn cast<P: serde::de::DeserializeOwned>(request: &Request) -> Option<P> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_qualified_import_binds_the_name_after_the_qualifier() {
+        // `use pkg receipts as r` binds `r` to `receipts`. Reading the first
+        // word as the module would bind `pkg`, and completion after `r.`
+        // would offer nothing.
+        let aliases = module_aliases(
+            "use pkg receipts as r\nuse python statistics as stats\nuse mcp github as gh\nuse json\nuse csv as sheet\n",
+        );
+        assert_eq!(aliases.get("r").map(String::as_str), Some("receipts"));
+        assert_eq!(aliases.get("stats").map(String::as_str), Some("statistics"));
+        assert_eq!(aliases.get("gh").map(String::as_str), Some("github"));
+        assert_eq!(aliases.get("json").map(String::as_str), Some("json"));
+        assert_eq!(aliases.get("sheet").map(String::as_str), Some("csv"));
+        assert!(!aliases.contains_key("pkg"), "{aliases:?}");
+    }
+
+    #[test]
+    fn a_qualified_import_without_an_alias_binds_its_own_name() {
+        let aliases = module_aliases("use pkg receipts\nuse mcp github\n");
+        assert_eq!(
+            aliases.get("receipts").map(String::as_str),
+            Some("receipts")
+        );
+        assert_eq!(aliases.get("github").map(String::as_str), Some("github"));
+    }
 
     #[test]
     fn parse_errors_become_a_diagnostic() {
