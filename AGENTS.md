@@ -284,6 +284,26 @@ without which the `--locked` build fails *after* the tag exists.
 A release PR is a pull request like any other: if the version or the notes
 look wrong, say so there rather than tagging by hand.
 
+### Release documentation
+
+Every release has a permanent developer-facing page on the public site. The
+release PR must add `site/app/releases/<version>/page.mdx` before it is merged,
+then update `site/app/releases/page.mdx`, `site/app/releases/_meta.js`, and
+the `DOCS` list in `scripts/check_docs.py`. Do this for the first release too;
+an initial release says that no migration is needed.
+
+Each page must state the publication date, link to the GitHub release, group
+the user-visible changes, name every breaking change, and give an explicit
+migration path from the previous version. "None" is a valid and required
+answer for breaking changes, and "no migration needed" is a valid and
+required answer for an initial release. Do not make developers infer either
+from a changelog or a commit list. Update `/versions` when its historical
+version table changes.
+
+For a release already published before this convention, create the page from
+the GitHub release notes and tagged source. Keep release pages immutable after
+publication except to correct factual documentation errors.
+
 ## House style
 
 - Errors carry a span, a plain-language message, and usually a hint naming the

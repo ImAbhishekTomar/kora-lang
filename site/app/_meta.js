@@ -8,6 +8,7 @@ export default {
   reference: 'KORA Language Reference',
   ecosystem: 'Ecosystem',
   decisions: 'Decisions',
+  releases: 'Releases',
   versions: 'Docs versions',
   roadmap: 'Roadmap'
 }

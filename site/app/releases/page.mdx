@@ -1,0 +1,46 @@
+---
+title: Releases
+description: Release notes, compatibility information, and upgrade guidance for Kora.
+---
+
+# Releases
+
+Each release page is the developer record for one Kora version. It explains
+what changed, calls out incompatible changes clearly, and gives upgrade steps
+when an existing project needs them. Kora is pre-alpha, so read the page for
+every version you adopt rather than assuming compatibility.
+
+## Current release
+
+### `0.0.2` - 28 August 2026
+
+The first feature-complete pre-alpha release: typed model calls, agents,
+durable execution, security labels, the native standard library, Python and
+MCP integrations, tracing, and editor tooling.
+
+[Read the `0.0.2` release notes](/releases/0.0.2)
+
+## Earlier releases
+
+| Version | Published | What it established |
+| --- | --- | --- |
+| [`0.0.2`](/releases/0.0.2) | 28 August 2026 | The agent runtime and supported integrations |
+| [`0.0.1`](/releases/0.0.1) | 27 August 2026 | The language foundation and initial tooling |
+
+## Installing a specific version
+
+Check your installed version first:
+
+```bash
+kora --version
+```
+
+Use the matching page above for its compatibility notes. To install an older
+CLI through npm, pin its version explicitly:
+
+```bash
+npm install -g @abhishektomar/kora-cli@0.0.2
+```
+
+For release archives, checksums, and the matching VS Code extension package,
+see the [GitHub releases](https://github.com/ImAbhishekTomar/kora-lang/releases).

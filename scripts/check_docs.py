@@ -56,6 +56,9 @@ DOCS = [
     ("site/app/model-calls/page.mdx", SITE),
     ("site/app/reference/page.mdx", SITE),
     ("site/app/roadmap/page.mdx", SITE),
+    ("site/app/releases/page.mdx", SITE),
+    ("site/app/releases/0.0.1/page.mdx", SITE),
+    ("site/app/releases/0.0.2/page.mdx", SITE),
     ("site/app/start-here/page.mdx", SITE),
     ("site/app/versions/page.mdx", SITE),
 ]

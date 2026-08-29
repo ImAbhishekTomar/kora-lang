@@ -1,0 +1,55 @@
+---
+title: Kora 0.0.2
+description: Release notes, compatibility information, and migration guidance for Kora 0.0.2.
+---
+
+# Kora `0.0.2`
+
+Published 28 August 2026. [View the release and downloads](https://github.com/ImAbhishekTomar/kora-lang/releases/tag/v0.0.2).
+
+`0.0.2` turns the initial language into an agent-focused pre-alpha platform.
+It adds the execution, safety, integration, testing, and observability pieces
+needed to build and inspect real agent programs.
+
+## Changes
+
+- Typed `analyze()` calls with OpenAI and Ollama providers, typed results,
+  cassettes, and image inputs.
+- Agents, tools, `parallel for`, token budgets, human pauses, and durable
+  journal-and-replay execution.
+- Classified data, scoped `declassify`, sink policies, and `kora audit`.
+- Native `json`, `fs`, `time`, `re`, `http`, `csv`, `sql`, and `env` modules.
+- `test` blocks, typed mocks, OpenTelemetry tracing, language-server support,
+  and MCP and Python sidecar integrations.
+- Distribution through release archives, npm, Homebrew, crates.io, and the
+  VS Code Marketplace.
+
+## Breaking changes
+
+No intentional breaking changes from `0.0.1` are documented for this release.
+Kora remains pre-alpha, however, so projects should treat the documented
+language and configuration surface as version-specific rather than relying on
+unstated compatibility.
+
+## Migration from `0.0.1`
+
+Existing `0.0.1` programs remain the starting point. Upgrade the CLI, verify
+the installed version, then run the checker before changing application code:
+
+```bash
+npm install -g @abhishektomar/kora-cli@0.0.2
+kora --version
+kora check main.ko
+```
+
+You can then adopt new capabilities incrementally. For example, add a
+`kora.toml` model configuration before using `analyze`, and add explicit sink
+policy before moving classified values across a boundary. See the
+[installation guide](/installation), [language guide](/language), and
+[reference](/reference) for the exact syntax.
+
+## Compatibility
+
+Use `0.0.2` when reproducing a previous release. New work should use the
+latest release and its release page. The current development branch may
+contain features that are not present in `0.0.2`.
