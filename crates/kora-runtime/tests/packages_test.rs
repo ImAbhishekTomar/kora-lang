@@ -249,8 +249,8 @@ fn a_granted_capability_lets_the_call_through() {
     let main = scratch.write(
         "main.ko",
         &format!(
-            "use pkg reader as r\n\ndef main():\n    print(r.peek(\"{}\"))\n",
-            data.display()
+            "use pkg reader as r\n\ndef main():\n    print(r.peek({:?}))\n",
+            data.display().to_string()
         ),
     );
     assert_eq!(run(&main).unwrap(), vec!["contents"]);
