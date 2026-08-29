@@ -32,10 +32,12 @@ impl Locked {
     /// The full repository path, so two packages with the same short name
     /// cannot collide, and the commit rather than the tag, so a moved tag
     /// gets its own directory instead of silently reusing the old bytes.
-    /// `~` replaces `/` to keep it one directory level.
+    /// `~` replaces path punctuation to keep it one directory level on every
+    /// supported platform. A local Windows repository has both `:` and `\\`;
+    /// leaving either intact could make its cache escape `.kora/deps`.
     pub fn slug(&self) -> String {
         let short = self.commit.chars().take(12).collect::<String>();
-        format!("{}@{short}", self.url.replace('/', "~"))
+        format!("{}@{short}", self.url.replace(['/', '\\', ':'], "~"))
     }
 }
 
@@ -193,6 +195,17 @@ mod tests {
         // collide; the commit, so a moved tag gets its own directory rather
         // than silently reusing the old bytes.
         assert_eq!(sample().slug(), "github.com~org~receipts@a1b2c3d4e5f6");
+    }
+
+    #[test]
+    fn a_windows_path_stays_inside_the_dependency_store() {
+        let local = Locked {
+            url: r"C:\work\packages\receipts".to_string(),
+            ..sample()
+        };
+        let slug = local.slug();
+        assert_eq!(slug, "C~~work~packages~receipts@a1b2c3d4e5f6");
+        assert!(!slug.contains(['/', '\\', ':']));
     }
 
     #[test]

@@ -241,7 +241,7 @@ mod tests {
     #[test]
     fn a_staging_name_is_safe_for_an_absolute_windows_path() {
         let request = Request {
-            url: r"C:\\work\\packages\\greet".to_string(),
+            url: r"C:\work\packages\greet".to_string(),
             reference: GitRef::Tag("v1.0.0".to_string()),
         };
         let name = temporary_checkout_name(&request);
