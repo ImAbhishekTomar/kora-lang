@@ -132,6 +132,8 @@ model transport; the tool side of the same loop still had no timeout at all.
 - [x] Run the site build and documentation checks after the content refresh.
 - [x] Build the standalone React marketing landing page from the approved Kora
       visual, with direct links to Getting started and the documentation.
+- [x] Tighten the landing page hero, proof row, and footer spacing to match the supplied reference composition.
+- [x] Audit and refine landing navigation, syntax highlighting, execution trace, mascot presentation, viewport fit, and documentation routes.
 
 ## Queue
 
