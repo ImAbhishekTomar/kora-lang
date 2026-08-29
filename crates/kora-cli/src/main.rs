@@ -217,6 +217,7 @@ fn package_tree(path: &str) -> ExitCode {
             ""
         };
         println!("  {name}{version}{dev}");
+        println!("      grants: {}", package.grants.describe());
     }
 
     for unused in &resolution.unused {
@@ -231,19 +232,68 @@ fn package_tree(path: &str) -> ExitCode {
         eprintln!("warning: skipped {}: {why}", file.display());
     }
 
-    if resolution.missing.is_empty() {
-        ExitCode::SUCCESS
-    } else {
-        for missing in &resolution.missing {
-            eprintln!(
-                "error: no package named `{}` ({}:{})",
-                missing.name,
-                missing.file.display(),
-                missing.span.line
-            );
-        }
-        ExitCode::from(1)
+    let mut failed = false;
+    for missing in &resolution.missing {
+        eprintln!(
+            "error: no package named `{}` ({}:{})",
+            missing.name,
+            missing.file.display(),
+            missing.span.line
+        );
+        failed = true;
     }
+    failed |= report_grant_problems(&resolution);
+
+    if failed {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+/// Report anything wrong with the authority in the graph.
+///
+/// A shortfall means a package asked for something nobody gave it, which is
+/// better said before the run than at whichever call first needs it. A
+/// conflict means one package was granted two different ways: taking the
+/// union would let a permissive importer widen what a careful one withheld,
+/// and taking the intersection would break the permissive one's working code.
+fn report_grant_problems(resolution: &kora_pkg::Resolution) -> bool {
+    let mut failed = false;
+
+    for (path, why) in &resolution.bad_manifests {
+        // Silently treating this as an empty manifest would read as "this
+        // package has no dependencies and asked for nothing".
+        eprintln!("error: cannot read {}: {why}", path.display());
+        failed = true;
+    }
+
+    for shortfall in &resolution.shortfalls {
+        eprintln!(
+            "error: package `{}` requires {}, but was granted {}",
+            shortfall.package,
+            shortfall.missing.join(", "),
+            shortfall.granted
+        );
+        eprintln!(
+            "   = hint: grant it in kora.toml under `[dependencies.{}]`",
+            shortfall.package
+        );
+        eprintln!();
+        failed = true;
+    }
+
+    for conflict in &resolution.grant_conflicts {
+        eprintln!(
+            "error: package `{}` is granted two different ways: {} and {}",
+            conflict.package, conflict.first, conflict.second
+        );
+        eprintln!("   = hint: grant it the same way everywhere that depends on it");
+        eprintln!();
+        failed = true;
+    }
+
+    failed
 }
 
 fn check_files(paths: &[String], syntax_only: bool) -> ExitCode {
@@ -311,6 +361,9 @@ fn check_files(paths: &[String], syntax_only: bool) -> ExitCode {
                             entry.1.remove(declared);
                         }
                     }
+                }
+                if report_grant_problems(&resolution) {
+                    problems += 1;
                 }
                 for missing in &resolution.missing {
                     eprintln!("error: no package named `{}`", missing.name);
