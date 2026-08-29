@@ -144,6 +144,11 @@ design changes and should be deliberate.
   silently took a different branch than the same value unclassified. Reading
   the structure through the wrapper fixes that; re-applying the label to every
   binding is what keeps the fix from becoming a laundering hole.
+- **A mock is part of the test, so it crosses a `parallel for` boundary.**
+  Workers are fresh interpreters seeded with what they need, and the mock stack
+  was the one thing not seeded — so a test that fanned out silently reached for
+  a real model. The fan-out is the path most worth testing; leaving it the one
+  path that could not be tested was a hole, not a design.
 - Fixes over Python: no GIL, no async coloring, mandatory-at-boundary types,
   no bare except, one packaging story, no mutable-default-arg footgun.
 
@@ -369,6 +374,43 @@ r: Report = analyze(issue, "triage this", tools=gh.tools)
 MCP servers are separate processes, so each is a labeled sink:
 `declassify x for github` is checkable exactly like a model sink. Highest
 leverage per line of code in the project.
+
+**A tool server that does not answer is `Failed`, and is never called twice.**
+Three decisions, all forced by the same fact: a tool call is a side effect
+someone else runs.
+
+*It has a deadline.* Every request carries `[mcp] timeout_secs`, default 60,
+overridable per server for one that reaches a slow API. A blocking read on a
+pipe cannot be given a deadline portably, so the transport reads on its own
+thread and waits with one — without which a server that accepts a request and
+never answers stops the program forever. That is the worst failure of the
+three, because there is no error, no exit, and nothing to match on.
+
+*It ends the `analyze` call as `Failed(reason)`, not as a crash.* The same
+outcome a provider that does not answer produces, for the same reason: the
+program, not the runtime, decides what an unreachable dependency is worth. It
+is deliberately *not* handed back to the model as a tool result. A model
+offered "that tool failed" will reasonably try it again, paying the timeout
+every remaining turn until the budget is gone — and then report `Exhausted`,
+which names the wrong cause and sends whoever reads it to the wrong fix. A
+tool that *runs* and reports its own failure is different: that is an answer,
+the model can act on it, and it still comes back as a tool result.
+
+*It is never retried.* This is where MCP parts company with the model
+transport, which retries freely. Generating twice costs tokens and nothing
+else; calling a tool twice may open two issues, send two messages, or charge a
+card twice — and a timeout is precisely the case where whether it ran is
+unknown. MCP does carry `readOnlyHint` and `idempotentHint`, but those are
+claims made by the server, which sits outside the trust boundary; believing
+one in order to run a side effect a second time is not a trade worth making.
+Starting a server and shaking hands *is* retried, because nothing has run yet.
+So the timeout is the whole protection for a tool call, which is why it is not
+optional and why zero is clamped rather than honoured.
+
+One consequence worth stating: after a timeout the server may still answer.
+That stale reply is matched by request id and skipped, so it cannot be read as
+the answer to whatever the program asked next — a wrong answer being worse
+than an error.
 
 **3. Python via sidecar worker — the long-tail escape hatch.** A separate
 Python process, data in / data out over IPC. No live object handles, no

@@ -1,7 +1,7 @@
 export default {
   index: 'Welcome',
   installation: 'Installation',
-  'start-here': 'Start here',
+  'start-here': 'Getting started',
   language: 'Language',
   'model-calls': 'Typed model calls',
   comparison: 'Comparison',
