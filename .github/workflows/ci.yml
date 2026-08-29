@@ -135,6 +135,7 @@ jobs:
           ./target/debug/kora run examples/10_modules.ko
           ./target/debug/kora run examples/13_packages.ko
           ./target/debug/kora tree examples/13_packages.ko
+          ./target/debug/kora install examples/13_packages.ko
       - name: Cassette-backed examples replay without a model
         run: |
           set -euo pipefail
