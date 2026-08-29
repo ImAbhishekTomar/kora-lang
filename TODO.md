@@ -100,6 +100,7 @@ The problem other ecosystems cannot fix, and what Kora does instead:
       reference, then verify the full navigation.
 - [x] Run the site build and documentation checks after the content refresh.
 - [x] Tighten the landing page hero, proof row, and footer spacing to match the supplied reference composition.
+- [x] Audit and refine landing navigation, syntax highlighting, execution trace, mascot presentation, viewport fit, and documentation routes.
 
 ## Queue
 

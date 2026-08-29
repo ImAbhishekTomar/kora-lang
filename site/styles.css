@@ -83,6 +83,29 @@ body:has(.kora-landing) article { padding:0 !important; }
 /* Feature card padding adjustment - apply to all cards in the list */
 section#community > div.landing-feature-list:nth-of-type(1) > article { padding: 20px !important; }
 
+/* Final landing polish */
+.kora-landing { min-height:100dvh; height:100dvh; overflow:hidden; }
+.landing-nav nav a { display:inline-flex; align-items:center; gap:.4rem; }
+.landing-hero-copy .landing-summary { margin-top:1.5rem; }
+.landing-mascot-area { filter:drop-shadow(0 1.5rem 2rem rgba(194,215,8,.12)); }
+.landing-feature-list span { width:auto; height:auto; border:0; background:transparent; color:var(--landing-lime); }
+.landing-feature-list span svg { width:2rem; height:2rem; stroke-width:2.4; }
+.landing-run-card pre { overflow:auto; }
+.landing-run-card code { color:#dce6d5; }
+.token-keyword { color:#d5e72b; font-weight:700; }
+.token-name { color:#dce6d5; }
+.token-type { color:#8bd7c0; }
+.token-call { color:#71b9ee; }
+.landing-trace { position:relative; }
+.landing-trace>div { position:relative; }
+.landing-trace>div:not(:last-child)::after { position:absolute; top:1.55rem; bottom:-.45rem; left:.46rem; z-index:0; width:1px; background:rgba(189,215,165,.32); content:''; }
+.landing-trace i { position:relative; z-index:1; display:grid; place-items:center; width:1rem; height:1rem; border:1px solid #8bd53d; border-radius:50%; background:var(--landing-panel); color:#a6df43; font-style:normal; }
+.landing-trace i svg { width:.7rem; height:.7rem; stroke-width:3; }
+.landing-trace .trace-error i { border-color:#ee765f; color:#ee765f; }
+.landing-footer { margin-top:auto; }
+@media (min-width:651px) { .kora-landing { display:flex; flex-direction:column; }.landing-hero-section { flex:none; }.landing-proof { flex:none; }.landing-footer { flex:1; display:flex; align-items:flex-end; justify-content:center; padding-bottom:1rem; } }
+@media (max-width:650px) { .kora-landing { height:auto; min-height:100dvh; overflow:auto; }.landing-feature-list span svg { width:1.8rem; height:1.8rem; } }
+
 @media (max-width:650px) {
   .landing-hero-section { gap:1rem; padding-bottom:0; }
   .landing-mascot-area { min-height:13rem; overflow:hidden; }
