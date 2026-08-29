@@ -461,22 +461,23 @@ impl Interpreter {
                 // built in one file is the same type everywhere. Two files
                 // declaring the same name differently is a mistake, not a
                 // pair of unrelated types, so say so.
-                if let Some(existing) = self.types.get(name) {
+                let qualified = self.qualify_type(name);
+                if let Some(existing) = self.types.get(&qualified) {
                     if existing != fields {
                         return Err(RuntimeError::new(
                             format!("type `{name}` is declared twice with different fields"),
                             stmt.span,
                         )
                         .with_hint(
-                            "types are shared across imported files; give one of them another name",
+                            "types are shared across the files of one package; give one of them another name",
                         ));
                     }
                 }
-                self.types.insert(name.clone(), fields.clone());
+                self.types.insert(qualified.clone(), fields.clone());
                 // Also bind it in this module's namespace, so an importer can
                 // reach it as `alias.Name`.
                 let type_ref = Value::TypeRef {
-                    name: Rc::new(name.clone()),
+                    name: Rc::new(qualified),
                 };
                 scope.insert(name.clone(), type_ref.clone());
                 self.globals.insert(name.clone(), type_ref);
@@ -810,22 +811,54 @@ impl Interpreter {
             "list" => matches!(v, Value::List(_)),
             "dict" => matches!(v, Value::Dict(_)),
             name => match v {
-                Value::Object { type_name, .. } => type_name.as_str() == name,
+                Value::Object { type_name, .. } => type_name.as_str() == self.qualify_type(name),
                 _ => {
                     // Unknown annotation on a non-object: only fail when we
                     // know the type exists (declared via `type`).
-                    !self.types.contains_key(name)
+                    self.lookup_type(name).is_none()
                 }
             },
         };
         if ok {
             Ok(())
         } else {
-            Err(RuntimeError::new(
+            // Two packages may each declare `Config`, so a bare mismatch
+            // could read `expected Config, got Config`. When the short names
+            // collide, say which package each one came from.
+            let mut error = RuntimeError::new(
                 format!("expected `{}`, got `{}`", ty.display(), actual),
                 span,
-            ))
+            );
+            if let Value::Object { type_name, .. } = v.unlabeled() {
+                let want = self.qualify_type(&ty.display());
+                if want != type_name.as_str()
+                    && crate::value::short_type_name(type_name) == ty.display()
+                {
+                    error = error.with_hint(format!(
+                        "{} is not {}; they are different types with the same name",
+                        self.type_origin(type_name),
+                        self.type_origin(&want)
+                    ));
+                }
+            }
+            Err(error)
         }
+    }
+
+    /// Name a type the way a reader can act on: its own name, plus the
+    /// package it came from when that is not the program itself.
+    fn type_origin(&self, qualified: &str) -> String {
+        let short = crate::value::short_type_name(qualified);
+        let Some((prefix, _)) = qualified.rsplit_once(crate::value::TYPE_QUALIFIER) else {
+            return format!("`{short}` in this program");
+        };
+        let package = prefix
+            .strip_prefix('#')
+            .and_then(|id| id.parse::<usize>().ok())
+            .and_then(|id| self.packages.packages.get(id))
+            .and_then(|p| p.name.clone())
+            .unwrap_or_else(|| "an imported package".to_string());
+        format!("`{short}` from package `{package}`")
     }
 
     fn validate_field_metadata(&self, field: &FieldDef) -> Result<(), RuntimeError> {
@@ -1132,8 +1165,8 @@ impl Interpreter {
                                 "annotate the assignment, e.g. `result: Insight = analyze(data, \"...\")`",
                             ));
                         }
-                        if let Some(fields) = self.types.get(name).cloned() {
-                            return self.construct(name, &fields, arg_vals, expr.span);
+                        if let Some((qualified, fields)) = self.lookup_type(name) {
+                            return self.construct(&qualified, &fields, arg_vals, expr.span);
                         }
                         // Outcome constructors, so a test can build the value
                         // a model call would have produced. Restricted to the
@@ -1256,10 +1289,12 @@ impl Interpreter {
         if let Some(v) = self.globals.get(name) {
             return Ok(v.clone());
         }
-        // A declared type used as a value: `csv.parse(text, Expense)`.
-        if self.types.contains_key(name) {
+        // A declared type used as a value: `csv.parse(text, Expense)`. The
+        // reference carries the qualified name, so it still means this
+        // package's type after it crosses a package boundary.
+        if let Some((qualified, _)) = self.lookup_type(name) {
             return Ok(Value::TypeRef {
-                name: Rc::new(name.to_string()),
+                name: Rc::new(qualified),
             });
         }
         if BUILTINS.contains(&name) {
@@ -2022,10 +2057,12 @@ impl Interpreter {
             }
         };
 
-        let type_name = match ty {
-            TypeExpr::Name(n) => n.clone(),
-            TypeExpr::Generic(n, _) => n.clone(),
-        };
+        // Qualified once here, so the schema, the mock check, and the
+        // resulting object all agree on which package's type this is.
+        let type_name = self.qualify_type(match ty {
+            TypeExpr::Name(n) => n,
+            TypeExpr::Generic(n, _) => n,
+        });
         let schema = self.schema_for(&type_name, span)?;
 
         // A mock stands in for the whole call. It is checked against the
@@ -2224,8 +2261,9 @@ impl Interpreter {
 
     /// Build the model schema from a Kora `type` declaration.
     fn schema_for(&self, type_name: &str, span: Span) -> Result<Schema, RuntimeError> {
+        let written = crate::value::short_type_name(type_name);
         let fields = self.types.get(type_name).ok_or_else(|| {
-            RuntimeError::new(format!("`{type_name}` is not a declared type"), span)
+            RuntimeError::new(format!("`{written}` is not a declared type"), span)
                 .with_hint("declare it first, e.g. `type Insight:` with typed fields below")
         })?;
         let mut out = Vec::new();
@@ -2277,7 +2315,7 @@ impl Interpreter {
             });
         }
         Ok(Schema {
-            type_name: type_name.to_string(),
+            type_name: written.to_string(),
             fields: out,
         })
     }
@@ -2469,7 +2507,11 @@ fn value_to_json(value: &Value) -> serde_json::Value {
         Value::Builtin(name) => J::String(format!("<builtin {name}>")),
         Value::Module { name } => J::String(format!("<module {name}>")),
         Value::UserModule { alias, .. } => J::String(format!("<module {alias}>")),
-        Value::TypeRef { name } => J::String(format!("<type {name}>")),
+        // The qualifier is internal identity. Letting it reach a prompt would
+        // put a package id in front of the model and move every cassette key.
+        Value::TypeRef { name } => {
+            J::String(format!("<type {}>", crate::value::short_type_name(name)))
+        }
         Value::McpServer { alias } => J::String(format!("<mcp server {alias}>")),
         Value::PyModule { module } => J::String(format!("<python module {module}>")),
         Value::McpTool { server, name } => J::String(format!("<tool {server}.{name}>")),
@@ -3391,6 +3433,40 @@ impl Interpreter {
         self.modules[self.current_module].path.clone()
     }
 
+    /// Qualify a bare type name with the package the current file belongs to.
+    ///
+    /// Types are shared across the *files* of one package, exactly as before,
+    /// and are invisible across a package boundary unless reached through the
+    /// module that declared them. Without this, two dependencies declaring
+    /// `Config` would be a hard error the consumer could not fix, since it
+    /// owns neither of them.
+    fn qualify_type(&self, name: &str) -> String {
+        self.qualify_type_in(self.modules[self.current_module].package, name)
+    }
+
+    fn qualify_type_in(&self, package: kora_pkg::PackageId, name: &str) -> String {
+        if package == kora_pkg::ROOT {
+            // The root program's types are unqualified, so every program
+            // written before packages existed behaves identically.
+            name.to_string()
+        } else {
+            format!("#{}{}{name}", package.0, crate::value::TYPE_QUALIFIER)
+        }
+    }
+
+    /// Look up a type by the name as written, in the current package.
+    ///
+    /// A name that already carries a qualifier — one that arrived through a
+    /// `TypeRef`, having been resolved in the package that declared it — is
+    /// used as-is.
+    fn lookup_type(&self, name: &str) -> Option<(String, Vec<FieldDef>)> {
+        if name.contains(crate::value::TYPE_QUALIFIER) {
+            return self.types.get(name).map(|f| (name.to_string(), f.clone()));
+        }
+        let qualified = self.qualify_type(name);
+        self.types.get(&qualified).map(|f| (qualified, f.clone()))
+    }
+
     /// Make `target` the active module, returning the one it replaced.
     ///
     /// The live namespace lives in `globals`; the table holds the others. A
@@ -3715,6 +3791,18 @@ impl Interpreter {
         })
     }
 
+    /// Qualify a bare type name the way a *sibling* of `alongside` would be.
+    ///
+    /// A nested field type is written bare inside the declaration that uses
+    /// it, so it belongs to the package that declaration came from — not to
+    /// whichever package happens to be running when the value is parsed.
+    pub fn qualify_alongside(&self, alongside: &str, bare: &str) -> String {
+        match alongside.rsplit_once(crate::value::TYPE_QUALIFIER) {
+            Some((prefix, _)) => format!("{prefix}{}{bare}", crate::value::TYPE_QUALIFIER),
+            None => bare.to_string(),
+        }
+    }
+
     /// Whether an enclosing `declassify ... for <sink>:` block released data
     /// to this sink.
     pub fn declassified_for_sink(&self, sink: &str) -> bool {
@@ -3802,8 +3890,9 @@ impl Interpreter {
                 else {
                     return Err(RuntimeError::new(
                         format!(
-                            "the mock returns Ok({}), but this call site declares `{type_name}`",
-                            inner.type_name()
+                            "the mock returns Ok({}), but this call site declares `{}`",
+                            inner.type_name(),
+                            crate::value::short_type_name(type_name)
                         ),
                         span,
                     ));
@@ -3811,7 +3900,9 @@ impl Interpreter {
                 if actual.as_str() != type_name {
                     return Err(RuntimeError::new(
                         format!(
-                            "the mock returns `{actual}`, but this call site declares `{type_name}`"
+                            "the mock returns `{}`, but this call site declares `{}`",
+                            crate::value::short_type_name(actual),
+                            crate::value::short_type_name(type_name)
                         ),
                         span,
                     ));
@@ -3827,7 +3918,8 @@ impl Interpreter {
                                 span,
                             )
                             .with_hint(format!(
-                                "`{type_name}` declares: {}",
+                                "`{}` declares: {}",
+                                crate::value::short_type_name(type_name),
                                 declared
                                     .iter()
                                     .map(|f| f.name.as_str())

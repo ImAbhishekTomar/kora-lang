@@ -73,15 +73,16 @@ fn coerce_to_type(
     path: &str,
     span: Span,
 ) -> Result<Result<Value, String>, RuntimeError> {
+    let written = crate::value::short_type_name(type_name);
     let Some(fields) = interp.declared_fields(type_name) else {
         return Err(RuntimeError::new(
-            format!("`{type_name}` is not a declared type"),
+            format!("`{written}` is not a declared type"),
             span,
         ));
     };
     let J::Object(map) = json else {
         return Ok(Err(format!(
-            "{path}: expected an object for `{type_name}`, got {}",
+            "{path}: expected an object for `{written}`, got {}",
             json_kind(json)
         )));
     };
@@ -92,7 +93,7 @@ fn coerce_to_type(
         let Some(raw) = map.get(&name) else {
             return Ok(Err(format!("{field_path}: missing")));
         };
-        match coerce_field(interp, raw, &ty, &field_path, span)? {
+        match coerce_field(interp, raw, type_name, &ty, &field_path, span)? {
             Ok(value) => {
                 out.insert(name, value);
             }
@@ -105,9 +106,13 @@ fn coerce_to_type(
     }))
 }
 
+/// Coerce one field. `owner` is the type this field belongs to, so a nested
+/// declared type resolves in the package that declared it rather than in
+/// whichever package happens to be parsing.
 fn coerce_field(
     interp: &Interpreter,
     json: &J,
+    owner: &str,
     ty: &kora_syntax::ast::TypeExpr,
     path: &str,
     span: Span,
@@ -136,8 +141,12 @@ fn coerce_field(
             ("float", _) => mismatch("float"),
             ("bool", J::Bool(b)) => Ok(Ok(Value::Bool(*b))),
             ("bool", _) => mismatch("bool"),
-            // A nested declared type.
-            (other, _) => coerce_to_type(interp, json, other, path, span),
+            // A nested declared type, named bare inside its owner's
+            // declaration and so belonging to its owner's package.
+            (other, _) => {
+                let nested = interp.qualify_alongside(owner, other);
+                coerce_to_type(interp, json, &nested, path, span)
+            }
         },
         TypeExpr::Generic(outer, args) if outer == "list" => {
             let J::Array(items) = json else {
@@ -149,7 +158,7 @@ fn coerce_field(
             let mut out = Vec::with_capacity(items.len());
             for (index, item) in items.iter().enumerate() {
                 let item_path = format!("{path}.{index}");
-                match coerce_field(interp, item, inner, &item_path, span)? {
+                match coerce_field(interp, item, owner, inner, &item_path, span)? {
                     Ok(value) => out.push(value),
                     Err(message) => return Ok(Err(message)),
                 }

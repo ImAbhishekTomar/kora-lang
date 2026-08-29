@@ -71,9 +71,15 @@ design changes and should be deliberate.
 - **Each file reads its own top level.** A function resolves free names in
   the file it was written in, so importing a module cannot change what its
   code means. This is why functions carry their home module at runtime.
-- **Types are global across the module graph.** A `Money` is one type
-  everywhere, so values cross file boundaries without conversion; declaring
-  the same name differently in two files is an error, not two types.
+- **Types are global across the files of one package.** A `Money` is one type
+  everywhere inside it, so values cross file boundaries without conversion;
+  declaring the same name differently in two of its files is an error, not
+  two types. The sharing stops at the package boundary: two dependencies may
+  each declare `Config` and they are different types, because the alternative
+  is a hard error the consumer cannot fix, owning neither package. A type is
+  identified internally by its package and name, and displayed by its name
+  alone — except where two short names collide, which is the one case a
+  reader cannot otherwise resolve.
 - **A file's top level runs once per run.** Imports are cached by canonical
   path, so a diamond is one module, not two with separate state.
 - **Cycles are an error**, reported with the chain. A half-initialized module
@@ -389,6 +395,7 @@ Ecosystem work, sequenced alongside the phases above:
 - Images as values (`fs.image`, multimodal `analyze`, `fs.glob`) — **done**
 - Package dependencies (`use pkg`, path dependencies, reachability-derived
   graph) — **done**
+- Per-package type namespacing — **done**
 - Capability grants, git dependencies, lockfile, checksum log — next
 - WASM components — later
 

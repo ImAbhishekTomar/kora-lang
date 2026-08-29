@@ -529,6 +529,32 @@ program's. So a package may depend on something its consumer has never heard
 of, two packages may bind the same bare name to different sources, and a
 program cannot reach its dependencies' dependencies.
 
+**Types belong to their package.** Two dependencies may both declare
+`Config`, and they are different types:
+
+```python
+use pkg left as l
+use pkg right as r
+
+a = l.Config("left.example", 80)     # left's Config
+b = r.Config("right", 3)             # right's, with different fields
+```
+
+Types are still shared across the *files* of one package, exactly as before,
+so splitting a program across files is unchanged. What is new is that the
+sharing stops at the package boundary — otherwise two dependencies declaring
+the same type name would be an error the consumer could not fix, owning
+neither of them.
+
+A type from a package does not satisfy a same-named annotation here, and the
+error says which is which rather than `expected Config, got Config`:
+
+```
+error: expected `Config`, got `Config`
+   = hint: `Config` from package `left` is not `Config` in this program;
+           they are different types with the same name
+```
+
 **Test-only packages are derived, not declared.** A package reached only
 through `test` blocks is dev-only and stays out of a shipped program:
 

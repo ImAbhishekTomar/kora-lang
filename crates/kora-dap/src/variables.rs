@@ -186,7 +186,13 @@ fn summary(value: &Value) -> String {
         Value::List(items) => format!("list[{}]", items.borrow().len()),
         Value::Dict(map) => format!("dict[{}]", map.borrow().len()),
         Value::Object { type_name, fields } => {
-            format!("{type_name}({} fields)", fields.borrow().len())
+            // A package qualifier is an identity mechanism, not something to
+            // show in a variables pane.
+            format!(
+                "{}({} fields)",
+                kora_runtime::value::short_type_name(type_name),
+                fields.borrow().len()
+            )
         }
         other => other.to_string(),
     }
