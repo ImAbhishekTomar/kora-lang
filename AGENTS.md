@@ -13,6 +13,7 @@ Since Kora is a new language, prioritize solving these problems at the language,
 - [x] Completed
 - [ ] Development  (where we are, details of dev things etc)
 
+**Roadmap** Make sure to keep roadmap up-to-date  `site/app/roadmap/page.mdx` and the same has to be updated under github project also in view `Kora Lang - Roadmap` using `gh` cli.
 
 Read [DECISIONS.md](DECISIONS.md) first. It records *why* the language is the
 way it is; the docs record *what*. A change that contradicts a decision needs
