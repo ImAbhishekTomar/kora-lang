@@ -9,7 +9,9 @@ use std::time::Instant;
 
 /// Seconds a request waits in these tests. Short, so a wedged server is caught
 /// quickly; long enough that a loaded CI machine does not trip it by accident.
-const TIMEOUT_SECS: u64 = 2;
+/// A cold `python3` spawn on Windows runners can itself take a few seconds,
+/// which this has to outlast since it is the same clock as the handshake.
+const TIMEOUT_SECS: u64 = 8;
 /// The late-reply test waits out two of these in sequence, so it gets its own.
 /// `awkward_server.py` sleeps `LATE_TIMEOUT_SECS * 3 / 2` before the stale
 /// answer; the two must be changed together.
