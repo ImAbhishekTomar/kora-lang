@@ -3,7 +3,7 @@
 //! Phase 2: `kora run <file.ko>` with record/replay of model calls.
 //! `test`, `audit`, and `trace` arrive with their phases — see DECISIONS.md.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use kora_runtime::{Cassette, Config, Interpreter, Mode};
@@ -21,6 +21,13 @@ usage:
   kora tree <file.ko>          show the packages the program actually uses
   kora install <file.ko>       fetch the dependencies the program uses
     --jobs <n>                 how many fetches at once
+  kora add <file.ko> <name> <source>
+                               declare a dependency; source is a path or a
+                               repository, with --tag/--branch/--rev
+  kora remove <file.ko> <name> stop declaring a dependency
+  kora update <file.ko> <name> move a dependency past the lockfile
+    --tag/--branch/--rev       the revision to move to
+    --accept-new-authority     allow a version that asks for more
   kora runs <file.ko>          list durable runs and their status
   kora answer <file.ko> <id> <text>
                                answer a suspended run and resume it
@@ -107,6 +114,33 @@ fn main() -> ExitCode {
             }
             _ => {
                 eprintln!("usage: kora answer <file.ko> <run-id> <text>");
+                ExitCode::from(2)
+            }
+        },
+        Some("add") => match (args.get(1), args.get(2), args.get(3)) {
+            (Some(path), Some(name), Some(source))
+                if !name.starts_with("--") && !source.starts_with("--") =>
+            {
+                add_dependency(path, name, source, &args)
+            }
+            _ => {
+                eprintln!("usage: kora add <file.ko> <name> <path|repository> [--tag <t>]");
+                ExitCode::from(2)
+            }
+        },
+        Some("remove") => match (args.get(1), args.get(2)) {
+            (Some(path), Some(name)) if !name.starts_with("--") => remove_dependency(path, name),
+            _ => {
+                eprintln!("usage: kora remove <file.ko> <name>");
+                ExitCode::from(2)
+            }
+        },
+        Some("update") => match (args.get(1), args.get(2)) {
+            (Some(path), Some(name)) if !name.starts_with("--") => {
+                update_dependency(path, name, &args)
+            }
+            _ => {
+                eprintln!("usage: kora update <file.ko> <name> [--tag <t>]");
                 ExitCode::from(2)
             }
         },
@@ -200,6 +234,221 @@ fn flag_value(args: &[String], flag: &str) -> Option<String> {
     args.get(index + 1)
         .filter(|v| !v.starts_with("--"))
         .cloned()
+}
+
+/// The revision named by `--tag`, `--branch`, or `--rev`.
+fn revision_from(args: &[String]) -> Option<kora_pkg::GitRef> {
+    if let Some(t) = flag_value(args, "--tag") {
+        return Some(kora_pkg::GitRef::Tag(t));
+    }
+    if let Some(b) = flag_value(args, "--branch") {
+        return Some(kora_pkg::GitRef::Branch(b));
+    }
+    flag_value(args, "--rev").map(kora_pkg::GitRef::Commit)
+}
+
+/// The directory holding the manifest that governs a program.
+fn project_root(program: &Path) -> PathBuf {
+    kora_pkg::Manifest::discover(program).0
+}
+
+/// `kora add` — declare a dependency. It is not fetched here: `kora install`
+/// fetches what the source imports, and a dependency nothing imports should
+/// not be downloaded just because it was named.
+fn add_dependency(path: &str, name: &str, source: &str, args: &[String]) -> ExitCode {
+    let program = Path::new(path);
+    if !program.is_file() {
+        eprintln!("error: cannot read `{path}`");
+        return ExitCode::from(1);
+    }
+    let root = project_root(program);
+
+    let looks_local = source.starts_with('.') || source.starts_with('/');
+    let spec = if looks_local && revision_from(args).is_none() {
+        kora_pkg::DepSpec::Path {
+            path: PathBuf::from(source),
+        }
+    } else {
+        kora_pkg::DepSpec::Git {
+            url: source.to_string(),
+            reference: revision_from(args).unwrap_or(kora_pkg::GitRef::Default),
+        }
+    };
+
+    match kora_pkg::add(&root, name, &spec) {
+        Err(why) => {
+            eprintln!("error: {why}");
+            ExitCode::from(1)
+        }
+        Ok(change) => {
+            match change {
+                kora_pkg::Change::Added => println!("  added     {name}"),
+                kora_pkg::Change::Unchanged => println!("  unchanged {name}"),
+                kora_pkg::Change::Replaced { previous } => {
+                    println!("  repointed {name} (was {previous})")
+                }
+                _ => {}
+            }
+            println!("  it is not fetched until something writes `use pkg {name}`");
+            println!("  then: kora install {path}");
+            ExitCode::SUCCESS
+        }
+    }
+}
+
+/// `kora remove` — stop declaring a dependency.
+fn remove_dependency(path: &str, name: &str) -> ExitCode {
+    let program = Path::new(path);
+    if !program.is_file() {
+        eprintln!("error: cannot read `{path}`");
+        return ExitCode::from(1);
+    }
+    match kora_pkg::remove(&project_root(program), name) {
+        Err(why) => {
+            eprintln!("error: {why}");
+            ExitCode::from(1)
+        }
+        Ok(kora_pkg::Change::Absent) => {
+            eprintln!("error: `{name}` is not declared in kora.toml");
+            ExitCode::from(1)
+        }
+        Ok(_) => {
+            println!("  removed  {name}");
+            ExitCode::SUCCESS
+        }
+    }
+}
+
+/// `kora update` — move a dependency past the lockfile.
+///
+/// The only sanctioned way past the lock, and so the one place a new
+/// version's *authority* has to be looked at. A dependency that quietly
+/// starts reaching the network, or starts declassifying, is how a package
+/// people already trust turns into a problem; a bump reporting only a version
+/// number gives nobody the chance to notice.
+fn update_dependency(path: &str, name: &str, args: &[String]) -> ExitCode {
+    let program = Path::new(path);
+    if !program.is_file() {
+        eprintln!("error: cannot read `{path}`");
+        return ExitCode::from(1);
+    }
+    let root = project_root(program);
+
+    let before = kora_pkg::resolve(program);
+    let Some(package) = before
+        .packages
+        .iter()
+        .find(|p| p.name.as_deref() == Some(name))
+    else {
+        eprintln!("error: `{name}` is not a package this program uses");
+        return ExitCode::from(1);
+    };
+    let Some(url) = package.git.clone() else {
+        eprintln!("error: `{name}` is a path dependency; there is nothing to update");
+        eprintln!("   = hint: edit its `path` in kora.toml");
+        return ExitCode::from(1);
+    };
+
+    // The old checkout has to be read before the new one replaces it.
+    let old_checkout = kora_pkg::checkout_of(&root, &url);
+    let old_reference = kora_pkg::Lock::at(&root)
+        .ok()
+        .and_then(|lock| lock.get(&url).map(|l| l.reference.clone()))
+        .unwrap_or_else(|| "unknown".to_string());
+    let staging = old_checkout.as_ref().map(|from| {
+        let to = root.join(".kora").join("previous").join(name);
+        let _ = std::fs::remove_dir_all(&to);
+        let _ = copy_tree(from, &to);
+        to
+    });
+
+    if let Some(reference) = revision_from(args) {
+        match kora_pkg::set_revision(&root, name, &reference) {
+            Ok(true) => {}
+            Ok(false) => {
+                eprintln!("error: `{name}` is not declared in kora.toml");
+                return ExitCode::from(1);
+            }
+            Err(why) => {
+                eprintln!("error: {why}");
+                return ExitCode::from(1);
+            }
+        }
+    }
+
+    if let Err(why) = kora_pkg::unlock(&root, &url) {
+        eprintln!("error: {why}");
+        return ExitCode::from(1);
+    }
+
+    let config = Config::discover(program);
+    let outcome = kora_pkg::install(program, config.install_jobs, true);
+    for (failed_url, why) in &outcome.failed {
+        eprintln!("error: cannot fetch {failed_url}");
+        for line in why.lines().take(4) {
+            eprintln!("   {}", line.trim());
+        }
+        eprintln!();
+    }
+    if !outcome.failed.is_empty() {
+        return ExitCode::from(1);
+    }
+
+    let new_reference = kora_pkg::Lock::at(&root)
+        .ok()
+        .and_then(|lock| lock.get(&url).map(|l| l.reference.clone()))
+        .unwrap_or_else(|| "unknown".to_string());
+    println!("  {name}: {old_reference} -> {new_reference}");
+
+    // Nothing to compare against on a first fetch, and nothing to warn about.
+    let (Some(previous), Some(current)) = (staging, kora_pkg::checkout_of(&root, &url)) else {
+        return ExitCode::SUCCESS;
+    };
+    let diff = kora_pkg::compare(name, &previous, &current, &old_reference, &new_reference);
+    let _ = std::fs::remove_dir_all(&previous);
+
+    if !diff.needs_a_look() {
+        return ExitCode::SUCCESS;
+    }
+
+    eprintln!();
+    eprintln!("this version of `{name}` does more than the one it replaces:");
+    for requirement in &diff.new_requirements {
+        eprintln!("  it now requires {requirement}");
+    }
+    if diff.declassify_after > diff.declassify_before {
+        eprintln!(
+            "  it declassifies in {} place{}, up from {}",
+            diff.declassify_after,
+            if diff.declassify_after == 1 { "" } else { "s" },
+            diff.declassify_before
+        );
+    }
+    eprintln!();
+    if args.iter().any(|a| a == "--accept-new-authority") {
+        eprintln!("accepted. review it with `kora audit {path}`");
+        return ExitCode::SUCCESS;
+    }
+    eprintln!("kora.toml and kora.lock have been updated, but review this before shipping it.");
+    eprintln!("   = hint: `kora audit {path}` lists every declassification site");
+    eprintln!("   = hint: re-run with --accept-new-authority once you have looked");
+    ExitCode::from(1)
+}
+
+/// Copy a directory tree, for keeping a package's old contents to diff
+/// against after the new ones are in place.
+fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
 }
 
 /// `kora install` — fetch the dependencies the program actually uses.

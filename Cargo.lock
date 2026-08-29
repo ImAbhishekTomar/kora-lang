@@ -403,6 +403,7 @@ dependencies = [
  "kora-syntax",
  "sha2",
  "toml",
+ "toml_edit",
 ]
 
 [[package]]
