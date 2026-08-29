@@ -2,7 +2,7 @@
   "name": "kora-lang",
   "displayName": "Kora Language",
   "description": "Syntax highlighting, IntelliSense, and debugging for the Kora programming language (.ko)",
-  "version": "0.0.2",
+  "version": "0.1.0",
   "publisher": "kora-lang",
   "license": "MIT",
   "icon": "images/icon.png",
