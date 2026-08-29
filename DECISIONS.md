@@ -363,6 +363,13 @@ A manifest has **no field for install scripts**, and will not gain one. That
 is the whole of the `postinstall` attack class, refused by the file format
 rather than by a setting someone can turn off.
 
+`kora update` is the only sanctioned way past the lockfile, and so the place a
+new version's *authority* is examined: it refuses a bump that asks for
+capabilities the old version did not, or that declassifies in more places,
+until someone says they have looked. Advisory rather than load-bearing — the
+runtime still refuses to grant what kora.toml did not — because two
+independent gates beat one.
+
 For third-party *native* packages, the destination is WASM components rather
 than dynamic libraries: sandboxed by construction, language-agnostic, and a
 sandboxed package cannot exfiltrate classified data. A component declares its
@@ -386,8 +393,8 @@ Layers 1 through 3 are built. Packages are under way; WASM components wait.
 Phases 0 through 6 are complete, as are the standard library, MCP
 integration, the Python sidecar, and images as values. Packages have begun
 with path and git dependencies, capability grants, and a content-hashed
-lockfile, and a checksum log; what remains is packaging ergonomics and WASM
-components — see the ecosystem strategy above.
+lockfile, a checksum log, and the packaging commands; what remains is a
+hosted checksum log and WASM components — see the ecosystem strategy above.
 
 Reference documentation lives in [docs/](docs): the
 [language](docs/language.md), the [standard library](docs/stdlib.md), and the
@@ -418,7 +425,8 @@ Ecosystem work, sequenced alongside the phases above:
 - Per-package capability grants — **done**
 - Git dependencies, content-hashed lockfile, parallel fetch — **done**
 - Append-only checksum log — **done**
-- `kora add` / `update` / `vendor`, `kora audit --deps` — next
+- `kora add` / `remove` / `update` / `vendor`, `kora audit --deps` — **done**
+- A hosted checksum log, and WASM components — later
 - WASM components — later
 
 Each phase ends with a runnable demo program. Demo programs live in

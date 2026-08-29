@@ -565,7 +565,10 @@ grants = { net = true }
 ```
 
 ```bash
+kora add program.ko receipts github.com/org/receipts --tag v0.3.1
 kora install program.ko    # fetch what the source imports
+kora update program.ko receipts --tag v0.4.0
+kora vendor program.ko     # copy the shipped graph, for building offline
 ```
 
 Identity is the full repository path, never a short name — there is no flat

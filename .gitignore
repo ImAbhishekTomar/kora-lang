@@ -22,5 +22,6 @@
 /greeting.txt
 # Durable run journals
 .kora/
+# `vendor/` is deliberate and committed, unlike `.kora/`. Not ignored.
 .vercel
 .env*

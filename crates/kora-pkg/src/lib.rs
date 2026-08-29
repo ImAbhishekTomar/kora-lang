@@ -22,7 +22,9 @@ pub(crate) mod resolve;
 mod scan;
 mod sumlog;
 
-pub use commands::{add, checkout_of, compare, granted, remove, set_revision, unlock, Diff};
+pub use commands::{
+    add, checkout_of, compare, granted, remove, set_revision, unlock, vendor, Diff,
+};
 pub use edit::Change;
 pub use fetch::{all as fetch_all, default_jobs, Fetched, Request};
 pub use grants::{Capability, Grants};

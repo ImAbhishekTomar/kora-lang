@@ -71,7 +71,12 @@ the way to hide one.
 
 ```bash
 kora audit examples/03_salary_review.ko
+kora audit --deps program.ko        # grouped by the package responsible
 ```
+
+`--deps` answers a different question: not "where does this program release
+data" but "whose code does the releasing". A dependency that declassifies is
+doing it with the importing program's data.
 
 ```
   examples/03_salary_review.ko:28  declassify pay for local_model
@@ -99,6 +104,51 @@ Cold resolution is wave-shaped — what a package depends on is unknowable
 until it is on disk — but once the lockfile exists the whole graph is known,
 so a warm install is one flat fan-out. Deep chains cost only on the first
 resolve, never in CI.
+
+### `kora add` / `kora remove` / `kora update`
+
+```bash
+kora add program.ko receipts github.com/org/receipts --tag v0.3.1
+kora add program.ko local ../local-package
+kora remove program.ko receipts
+kora update program.ko receipts --tag v0.4.0
+```
+
+Edits are format-preserving: comments and layout in `kora.toml` survive.
+Adding does not fetch — a dependency nothing imports is not downloaded just
+because it was named — and grants written by hand survive a re-add, so
+`kora add` cannot quietly widen what a dependency may do.
+
+`kora update` is the one command that deliberately moves past the lockfile,
+so it is where a new version's authority is examined. It refuses when the new
+version asks for capabilities the old one did not, or declassifies in more
+places, until `--accept-new-authority` says a person has looked:
+
+```
+  greet: v2.0.0 -> v3.0.0
+
+this version of `greet` does more than the one it replaces:
+  it now requires net
+  it now requires sink `telemetry`
+  it declassifies in 1 place, up from 0
+```
+
+The warning is advisory; the program still cannot run until the new authority
+is granted. Two independent gates — the update warns, the runtime enforces.
+
+### `kora vendor <file.ko>`
+
+Copy the packages a shipped program needs into `vendor/`, so the project
+builds with no network at all.
+
+```bash
+kora vendor program.ko
+kora vendor --include-tests program.ko
+```
+
+Distinct from `.kora/deps`, which is a cache: `vendor/` is deliberate and
+committed. Test-only packages are excluded by default, since they are not
+part of what ships. `.git` and `.kora` are never copied.
 
 ### `kora tree <file.ko>`
 

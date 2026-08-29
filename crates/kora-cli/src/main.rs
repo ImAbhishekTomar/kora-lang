@@ -18,7 +18,10 @@ usage:
     --syntax                   parse only; skip name resolution
   kora test <file.ko>          run the `test` blocks in a file
   kora audit <file.ko>         list every declassification site
+    --deps                     group them by the package responsible
   kora tree <file.ko>          show the packages the program actually uses
+  kora vendor <file.ko>        copy the shipped packages into vendor/
+    --include-tests            include packages only tests reach
   kora install <file.ko>       fetch the dependencies the program uses
     --jobs <n>                 how many fetches at once
   kora add <file.ko> <name> <source>
@@ -154,6 +157,13 @@ fn main() -> ExitCode {
                 }
             }
         }
+        Some("vendor") => match args[1..].iter().find(|a| !a.starts_with("--")) {
+            Some(path) => vendor_packages(path, args.iter().any(|a| a == "--include-tests")),
+            None => {
+                eprintln!("usage: kora vendor [--include-tests] <file.ko>");
+                ExitCode::from(2)
+            }
+        },
         Some("tree") => match args.get(1) {
             Some(path) => package_tree(path),
             None => {
@@ -161,8 +171,8 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         },
-        Some("audit") => match args.get(1) {
-            Some(path) => audit_file(path),
+        Some("audit") => match args[1..].iter().find(|a| !a.starts_with("--")) {
+            Some(path) => audit_file(path, args.iter().any(|a| a == "--deps")),
             None => {
                 eprintln!("usage: kora audit <file.ko>");
                 ExitCode::from(2)
@@ -497,6 +507,96 @@ fn install_packages(path: &str, jobs: Option<usize>) -> ExitCode {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)
+    }
+}
+
+/// Group declassification sites by the package responsible for them.
+///
+/// The question `--deps` answers is not "where does this program release
+/// data" but "whose code does the releasing". A dependency that declassifies
+/// is doing it with the importing program's data, and that is worth seeing
+/// separately from what the program does itself.
+fn print_audit_by_package(
+    sites: &[kora_runtime::label::DeclassifySite],
+    packages: &kora_pkg::Resolution,
+) {
+    // Longest root first, so a package nested inside another's directory is
+    // attributed to the innermost one that contains it.
+    let mut roots: Vec<(&Path, String)> = packages
+        .needed()
+        .iter()
+        .map(|p| {
+            (
+                p.root.as_path(),
+                p.name.clone().unwrap_or_else(|| "?".to_string()),
+            )
+        })
+        .collect();
+    roots.sort_by_key(|(root, _)| std::cmp::Reverse(root.as_os_str().len()));
+
+    let mut grouped: std::collections::BTreeMap<String, Vec<&kora_runtime::label::DeclassifySite>> =
+        std::collections::BTreeMap::new();
+    for site in sites {
+        let path = Path::new(&site.file).canonicalize().ok();
+        let owner = path
+            .as_ref()
+            .and_then(|p| roots.iter().find(|(root, _)| p.starts_with(root)))
+            .map(|(_, name)| format!("package `{name}`"))
+            .unwrap_or_else(|| "this program".to_string());
+        grouped.entry(owner).or_default().push(site);
+    }
+
+    if grouped.is_empty() {
+        println!("no declassification sites: no classified data reaches any sink");
+        return;
+    }
+    for (owner, sites) in &grouped {
+        println!("{owner}");
+        for site in sites {
+            println!(
+                "  {}:{}  declassify {} for {}",
+                site.file, site.line, site.expression, site.sink
+            );
+        }
+        println!();
+    }
+    let total: usize = grouped.values().map(Vec::len).sum();
+    println!(
+        "{total} declassification site{} across {} source{}",
+        if total == 1 { "" } else { "s" },
+        grouped.len(),
+        if grouped.len() == 1 { "" } else { "s" }
+    );
+}
+
+/// `kora vendor` — copy the shipped graph into `vendor/`.
+fn vendor_packages(path: &str, include_tests: bool) -> ExitCode {
+    let program = Path::new(path);
+    if !program.is_file() {
+        eprintln!("error: cannot read `{path}`");
+        return ExitCode::from(1);
+    }
+    let resolution = kora_pkg::resolve(program);
+    if report_package_problems(&resolution) {
+        eprintln!("nothing was vendored: the graph is incomplete");
+        return ExitCode::from(1);
+    }
+    match kora_pkg::vendor(program, include_tests) {
+        Err(why) => {
+            eprintln!("error: {why}");
+            ExitCode::from(1)
+        }
+        Ok(copied) => {
+            for name in &copied {
+                println!("  vendored  {name}");
+            }
+            println!(
+                "{} package{} in vendor/",
+                copied.len(),
+                if copied.len() == 1 { "" } else { "s" }
+            );
+            ExitCode::SUCCESS
+        }
     }
 }
 
@@ -854,7 +954,7 @@ fn test_file(path: &str) -> ExitCode {
 ///
 /// Complete because every release goes through a `declassify` block, so the
 /// parser can enumerate them all. No Python framework can promise this list.
-fn audit_file(path: &str) -> ExitCode {
+fn audit_file(path: &str, by_package: bool) -> ExitCode {
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
@@ -882,7 +982,11 @@ fn audit_file(path: &str) -> ExitCode {
         return ExitCode::from(1);
     }
     let sites = kora_runtime::audit::audit_program(&program, path, &packages);
-    print!("{}", kora_runtime::audit::render(&sites));
+    if by_package {
+        print_audit_by_package(&sites, &packages);
+    } else {
+        print!("{}", kora_runtime::audit::render(&sites));
+    }
     ExitCode::SUCCESS
 }
 

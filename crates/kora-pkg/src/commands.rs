@@ -177,6 +177,60 @@ pub fn unlock(root: &Path, url: &str) -> Result<Option<String>, String> {
     Ok(previous)
 }
 
+/// Copy the packages a shipped program needs into `vendor/`.
+///
+/// Distinct from `.kora/deps`, which is a cache: `vendor/` is deliberate and
+/// committed, so a program is a directory that moves whole and builds with no
+/// network at all. Test-only packages are excluded, because they are not part
+/// of what ships.
+///
+/// Returns the packages copied, by name.
+pub fn vendor(entry: &Path, include_tests: bool) -> Result<Vec<String>, String> {
+    let root = Manifest::discover(entry).0;
+    let resolution = crate::resolve::resolve(entry);
+    let wanted = if include_tests {
+        resolution.needed()
+    } else {
+        resolution.shipped()
+    };
+
+    let dir = root.join("vendor");
+    // Rebuilt from scratch, so a package removed from the graph does not
+    // linger in a directory that is supposed to be the shipped set.
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
+
+    let mut copied = Vec::new();
+    for package in wanted {
+        let name = package.name.clone().unwrap_or_else(|| "?".to_string());
+        copy_tree(&package.root, &dir.join(&name))
+            .map_err(|e| format!("cannot vendor `{name}`: {e}"))?;
+        copied.push(name);
+    }
+    copied.sort();
+    Ok(copied)
+}
+
+fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let name = entry.file_name();
+        // `.git` is a history, and `.kora` is a cache. Neither is part of
+        // what a package *is*, and both would bloat what gets committed.
+        if matches!(name.to_string_lossy().as_ref(), ".git" | ".kora") {
+            continue;
+        }
+        let target = to.join(&name);
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
 /// Grants a package holds, for reporting alongside a diff.
 pub fn granted(root: &Path, entry: &Path, name: &str) -> Option<Grants> {
     let resolution = crate::resolve::resolve(entry);
