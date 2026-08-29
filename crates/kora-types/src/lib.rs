@@ -294,6 +294,18 @@ impl Checker<'_> {
                         ),
                     });
                 }
+                StmtKind::UsePkg { package, alias } => {
+                    self.define_symbol(Symbol {
+                        name: alias.clone(),
+                        kind: SymbolKind::Module,
+                        span: stmt.span,
+                        detail: format!("use pkg {package}"),
+                        doc: Some(
+                            "A package dependency, resolved against this package's `[dependencies]`."
+                                .to_string(),
+                        ),
+                    });
+                }
                 StmtKind::UseMcp { server, alias } => {
                     self.define_symbol(Symbol {
                         name: alias.clone(),
@@ -595,6 +607,12 @@ impl Checker<'_> {
             StmtKind::UsePython { alias, .. } => {
                 // Which functions a Python module has is a runtime question,
                 // so the checker records the alias and stops there.
+                self.declare(alias);
+            }
+            StmtKind::UsePkg { alias, .. } => {
+                // Whether the package resolves is the resolver's answer, not
+                // the checker's: the alias is recorded so names reached
+                // through it are not reported as unknown.
                 self.declare(alias);
             }
             StmtKind::UseMcp { alias, .. } => {

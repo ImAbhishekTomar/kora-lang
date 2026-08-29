@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 kora-syntax.workspace = true
 kora-runtime.workspace = true
+kora-pkg.workspace = true
 kora-lsp.workspace = true
 kora-dap.workspace = true
 kora-types.workspace = true

@@ -147,8 +147,8 @@
       }
     },
     "module-import": {
-      "comment": "use json as j / use python statistics as stats / use mcp github as gh",
-      "match": "\\b(use)\\s+(?:(python|mcp)\\s+)?([A-Za-z_][A-Za-z0-9_.]*)(?:\\s+(as)\\s+([A-Za-z_][A-Za-z0-9_]*))?",
+      "comment": "use json as j / use python statistics as stats / use mcp github as gh / use pkg receipts as r",
+      "match": "\\b(use)\\s+(?:(python|mcp|pkg)\\s+)?([A-Za-z_][A-Za-z0-9_.]*)(?:\\s+(as)\\s+([A-Za-z_][A-Za-z0-9_]*))?",
       "captures": {
         "1": {
           "name": "keyword.other.agent.kora"

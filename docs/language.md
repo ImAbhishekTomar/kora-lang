@@ -21,6 +21,7 @@ and the constructs Python has no equivalent for.
 - [Classified data](#classified-data)
 - [Durability](#durability)
 - [Modules](#modules)
+- [Packages](#packages)
 - [Tests](#tests)
 - [Built-in functions](#built-in-functions)
 - [Differences from Python](#differences-from-python)
@@ -479,6 +480,223 @@ Budgets, labels, and the journal do not stop at a file boundary. An imported
 agent spends from the same budget, `classified` still propagates, and
 `kora audit` lists declassification sites across every imported file.
 
+### Packages
+
+A package is a directory with a `kora.toml` and an entry file. Importers name
+it rather than pathing into it:
+
+```python
+use pkg receipts as r
+
+def main():
+    print(r.describe("coffee", 4.5))
+```
+
+Where it comes from lives in `kora.toml`:
+
+```toml
+[dependencies]
+receipts = { path = "./receipts" }
+```
+
+The package's own manifest names it and points at its entry, which defaults
+to `src/lib.ko`:
+
+```toml
+[package]
+name = "receipts"
+version = "0.1.0"
+entry = "src/lib.ko"
+```
+
+`as` is optional, unlike a file path: a package name is a Kora identifier and
+so has a natural binding. Names are lowercase, digits, and underscores.
+
+**A dependency is used when the source says so.** `[dependencies]` says where
+a package comes from; the `use pkg` statements decide whether it is needed at
+all. Declaring a hundred and importing four resolves four, and the pruning is
+transitive — a dependency's own unused entries are never resolved either.
+This is exact rather than a guess: a package name is always a literal token,
+and Kora has no dynamic import, so scanning the source cannot miss one.
+
+```bash
+kora tree program.ko     # the packages actually used
+kora check program.ko    # warns about anything declared and never imported
+```
+
+**Names resolve against the manifest that wrote them.** A `use pkg` inside a
+package is answered by that package's `[dependencies]`, never the importing
+program's. So a package may depend on something its consumer has never heard
+of, two packages may bind the same bare name to different sources, and a
+program cannot reach its dependencies' dependencies.
+
+**Types belong to their package.** Two dependencies may both declare
+`Config`, and they are different types:
+
+```python
+use pkg left as l
+use pkg right as r
+
+a = l.Config("left.example", 80)     # left's Config
+b = r.Config("right", 3)             # right's, with different fields
+```
+
+Types are still shared across the *files* of one package, exactly as before,
+so splitting a program across files is unchanged. What is new is that the
+sharing stops at the package boundary — otherwise two dependencies declaring
+the same type name would be an error the consumer could not fix, owning
+neither of them.
+
+A type from a package does not satisfy a same-named annotation here, and the
+error says which is which rather than `expected Config, got Config`:
+
+```
+error: expected `Config`, got `Config`
+   = hint: `Config` from package `left` is not `Config` in this program;
+           they are different types with the same name
+```
+
+**A fetched package is named by its repository, and pinned by its commit:**
+
+```toml
+[dependencies.receipts]
+git = "github.com/org/receipts"
+tag = "v0.3.1"
+grants = { net = true }
+```
+
+```bash
+kora add program.ko receipts github.com/org/receipts --tag v0.3.1
+kora install program.ko    # fetch what the source imports
+kora update program.ko receipts --tag v0.4.0
+kora vendor program.ko     # copy the shipped graph, for building offline
+```
+
+Identity is the full repository path, never a short name — there is no flat
+namespace to squat in, which is where dependency-confusion attacks begin.
+
+`kora.lock` records the reference you wrote, the commit it resolved to, and a
+hash of the tree's contents. It is generated, committed, and never
+hand-edited. **Once a repository is locked, its commit is what gets fetched —
+never the tag again.** A maintainer account taken over and a tag force-pushed
+to a backdoor changes nothing about what runs, including on a machine with a
+cold cache, which is where re-resolving the tag would otherwise land it.
+
+**`kora.sums` records what a commit has always meant.** A lockfile cannot
+help with the fetch that *creates* it — at that moment there is nothing to
+check against, so a backdoor published briefly and withdrawn leaves no trace
+in anybody's lockfile. The first time a commit is seen, its hash is recorded;
+every fetch afterwards is checked against the record instead of re-trusting
+the source.
+
+There are two logs and a fetch is checked against both. The project's
+`kora.sums` is committed, so it is reviewable in a diff and travels with the
+repository. A machine-level log under `~/.kora` is shared across every
+project on that computer, so a package fetched honestly in one project
+protects the next project that reaches for it — which the lockfile, being
+per-project, cannot do.
+
+Both are append-only. A disagreement is refused, never resolved:
+
+```
+error: commit 949d114a6492 does not have the contents it had when first seen
+   recorded sha256:a34b05...
+   fetched  sha256:7c1f92...
+   the identity was reused: a rewritten repository, or a release
+   republished as something else
+```
+
+This is not a hosted transparency log: two machines that have never fetched
+the same package cannot cross-check each other. It narrows the window from
+"every project, every time" to "the first time anyone on this machine, or in
+this repository, ever saw it".
+
+Hashes are checked on every `run`, `test`, and `check`, not only at install:
+a cached dependency edited on disk must not run just because the directory is
+there.
+
+Fetched sources live in `.kora/deps/<repository>@<commit>/`, keyed by commit
+so a moved tag gets its own directory instead of reusing bytes already there.
+The directory is tool-owned and reproducible from the lockfile; `kora.lock`
+is what belongs in version control.
+
+**A dependency has no ambient authority.** It reaches the network, the
+filesystem, a database, the environment, a Python worker, or an MCP server
+only where the importing program said so:
+
+```toml
+[dependencies.receipts]
+path = "./receipts"
+grants = { net = true, sinks = ["stripe"] }
+```
+
+Note the table form. TOML forbids extending an inline table, so
+`receipts = { path = "..." }` followed by `[dependencies.receipts.grants]` is
+not valid TOML.
+
+Ungranted, a call is refused where it is written:
+
+```
+error: package `reader` is not allowed to use `fs`: no `fs` capability
+   = hint: grant it in kora.toml: `[dependencies.reader]` with `grants = { fs = true }`
+```
+
+The capabilities are `net`, `fs`, `sql`, `env`, and `python`, plus `sinks`
+and `mcp` as lists of names and `declassify` as a flag. `json`, `csv`, `re`,
+and `time` need no grant: they compute over values the caller already holds.
+
+Three rules make this hold up:
+
+- **Confinement follows execution, not the call site.** A package cannot shed
+  it by spawning a `parallel for`, by being reached through a `tool` a model
+  called, or by handing the work to a dependency of its own.
+- **A parent may only pass on what it holds.** Granting `fs` to a dependency
+  you were never given `fs` yourself grants nothing. Compromising a leaf of
+  the graph therefore gains an attacker nothing that every link above it
+  lacked.
+- **`declassify` needs two grants**, the permission and the named sink, and
+  both are off by default. Adding a dependency must not become the way to
+  launder a secret out of a program.
+
+A package states what it needs, and a shortfall is reported before the run
+rather than at whichever call first needs it:
+
+```toml
+[package.requires]
+net = true
+sinks = ["stripe"]
+```
+
+```
+error: package `receipts` requires net, sink `stripe`, but was granted fs
+```
+
+The root program is unrestricted, bounded by its own `kora.toml` and nothing
+else. Capabilities are coarse today — `net = true`, not a list of hosts.
+
+**Test-only packages are derived, not declared.** A package reached only
+through `test` blocks is dev-only and stays out of a shipped program:
+
+```python
+use pkg receipts as r          # runtime
+
+test "it parses a row":
+    use pkg fixtures as f      # dev-only
+    assert f.fake_row() == "fake", "bad fixture"
+```
+
+There is no `[dev-dependencies]` table to put something in the wrong half of.
+A package reached by both a test path and a runtime path is a runtime
+dependency — one runtime path anywhere is enough. And a dependency's *own*
+`test` blocks are never roots for its consumer, since only the root program's
+tests run, so you do not inherit a package's test helpers.
+
+Budgets, labels, and the journal cross a package boundary exactly as they
+cross a file boundary. `kora audit` lists declassification sites inside
+dependencies too — a `declassify` in a package releases the importing
+program's data, so an audit blind to it would make adding a dependency the
+way to hide one.
+
 ### MCP servers
 
 ```python
@@ -586,7 +804,7 @@ suite costs nothing. Under `kora run`, `test` blocks are inert.
 | Dict keys are strings | no arbitrary hashable keys |
 | No classes | `type` blocks hold data; functions act on it |
 | No comprehensions yet | use a `for` loop |
-| Imports are paths, not package names | `use "./lib/tax.ko" as tax`; no package manager yet |
+| Local imports are paths; package imports are named | `use "./lib/tax.ko" as tax` or `use pkg receipts as r` |
 | No `export` keyword | every top-level name is public |
 | Methods are functions | `append(xs, v)`, not `xs.append(v)` |
 | Type annotations are checked | not hints |

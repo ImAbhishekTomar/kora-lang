@@ -1,0 +1,133 @@
+---
+title: Language
+description: The small set of Kora syntax you need first.
+---
+
+# Language
+
+Kora keeps the basics boring. That is a compliment.
+
+## Values and types
+
+Use familiar values, then define a shape when the data deserves a name.
+
+```kora
+name = "Ada"
+visits = 3
+is_ready = True
+tags = ["compiler", "coffee"]
+
+type Employee:
+    name: str
+    salary: int
+    team: str
+```
+
+## Functions
+
+```kora
+def average(xs: list) -> float:
+    return sum(xs) / len(xs)
+
+def main():
+    scores = [8, 9, 10]
+    print(average(scores))
+```
+
+## Loops and decisions
+
+```kora
+for score in scores:
+    if score >= 9:
+        print(f"great: {score}")
+    else:
+        print(f"keep going: {score}")
+```
+
+Lists, dictionaries, attributes, indexing, `while`, `break`, `continue`, and f-strings are all part of the same simple flow.
+
+## Handling outcomes
+
+Kora prefers an explicit branch over a surprise exception:
+
+```kora
+match result:
+    case Ok(value):
+        print(value)
+    case Uncertain(reason):
+        print(f"No clear answer: {reason}")
+```
+
+## The file and the entry point
+
+Kora files end in `.ko`. A program starts at `main()` when it is defined.
+
+## More than one file
+
+A quoted path imports another Kora file; a bare word is a stdlib module.
+
+```kora
+use "./lib/tax.ko" as tax
+use json
+
+def main():
+    print(tax.with_tax(100.0))
+```
+
+The path is resolved against the file that writes it, so a program is a
+directory you can move whole. Everything the imported file defines at its top
+level is reachable as `tax.name`, and that file keeps reading its own names
+rather than yours.
+
+## Packages
+
+A package is a directory with a `kora.toml` and an entry file. You name it
+rather than pathing into it:
+
+```kora
+use pkg receipts as r
+
+def main():
+    print(r.describe("coffee", 4.5))
+```
+
+Where it comes from, and what it may do, live in `kora.toml`:
+
+```toml
+[dependencies.receipts]
+git = "github.com/org/receipts"
+tag = "v0.3.1"
+grants = { net = true }
+```
+
+Three things make this different from package managers you have used.
+
+**What you declare is not what you download.** `[dependencies]` says where a
+package comes from; the `use pkg` statements in your source say whether it is
+needed at all. Declare a hundred and import four and four are fetched. A
+package name is always a literal token — Kora has no dynamic import — so this
+is exact rather than a guess, and a typo'd name never reaches your disk.
+
+**A dependency has no ambient authority.** It reaches the network, the
+filesystem, a database, or the environment only where you granted it, and it
+can never pass on more than it holds. Confinement follows execution, so a
+package cannot escape it by spawning work or by being called through a tool.
+
+**Test-only packages are derived, not declared.** There is no
+`[dev-dependencies]` table to put something in the wrong half of. A package
+reached only through `test` blocks stays out of what ships, and one reached by
+both a test path and a runtime path is a runtime dependency.
+
+Types belong to their package too, so two dependencies may each declare
+`Config` without one becoming the other.
+
+```bash
+kora add program.ko receipts github.com/org/receipts --tag v0.3.1
+kora install program.ko
+kora tree program.ko
+```
+
+`kora.lock` pins the commit each reference resolved to, and `kora.sums`
+records what that commit contained. Once a repository is locked its commit is
+what gets fetched, never the tag again — so a tag force-pushed to a backdoor
+changes nothing about what runs, including on a machine with a cold cache.

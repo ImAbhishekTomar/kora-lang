@@ -1,0 +1,14 @@
+[package]
+name = "kora-pkg"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Package manifests and dependency resolution for the Kora language"
+
+[dependencies]
+kora-syntax.workspace = true
+toml = { workspace = true }
+toml_edit = { workspace = true }
+sha2 = { workspace = true }

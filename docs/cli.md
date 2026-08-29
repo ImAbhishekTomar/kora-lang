@@ -64,17 +64,124 @@ kora test examples/07_tests.ko
 List every place classified data is released, and to which sink. The list is
 complete rather than best-effort, because every release goes through a
 `declassify` block the parser can see. Imported files are part of the
-program, so the audit covers every file the program imports.
+program, so the audit covers every file the program imports and every
+package it uses. A `declassify` inside a dependency releases the importing
+program's data; an audit that could not see it would make adding a dependency
+the way to hide one.
 
 ```bash
 kora audit examples/03_salary_review.ko
+kora audit --deps program.ko        # grouped by the package responsible
 ```
+
+`--deps` answers a different question: not "where does this program release
+data" but "whose code does the releasing". A dependency that declassifies is
+doing it with the importing program's data.
 
 ```
   examples/03_salary_review.ko:28  declassify pay for local_model
 
 1 declassification site
 ```
+
+### `kora install <file.ko>`
+
+Fetch the git dependencies the program actually uses. A dependency declared
+and never imported is not downloaded, so a typo'd name never reaches the disk
+at all.
+
+```bash
+kora install program.ko
+kora install --jobs 4 program.ko
+```
+
+Sources land in `.kora/deps/<repository>@<commit>/`, `kora.lock` records what
+was resolved, and `kora.sums` records what each commit contained the first
+time it was seen. Both files are committed; `.kora/` is not. Fetching is IO-bound, so the default width is not the core
+count; `[install] jobs` sets it.
+
+Cold resolution is wave-shaped — what a package depends on is unknowable
+until it is on disk — but once the lockfile exists the whole graph is known,
+so a warm install is one flat fan-out. Deep chains cost only on the first
+resolve, never in CI.
+
+### `kora add` / `kora remove` / `kora update`
+
+```bash
+kora add program.ko receipts github.com/org/receipts --tag v0.3.1
+kora add program.ko local ../local-package
+kora remove program.ko receipts
+kora update program.ko receipts --tag v0.4.0
+```
+
+Edits are format-preserving: comments and layout in `kora.toml` survive.
+Adding does not fetch — a dependency nothing imports is not downloaded just
+because it was named — and grants written by hand survive a re-add, so
+`kora add` cannot quietly widen what a dependency may do.
+
+`kora update` is the one command that deliberately moves past the lockfile,
+so it is where a new version's authority is examined. It refuses when the new
+version asks for capabilities the old one did not, or declassifies in more
+places, until `--accept-new-authority` says a person has looked:
+
+```
+  greet: v2.0.0 -> v3.0.0
+
+this version of `greet` does more than the one it replaces:
+  it now requires net
+  it now requires sink `telemetry`
+  it declassifies in 1 place, up from 0
+```
+
+The warning is advisory; the program still cannot run until the new authority
+is granted. Two independent gates — the update warns, the runtime enforces.
+
+### `kora vendor <file.ko>`
+
+Copy the packages a shipped program needs into `vendor/`, so the project
+builds with no network at all.
+
+```bash
+kora vendor program.ko
+kora vendor --include-tests program.ko
+```
+
+Distinct from `.kora/deps`, which is a cache: `vendor/` is deliberate and
+committed. Test-only packages are excluded by default, since they are not
+part of what ships. `.git` and `.kora` are never copied.
+
+### `kora tree <file.ko>`
+
+The packages the program actually uses. Kora derives the graph from the
+source, so this is what would be fetched and shipped, not what `kora.toml`
+declares.
+
+```bash
+kora tree examples/13_packages.ko
+```
+
+```
+examples/13_packages.ko
+  greet 0.1.0
+  fixtures 2.0.0  (dev — reached only through test blocks)
+  unused — declared by this program, never imported
+```
+
+A package reached only through `test` blocks is dev-only and stays out of a
+shipped program. Nothing declares that — there is no `[dev-dependencies]`
+table — and the line says which rule produced the classification.
+
+Each package's line is followed by the authority it holds:
+
+```
+  receipts 0.3.1
+      grants: net, sink:stripe
+```
+
+`kora check` reports the same unused entries as warnings, and errors on a
+`use pkg` naming something no manifest declares, on a package requiring
+authority nobody granted it, and on one package granted two different ways
+by two importers.
 
 ### Durable runs
 
@@ -157,6 +264,23 @@ endpoint = "http://localhost:11434"
 [sinks]                             # which labels may reach which sink
 local_model = { allow = ["classified"] }
 openai      = { allow = ["internal"], deny = ["classified"] }
+
+[package]                           # only when this project *is* a package
+name    = "receipts"
+version = "0.1.0"
+entry   = "src/lib.ko"              # the default
+
+[install]
+jobs = 16                           # parallel fetches; IO-bound, so not the
+                                    # core count. Default max(8, cores * 2)
+
+[dependencies.receipts]             # where a package comes from. Whether it
+path = "./receipts"                 # is used is decided by the source, so
+                                    # declaring one costs nothing until
+                                    # something writes `use pkg receipts`
+grants = { net = true, sinks = ["stripe"] }   # and what it may do. Absent
+                                    # means nothing: a dependency never
+                                    # given the network cannot reach it
 
 [http]
 allow_private = false               # loopback and private ranges refused

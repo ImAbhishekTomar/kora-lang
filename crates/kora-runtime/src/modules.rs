@@ -26,6 +26,9 @@ pub struct ModuleSpace {
     pub key: PathBuf,
     /// Directory imports inside this file resolve against.
     pub dir: PathBuf,
+    /// Which package this file belongs to. `use pkg` inside it resolves
+    /// against that package's `[dependencies]`, never a global table.
+    pub package: kora_pkg::PackageId,
     /// Top-level bindings. Empty while this module is the active one, because
     /// the interpreter holds the live namespace in `globals` and swaps it back
     /// when it leaves.
@@ -33,11 +36,12 @@ pub struct ModuleSpace {
 }
 
 impl ModuleSpace {
-    pub fn new(path: String, key: PathBuf, dir: PathBuf) -> Self {
+    pub fn new(path: String, key: PathBuf, dir: PathBuf, package: kora_pkg::PackageId) -> Self {
         ModuleSpace {
             path,
             key,
             dir,
+            package,
             names: HashMap::new(),
         }
     }

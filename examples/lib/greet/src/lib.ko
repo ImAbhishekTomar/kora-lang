@@ -1,0 +1,21 @@
+# A package: an ordinary directory with a kora.toml and an entry file.
+#
+# Every top-level name is exported, exactly as in a file module. What makes
+# this a package rather than a file is that importers name it, not its path —
+# and that what it may *do* is decided by whoever imports it.
+
+use fs
+
+GREETING = "hello"
+
+def greet(name: str) -> str:
+    return f"{GREETING}, {name}"
+
+# Reaching the filesystem needs an `fs` grant. Without one this call is
+# refused where it is written, not where it was imported.
+def greeting_count() -> int:
+    match fs.glob("examples/lib/greet/src/*.ko"):
+        case Ok(paths):
+            return len(paths)
+        case Err(why):
+            return 0

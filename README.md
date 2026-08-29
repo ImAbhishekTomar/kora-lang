@@ -36,6 +36,8 @@ def main():
   type or an explicit `Uncertain`. No raw-string parsing, no confidence theater.
 - **Record/replay + OpenTelemetry built into the runtime** — deterministic
   CI with zero tokens; every agent and call is a span.
+- **Source-derived packages** — only packages a program imports are fetched
+  or shipped, with a lockfile, checksums, and per-package capability grants.
 
 ## Install
 
@@ -132,9 +134,10 @@ not GitHub, and killing the process mid-`ask_human` loses nothing.
 | [Language reference](docs/language.md) | syntax, semantics, and how it differs from Python |
 | [Standard library](docs/stdlib.md) | the eight modules and the defect each one fixes |
 | [CLI reference](docs/cli.md) | commands, flags, `kora.toml`, editor setup |
+| [Decisions](DECISIONS.md) | why the language is the way it is, and what was traded away |
 | [DECISIONS.md](DECISIONS.md) | the frozen design and why each call was made |
 | [AGENTS.md](AGENTS.md) | contributing: what a language change has to touch |
-| [examples/](examples) | twelve runnable programs, in order |
+| [examples/](examples) | thirteen runnable programs, in order |
 
 ## Agents, tools, and budgets
 
@@ -486,8 +489,8 @@ Early development, pre-alpha, built for personal use first. Everything
 documented here works and is covered by tests; the test suite never touches
 the network.
 
-Not built yet: classes, list comprehensions, a package manager, documents
-(PDF) as values, and `try`/`except`. See
+Not built yet: classes, list comprehensions, documents (PDF) as values, and
+`try`/`except`. See
 [DECISIONS.md](DECISIONS.md) for what is planned and what is deliberately
 excluded.
 
@@ -507,6 +510,8 @@ editors/vscode        VS Code extension
 examples/             runnable .ko programs
 benches/              performance benchmarks and their baseline
 docs/                 language, stdlib, and CLI references
+site/                 the public documentation site
+scripts/              documentation checks, benchmarks, packaging
 ```
 
 ## Build
@@ -525,6 +530,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
 python3 scripts/check_docs.py     # the docs still describe the language
 kora check examples/*.ko
+```
+
+The documentation site lives in `site/` and is its own project:
+
+```bash
+cd site
+pnpm install
+pnpm dev
 ```
 
 ## Performance

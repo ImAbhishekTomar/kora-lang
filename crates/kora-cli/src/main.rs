@@ -3,7 +3,7 @@
 //! Phase 2: `kora run <file.ko>` with record/replay of model calls.
 //! `test`, `audit`, and `trace` arrive with their phases — see DECISIONS.md.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use kora_runtime::{Cassette, Config, Interpreter, Mode};
@@ -18,6 +18,19 @@ usage:
     --syntax                   parse only; skip name resolution
   kora test <file.ko>          run the `test` blocks in a file
   kora audit <file.ko>         list every declassification site
+    --deps                     group them by the package responsible
+  kora tree <file.ko>          show the packages the program actually uses
+  kora vendor <file.ko>        copy the shipped packages into vendor/
+    --include-tests            include packages only tests reach
+  kora install <file.ko>       fetch the dependencies the program uses
+    --jobs <n>                 how many fetches at once
+  kora add <file.ko> <name> <source>
+                               declare a dependency; source is a path or a
+                               repository, with --tag/--branch/--rev
+  kora remove <file.ko> <name> stop declaring a dependency
+  kora update <file.ko> <name> move a dependency past the lockfile
+    --tag/--branch/--rev       the revision to move to
+    --accept-new-authority     allow a version that asks for more
   kora runs <file.ko>          list durable runs and their status
   kora answer <file.ko> <id> <text>
                                answer a suspended run and resume it
@@ -107,8 +120,59 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         },
-        Some("audit") => match args.get(1) {
-            Some(path) => audit_file(path),
+        Some("add") => match (args.get(1), args.get(2), args.get(3)) {
+            (Some(path), Some(name), Some(source))
+                if !name.starts_with("--") && !source.starts_with("--") =>
+            {
+                add_dependency(path, name, source, &args)
+            }
+            _ => {
+                eprintln!("usage: kora add <file.ko> <name> <path|repository> [--tag <t>]");
+                ExitCode::from(2)
+            }
+        },
+        Some("remove") => match (args.get(1), args.get(2)) {
+            (Some(path), Some(name)) if !name.starts_with("--") => remove_dependency(path, name),
+            _ => {
+                eprintln!("usage: kora remove <file.ko> <name>");
+                ExitCode::from(2)
+            }
+        },
+        Some("update") => match (args.get(1), args.get(2)) {
+            (Some(path), Some(name)) if !name.starts_with("--") => {
+                update_dependency(path, name, &args)
+            }
+            _ => {
+                eprintln!("usage: kora update <file.ko> <name> [--tag <t>]");
+                ExitCode::from(2)
+            }
+        },
+        Some("install") => {
+            let jobs = flag_value(&args, "--jobs").and_then(|v| v.parse().ok());
+            match args[1..].iter().find(|a| !a.starts_with("--")) {
+                Some(path) => install_packages(path, jobs),
+                None => {
+                    eprintln!("usage: kora install [--jobs <n>] <file.ko>");
+                    ExitCode::from(2)
+                }
+            }
+        }
+        Some("vendor") => match args[1..].iter().find(|a| !a.starts_with("--")) {
+            Some(path) => vendor_packages(path, args.iter().any(|a| a == "--include-tests")),
+            None => {
+                eprintln!("usage: kora vendor [--include-tests] <file.ko>");
+                ExitCode::from(2)
+            }
+        },
+        Some("tree") => match args.get(1) {
+            Some(path) => package_tree(path),
+            None => {
+                eprintln!("usage: kora tree <file.ko>");
+                ExitCode::from(2)
+            }
+        },
+        Some("audit") => match args[1..].iter().find(|a| !a.starts_with("--")) {
+            Some(path) => audit_file(path, args.iter().any(|a| a == "--deps")),
             None => {
                 eprintln!("usage: kora audit <file.ko>");
                 ExitCode::from(2)
@@ -174,9 +238,522 @@ fn run_args(args: &[String]) -> ExitCode {
 ///
 /// The same analysis the editor shows, as a command: useful in CI, and the
 /// only way to check a file that needs resources this machine does not have.
+/// The value after a `--flag`, when one was given.
+fn flag_value(args: &[String], flag: &str) -> Option<String> {
+    let index = args.iter().position(|a| a == flag)?;
+    args.get(index + 1)
+        .filter(|v| !v.starts_with("--"))
+        .cloned()
+}
+
+/// The revision named by `--tag`, `--branch`, or `--rev`.
+fn revision_from(args: &[String]) -> Option<kora_pkg::GitRef> {
+    if let Some(t) = flag_value(args, "--tag") {
+        return Some(kora_pkg::GitRef::Tag(t));
+    }
+    if let Some(b) = flag_value(args, "--branch") {
+        return Some(kora_pkg::GitRef::Branch(b));
+    }
+    flag_value(args, "--rev").map(kora_pkg::GitRef::Commit)
+}
+
+/// The directory holding the manifest that governs a program.
+fn project_root(program: &Path) -> PathBuf {
+    kora_pkg::Manifest::discover(program).0
+}
+
+/// `kora add` — declare a dependency. It is not fetched here: `kora install`
+/// fetches what the source imports, and a dependency nothing imports should
+/// not be downloaded just because it was named.
+fn add_dependency(path: &str, name: &str, source: &str, args: &[String]) -> ExitCode {
+    let program = Path::new(path);
+    if !program.is_file() {
+        eprintln!("error: cannot read `{path}`");
+        return ExitCode::from(1);
+    }
+    let root = project_root(program);
+
+    let looks_local = source.starts_with('.') || source.starts_with('/');
+    let spec = if looks_local && revision_from(args).is_none() {
+        kora_pkg::DepSpec::Path {
+            path: PathBuf::from(source),
+        }
+    } else {
+        kora_pkg::DepSpec::Git {
+            url: source.to_string(),
+            reference: revision_from(args).unwrap_or(kora_pkg::GitRef::Default),
+        }
+    };
+
+    match kora_pkg::add(&root, name, &spec) {
+        Err(why) => {
+            eprintln!("error: {why}");
+            ExitCode::from(1)
+        }
+        Ok(change) => {
+            match change {
+                kora_pkg::Change::Added => println!("  added     {name}"),
+                kora_pkg::Change::Unchanged => println!("  unchanged {name}"),
+                kora_pkg::Change::Replaced { previous } => {
+                    println!("  repointed {name} (was {previous})")
+                }
+                _ => {}
+            }
+            println!("  it is not fetched until something writes `use pkg {name}`");
+            println!("  then: kora install {path}");
+            ExitCode::SUCCESS
+        }
+    }
+}
+
+/// `kora remove` — stop declaring a dependency.
+fn remove_dependency(path: &str, name: &str) -> ExitCode {
+    let program = Path::new(path);
+    if !program.is_file() {
+        eprintln!("error: cannot read `{path}`");
+        return ExitCode::from(1);
+    }
+    match kora_pkg::remove(&project_root(program), name) {
+        Err(why) => {
+            eprintln!("error: {why}");
+            ExitCode::from(1)
+        }
+        Ok(kora_pkg::Change::Absent) => {
+            eprintln!("error: `{name}` is not declared in kora.toml");
+            ExitCode::from(1)
+        }
+        Ok(_) => {
+            println!("  removed  {name}");
+            ExitCode::SUCCESS
+        }
+    }
+}
+
+/// `kora update` — move a dependency past the lockfile.
+///
+/// The only sanctioned way past the lock, and so the one place a new
+/// version's *authority* has to be looked at. A dependency that quietly
+/// starts reaching the network, or starts declassifying, is how a package
+/// people already trust turns into a problem; a bump reporting only a version
+/// number gives nobody the chance to notice.
+fn update_dependency(path: &str, name: &str, args: &[String]) -> ExitCode {
+    let program = Path::new(path);
+    if !program.is_file() {
+        eprintln!("error: cannot read `{path}`");
+        return ExitCode::from(1);
+    }
+    let root = project_root(program);
+
+    let before = kora_pkg::resolve(program);
+    let Some(package) = before
+        .packages
+        .iter()
+        .find(|p| p.name.as_deref() == Some(name))
+    else {
+        eprintln!("error: `{name}` is not a package this program uses");
+        return ExitCode::from(1);
+    };
+    let Some(url) = package.git.clone() else {
+        eprintln!("error: `{name}` is a path dependency; there is nothing to update");
+        eprintln!("   = hint: edit its `path` in kora.toml");
+        return ExitCode::from(1);
+    };
+
+    // The old checkout has to be read before the new one replaces it.
+    let old_checkout = kora_pkg::checkout_of(&root, &url);
+    let old_reference = kora_pkg::Lock::at(&root)
+        .ok()
+        .and_then(|lock| lock.get(&url).map(|l| l.reference.clone()))
+        .unwrap_or_else(|| "unknown".to_string());
+    let staging = old_checkout.as_ref().map(|from| {
+        let to = root.join(".kora").join("previous").join(name);
+        let _ = std::fs::remove_dir_all(&to);
+        let _ = copy_tree(from, &to);
+        to
+    });
+
+    if let Some(reference) = revision_from(args) {
+        match kora_pkg::set_revision(&root, name, &reference) {
+            Ok(true) => {}
+            Ok(false) => {
+                eprintln!("error: `{name}` is not declared in kora.toml");
+                return ExitCode::from(1);
+            }
+            Err(why) => {
+                eprintln!("error: {why}");
+                return ExitCode::from(1);
+            }
+        }
+    }
+
+    if let Err(why) = kora_pkg::unlock(&root, &url) {
+        eprintln!("error: {why}");
+        return ExitCode::from(1);
+    }
+
+    let config = Config::discover(program);
+    let outcome = kora_pkg::install(program, config.install_jobs, true);
+    for (failed_url, why) in &outcome.failed {
+        eprintln!("error: cannot fetch {failed_url}");
+        for line in why.lines().take(4) {
+            eprintln!("   {}", line.trim());
+        }
+        eprintln!();
+    }
+    if !outcome.failed.is_empty() {
+        return ExitCode::from(1);
+    }
+
+    let new_reference = kora_pkg::Lock::at(&root)
+        .ok()
+        .and_then(|lock| lock.get(&url).map(|l| l.reference.clone()))
+        .unwrap_or_else(|| "unknown".to_string());
+    println!("  {name}: {old_reference} -> {new_reference}");
+
+    // Nothing to compare against on a first fetch, and nothing to warn about.
+    let (Some(previous), Some(current)) = (staging, kora_pkg::checkout_of(&root, &url)) else {
+        return ExitCode::SUCCESS;
+    };
+    let diff = kora_pkg::compare(name, &previous, &current, &old_reference, &new_reference);
+    let _ = std::fs::remove_dir_all(&previous);
+
+    if !diff.needs_a_look() {
+        return ExitCode::SUCCESS;
+    }
+
+    eprintln!();
+    eprintln!("this version of `{name}` does more than the one it replaces:");
+    for requirement in &diff.new_requirements {
+        eprintln!("  it now requires {requirement}");
+    }
+    if diff.declassify_after > diff.declassify_before {
+        eprintln!(
+            "  it declassifies in {} place{}, up from {}",
+            diff.declassify_after,
+            if diff.declassify_after == 1 { "" } else { "s" },
+            diff.declassify_before
+        );
+    }
+    eprintln!();
+    if args.iter().any(|a| a == "--accept-new-authority") {
+        eprintln!("accepted. review it with `kora audit {path}`");
+        return ExitCode::SUCCESS;
+    }
+    eprintln!("kora.toml and kora.lock have been updated, but review this before shipping it.");
+    eprintln!("   = hint: `kora audit {path}` lists every declassification site");
+    eprintln!("   = hint: re-run with --accept-new-authority once you have looked");
+    ExitCode::from(1)
+}
+
+/// Copy a directory tree, for keeping a package's old contents to diff
+/// against after the new ones are in place.
+fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(to)?;
+    for entry in std::fs::read_dir(from)? {
+        let entry = entry?;
+        let target = to.join(entry.file_name());
+        if entry.file_type()?.is_dir() {
+            copy_tree(&entry.path(), &target)?;
+        } else {
+            std::fs::copy(entry.path(), target)?;
+        }
+    }
+    Ok(())
+}
+
+/// `kora install` — fetch the dependencies the program actually uses.
+///
+/// Only what the source imports is fetched: a dependency declared and never
+/// imported is not downloaded, so a typo'd name never reaches the disk.
+fn install_packages(path: &str, jobs: Option<usize>) -> ExitCode {
+    let program_path = Path::new(path);
+    if !program_path.is_file() {
+        eprintln!("error: cannot read `{path}`");
+        return ExitCode::from(1);
+    }
+    let config = Config::discover(program_path);
+    let jobs = jobs.unwrap_or(config.install_jobs);
+
+    let outcome = kora_pkg::install(program_path, jobs, true);
+    for url in &outcome.fetched {
+        println!("  fetched  {url}");
+    }
+    for (url, why) in &outcome.failed {
+        eprintln!("error: cannot fetch {url}");
+        for line in why.lines().take(4) {
+            eprintln!("   {}", line.trim());
+        }
+        eprintln!();
+    }
+    if outcome.lock_changed {
+        println!("  updated  {}", kora_pkg::Lock::FILE);
+    }
+    if outcome.newly_recorded > 0 {
+        println!(
+            "  recorded {} commit{} in {}",
+            outcome.newly_recorded,
+            if outcome.newly_recorded == 1 { "" } else { "s" },
+            kora_pkg::SumLog::FILE
+        );
+    }
+
+    let used = outcome.resolution.needed().len();
+    if outcome.failed.is_empty() {
+        println!("{used} package{} in use", if used == 1 { "" } else { "s" });
+    }
+
+    let problems = report_package_problems(&outcome.resolution);
+    if outcome.failed.is_empty() && !problems {
+        ExitCode::SUCCESS
+    } else {
+        ExitCode::from(1)
+    }
+}
+
+/// Group declassification sites by the package responsible for them.
+///
+/// The question `--deps` answers is not "where does this program release
+/// data" but "whose code does the releasing". A dependency that declassifies
+/// is doing it with the importing program's data, and that is worth seeing
+/// separately from what the program does itself.
+fn print_audit_by_package(
+    sites: &[kora_runtime::label::DeclassifySite],
+    packages: &kora_pkg::Resolution,
+) {
+    // Longest root first, so a package nested inside another's directory is
+    // attributed to the innermost one that contains it.
+    let mut roots: Vec<(&Path, String)> = packages
+        .needed()
+        .iter()
+        .map(|p| {
+            (
+                p.root.as_path(),
+                p.name.clone().unwrap_or_else(|| "?".to_string()),
+            )
+        })
+        .collect();
+    roots.sort_by_key(|(root, _)| std::cmp::Reverse(root.as_os_str().len()));
+
+    let mut grouped: std::collections::BTreeMap<String, Vec<&kora_runtime::label::DeclassifySite>> =
+        std::collections::BTreeMap::new();
+    for site in sites {
+        let path = Path::new(&site.file).canonicalize().ok();
+        let owner = path
+            .as_ref()
+            .and_then(|p| roots.iter().find(|(root, _)| p.starts_with(root)))
+            .map(|(_, name)| format!("package `{name}`"))
+            .unwrap_or_else(|| "this program".to_string());
+        grouped.entry(owner).or_default().push(site);
+    }
+
+    if grouped.is_empty() {
+        println!("no declassification sites: no classified data reaches any sink");
+        return;
+    }
+    for (owner, sites) in &grouped {
+        println!("{owner}");
+        for site in sites {
+            println!(
+                "  {}:{}  declassify {} for {}",
+                site.file, site.line, site.expression, site.sink
+            );
+        }
+        println!();
+    }
+    let total: usize = grouped.values().map(Vec::len).sum();
+    println!(
+        "{total} declassification site{} across {} source{}",
+        if total == 1 { "" } else { "s" },
+        grouped.len(),
+        if grouped.len() == 1 { "" } else { "s" }
+    );
+}
+
+/// `kora vendor` — copy the shipped graph into `vendor/`.
+fn vendor_packages(path: &str, include_tests: bool) -> ExitCode {
+    let program = Path::new(path);
+    if !program.is_file() {
+        eprintln!("error: cannot read `{path}`");
+        return ExitCode::from(1);
+    }
+    let resolution = kora_pkg::resolve(program);
+    if report_package_problems(&resolution) {
+        eprintln!("nothing was vendored: the graph is incomplete");
+        return ExitCode::from(1);
+    }
+    match kora_pkg::vendor(program, include_tests) {
+        Err(why) => {
+            eprintln!("error: {why}");
+            ExitCode::from(1)
+        }
+        Ok(copied) => {
+            for name in &copied {
+                println!("  vendored  {name}");
+            }
+            println!(
+                "{} package{} in vendor/",
+                copied.len(),
+                if copied.len() == 1 { "" } else { "s" }
+            );
+            ExitCode::SUCCESS
+        }
+    }
+}
+
+/// `kora tree` — the packages a program actually uses, and why.
+///
+/// The graph is derived from the source, so this is the list that would be
+/// fetched and shipped, not the list `kora.toml` declares. A package marked
+/// `(dev)` is reached only through `test` blocks and stays out of a shipped
+/// program. Nobody declares that: it is derived, and the line says which rule
+/// produced it, because a classification nobody can explain is the part of
+/// this that frustrates people elsewhere.
+fn package_tree(path: &str) -> ExitCode {
+    let program_path = Path::new(path);
+    if !program_path.is_file() {
+        eprintln!("error: cannot read `{path}`");
+        return ExitCode::from(1);
+    }
+    let resolution = kora_pkg::resolve(program_path);
+
+    println!("{path}");
+    let needed = resolution.needed();
+    if needed.is_empty() {
+        println!("  (no packages used)");
+    }
+    for package in &needed {
+        let name = package.name.as_deref().unwrap_or("?");
+        let version = package
+            .manifest
+            .version
+            .as_deref()
+            .map(|v| format!(" {v}"))
+            .unwrap_or_default();
+        let dev = if resolution.dev_only.contains(&package.id) {
+            "  (dev — reached only through test blocks)"
+        } else {
+            ""
+        };
+        println!("  {name}{version}{dev}");
+        println!("      grants: {}", package.grants.describe());
+    }
+
+    for unused in &resolution.unused {
+        let who = resolution.packages[unused.declared_by.0]
+            .name
+            .as_deref()
+            .unwrap_or("this program");
+        println!("  {} — declared by {who}, never imported", unused.name);
+    }
+
+    for (file, why) in &resolution.unreadable {
+        eprintln!("warning: skipped {}: {why}", file.display());
+    }
+
+    let mut failed = false;
+    for missing in &resolution.missing {
+        eprintln!(
+            "error: no package named `{}` ({}:{})",
+            missing.name,
+            missing.file.display(),
+            missing.span.line
+        );
+        failed = true;
+    }
+    failed |= report_package_problems(&resolution);
+
+    if failed {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    }
+}
+
+/// Report anything wrong with the authority in the graph.
+///
+/// A shortfall means a package asked for something nobody gave it, which is
+/// better said before the run than at whichever call first needs it. A
+/// conflict means one package was granted two different ways: taking the
+/// union would let a permissive importer widen what a careful one withheld,
+/// and taking the intersection would break the permissive one's working code.
+fn report_package_problems(resolution: &kora_pkg::Resolution) -> bool {
+    let mut failed = false;
+
+    for unfetched in &resolution.unfetched {
+        eprintln!(
+            "error: package `{}` ({} at {}) is not fetched",
+            unfetched.name, unfetched.url, unfetched.reference
+        );
+        eprintln!("   = hint: run `kora install <file.ko>`");
+        eprintln!();
+        failed = true;
+    }
+
+    for (url, expected, actual) in &resolution.tampered {
+        // The lockfile is what the bytes were when they were fetched and
+        // verified. Different bytes under the same name is the shape of a
+        // moved tag, a rewritten repository, or an edited cache.
+        eprintln!("error: {url} does not match the lockfile");
+        eprintln!("   expected {expected}");
+        eprintln!("   found    {actual}");
+        eprintln!("   = hint: re-fetch with `kora install`, or restore the checkout");
+        eprintln!();
+        failed = true;
+    }
+
+    for (path, why) in &resolution.unverifiable {
+        // Silently treating this as an empty manifest would read as "this
+        // package has no dependencies and asked for nothing".
+        eprintln!("error: cannot read {}: {why}", path.display());
+        failed = true;
+    }
+
+    for shortfall in &resolution.shortfalls {
+        eprintln!(
+            "error: package `{}` requires {}, but was granted {}",
+            shortfall.package,
+            shortfall.missing.join(", "),
+            shortfall.granted
+        );
+        eprintln!(
+            "   = hint: grant it in kora.toml under `[dependencies.{}]`",
+            shortfall.package
+        );
+        eprintln!();
+        failed = true;
+    }
+
+    for conflict in &resolution.ref_conflicts {
+        eprintln!(
+            "error: {} is required at two revisions: {} and {}",
+            conflict.url, conflict.first, conflict.second
+        );
+        eprintln!("   = hint: a repository has one entry in the lockfile; pin one revision");
+        eprintln!();
+        failed = true;
+    }
+
+    for conflict in &resolution.grant_conflicts {
+        eprintln!(
+            "error: package `{}` is granted two different ways: {} and {}",
+            conflict.package, conflict.first, conflict.second
+        );
+        eprintln!("   = hint: grant it the same way everywhere that depends on it");
+        eprintln!();
+        failed = true;
+    }
+
+    failed
+}
+
 fn check_files(paths: &[String], syntax_only: bool) -> ExitCode {
     let mut problems = 0;
     let mut checked = 0;
+    // Manifest directory -> (package name, dependencies not yet seen used).
+    let mut dependency_use: std::collections::BTreeMap<
+        std::path::PathBuf,
+        (Option<String>, std::collections::BTreeSet<String>),
+    > = std::collections::BTreeMap::new();
 
     for path in paths {
         let Ok(source) = std::fs::read_to_string(path) else {
@@ -210,7 +787,59 @@ fn check_files(paths: &[String], syntax_only: bool) -> ExitCode {
                     eprintln!();
                     problems += 1;
                 }
+                // Whether a dependency is used is a question about the whole
+                // program, not about one file: checking fifteen files of a
+                // project must not accuse it of never importing what a
+                // sixteenth imports. Findings accumulate per manifest and are
+                // reported once, after every file is in.
+                let resolution = kora_pkg::resolve(Path::new(path));
+                for package in &resolution.packages {
+                    let entry = dependency_use
+                        .entry(package.root.clone())
+                        .or_insert_with(|| {
+                            (
+                                package.name.clone(),
+                                package.manifest.deps.keys().cloned().collect(),
+                            )
+                        });
+                    for declared in package.manifest.deps.keys() {
+                        let still_unused = resolution
+                            .unused
+                            .iter()
+                            .any(|u| u.declared_by == package.id && &u.name == declared);
+                        if !still_unused {
+                            entry.1.remove(declared);
+                        }
+                    }
+                }
+                if report_package_problems(&resolution) {
+                    problems += 1;
+                }
+                for missing in &resolution.missing {
+                    eprintln!("error: no package named `{}`", missing.name);
+                    eprintln!(
+                        "  --> {}:{}:{}",
+                        missing.file.display(),
+                        missing.span.line,
+                        missing.span.col
+                    );
+                    eprintln!("   = hint: declare it under `[dependencies]` in kora.toml");
+                    eprintln!();
+                    problems += 1;
+                }
             }
+        }
+    }
+
+    // A dependency the source never names is not fetched and not shipped.
+    // Reporting it keeps kora.toml honest, as a warning rather than an error
+    // because a dependency added a minute ago has not been imported yet.
+    for (name, unused) in dependency_use.values() {
+        let who = name.as_deref().unwrap_or("this program");
+        for dep in unused {
+            eprintln!("warning: `{dep}` is declared by {who} but never imported");
+            eprintln!("   = hint: remove it from kora.toml, or write `use pkg {dep}`");
+            eprintln!();
         }
     }
 
@@ -253,11 +882,17 @@ fn test_file(path: &str) -> ExitCode {
 
     let program_path = Path::new(path);
     let config = Config::discover(program_path);
+    let resolution = kora_pkg::resolve(program_path);
+    if report_package_problems(&resolution) {
+        return ExitCode::from(1);
+    }
+    let packages = std::sync::Arc::new(resolution);
 
     // Collect the tests by running the file's top level once.
     let mut collector = Interpreter::new();
     collector.collecting_tests = true;
     collector.program_name = path.to_string();
+    collector.packages = packages.clone();
     collector.config = config.clone();
     collector.sinks = config.sinks.clone();
     if let Err(e) = collector.run_top_level(&program) {
@@ -277,6 +912,7 @@ fn test_file(path: &str) -> ExitCode {
     for (name, body) in &tests {
         let mut interp = Interpreter::new();
         interp.program_name = path.to_string();
+        interp.packages = packages.clone();
         interp.config = config.clone();
         interp.sinks = config.sinks.clone();
         interp.allow_private_hosts = config.http_allow_private;
@@ -318,7 +954,7 @@ fn test_file(path: &str) -> ExitCode {
 ///
 /// Complete because every release goes through a `declassify` block, so the
 /// parser can enumerate them all. No Python framework can promise this list.
-fn audit_file(path: &str) -> ExitCode {
+fn audit_file(path: &str, by_package: bool) -> ExitCode {
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
@@ -336,8 +972,21 @@ fn audit_file(path: &str) -> ExitCode {
     // Every file the program imports is part of the program, so the audit
     // covers them too: an inventory that stopped at the entry file would not
     // be the complete list it claims to be.
-    let sites = kora_runtime::audit::audit_program(&program, path);
-    print!("{}", kora_runtime::audit::render(&sites));
+    let packages = kora_pkg::resolve(Path::new(path));
+    // And an audit over a graph with holes in it is worse than no audit.
+    // "No declassification sites" is a claim about code that was read; a
+    // dependency that was never fetched has not been read, so the command
+    // has to refuse rather than report a clean bill for it.
+    if report_package_problems(&packages) {
+        eprintln!("the audit was not run: it would not be the complete list it promises");
+        return ExitCode::from(1);
+    }
+    let sites = kora_runtime::audit::audit_program(&program, path, &packages);
+    if by_package {
+        print_audit_by_package(&sites, &packages);
+    } else {
+        print!("{}", kora_runtime::audit::render(&sites));
+    }
     ExitCode::SUCCESS
 }
 
@@ -511,6 +1160,14 @@ fn run_file(
     let mut interp = Interpreter::new();
     interp.direct_stdout = true;
     interp.program_name = path.to_string();
+    // Verified before anything runs: an unfetched or tampered dependency
+    // must stop the program, not surface at whichever import reaches it
+    // first — by then the top level of other packages has already run.
+    let packages = kora_pkg::resolve(program_path);
+    if report_package_problems(&packages) {
+        return ExitCode::from(1);
+    }
+    interp.packages = std::sync::Arc::new(packages);
     interp.config = Config::discover(program_path);
     interp.sinks = interp.config.sinks.clone();
     interp.allow_private_hosts = interp.config.http_allow_private;

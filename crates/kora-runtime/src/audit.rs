@@ -20,13 +20,20 @@ pub fn audit(program: &Program, file: &str) -> Vec<DeclassifySite> {
     sites
 }
 
-/// Audit a program and every file it imports.
+/// Audit a program, every file it imports, and every package it uses.
 ///
 /// Imports are part of the program, so an inventory that stopped at the entry
-/// file would not be the complete list this command promises. Files that
-/// cannot be read or parsed are skipped rather than failing the audit: the
-/// sites that *are* visible are still worth reporting.
-pub fn audit_program(program: &Program, file: &str) -> Vec<DeclassifySite> {
+/// file would not be the complete list this command promises. A dependency is
+/// part of it too: a `declassify` inside a package a program pulled in
+/// releases that program's data, and an audit that could not see it would
+/// make adding a dependency the way to hide one. Files that cannot be read or
+/// parsed are skipped rather than failing the audit: the sites that *are*
+/// visible are still worth reporting.
+pub fn audit_program(
+    program: &Program,
+    file: &str,
+    packages: &kora_pkg::Resolution,
+) -> Vec<DeclassifySite> {
     let mut sites = Vec::new();
     let mut seen = HashSet::new();
     let base = Path::new(file)
@@ -40,23 +47,43 @@ pub fn audit_program(program: &Program, file: &str) -> Vec<DeclassifySite> {
             .unwrap_or_else(|_| PathBuf::from(file)),
     );
     walk_stmts(&program.items, file, &mut sites);
-    walk_imports(&program.items, &base, &mut seen, &mut sites);
+    walk_imports(
+        &program.items,
+        &base,
+        kora_pkg::ROOT,
+        packages,
+        &mut seen,
+        &mut sites,
+    );
     sites.sort_by(|a, b| (&a.file, a.line).cmp(&(&b.file, b.line)));
     sites
 }
 
-/// Follow `use "..."` statements, depth first, loading each file once.
+/// Follow `use "..."` and `use pkg` statements, depth first, once per file.
+///
+/// `package` is the package the statements were written in: a `use pkg` name
+/// resolves against that package's own `[dependencies]`, exactly as it does
+/// at run time.
 fn walk_imports(
     stmts: &[Stmt],
     base: &Path,
+    package: kora_pkg::PackageId,
+    packages: &kora_pkg::Resolution,
     seen: &mut HashSet<PathBuf>,
     out: &mut Vec<DeclassifySite>,
 ) {
     for stmt in stmts {
-        let StmtKind::UseFile { path, .. } = &stmt.kind else {
-            continue;
+        let (candidate, next_package) = match &stmt.kind {
+            StmtKind::UseFile { path, .. } => {
+                (crate::modules::normalize(&base.join(path)), package)
+            }
+            StmtKind::UsePkg { package: name, .. } => match packages.dep_of(package, name) {
+                Some(target) => (target.entry.clone(), target.id),
+                None => continue,
+            },
+            _ => continue,
         };
-        let candidate = crate::modules::normalize(&base.join(path));
+
         let key = candidate
             .canonicalize()
             .unwrap_or_else(|_| candidate.clone());
@@ -75,7 +102,7 @@ fn walk_imports(
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
-        walk_imports(&program.items, &dir, seen, out);
+        walk_imports(&program.items, &dir, next_package, packages, seen, out);
     }
 }
 
@@ -134,6 +161,7 @@ fn walk_stmt(stmt: &Stmt, file: &str, out: &mut Vec<DeclassifySite>) {
         | StmtKind::Continue
         | StmtKind::Use { .. }
         | StmtKind::UseFile { .. }
+        | StmtKind::UsePkg { .. }
         | StmtKind::UseMcp { .. }
         | StmtKind::UsePython { .. }
         | StmtKind::Assert { .. }

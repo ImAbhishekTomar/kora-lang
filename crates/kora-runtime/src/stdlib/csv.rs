@@ -58,7 +58,10 @@ fn parse(interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Value
         Some(fields) => fields,
         None => {
             return Err(RuntimeError::new(
-                format!("`{type_name}` is not a declared type"),
+                format!(
+                    "`{}` is not a declared type",
+                    crate::value::short_type_name(&type_name)
+                ),
                 span,
             ))
         }

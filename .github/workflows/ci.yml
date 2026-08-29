@@ -106,12 +106,13 @@ jobs:
       - name: Build
         run: cargo build --locked
       - name: Check every example
-        run: ./target/debug/kora check examples/*.ko examples/lib/*.ko
+        run: ./target/debug/kora check examples/*.ko examples/lib/*.ko examples/lib/greet/src/*.ko
       - name: Run the Kora test suite
         run: |
           set -euo pipefail
           ./target/debug/kora test examples/07_tests.ko
           ./target/debug/kora test examples/10_modules.ko
+          ./target/debug/kora test examples/13_packages.ko
 
   # Every example that does not need a live model or the network. These are
   # cassette-backed, so they are deterministic and free -- and they catch the
@@ -132,6 +133,12 @@ jobs:
           ./target/debug/kora run examples/00_basics.ko
           ./target/debug/kora run examples/05_stdlib.ko
           ./target/debug/kora run examples/10_modules.ko
+          ./target/debug/kora run examples/13_packages.ko
+          ./target/debug/kora tree examples/13_packages.ko
+          ./target/debug/kora install examples/13_packages.ko
+          ./target/debug/kora audit --deps examples/13_packages.ko
+          ./target/debug/kora vendor examples/13_packages.ko
+          rm -rf vendor
       - name: Cassette-backed examples replay without a model
         run: |
           set -euo pipefail
@@ -202,8 +209,19 @@ jobs:
         run: cargo build --locked
       - name: Check the documentation
         run: python3 scripts/check_docs.py
+      # The site pages are included here too: `check_docs.py` verifies their
+      # routes and their Kora, but only lychee checks that the links leaving
+      # the site still resolve. `--root-dir` is what lets lychee understand a
+      # root-relative link like `/reference` as the page it serves. Images
+      # under `/marketing/` live in `site/public`, not `site/app`, so they are
+      # excluded here and checked by `check_docs.py` instead.
       - name: Check external links
         uses: lycheeverse/lychee-action@v2
         with:
-          args: --no-progress --max-concurrency 4 README.md DECISIONS.md docs/ examples/README.md
+          args: >-
+            --no-progress --max-concurrency 4
+            --root-dir ${{ github.workspace }}/site/app
+            --exclude '/marketing/'
+            README.md DECISIONS.md AGENTS.md docs/ examples/README.md
+            'site/app/**/*.mdx'
           fail: true

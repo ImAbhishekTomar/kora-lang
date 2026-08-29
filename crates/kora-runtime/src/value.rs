@@ -15,6 +15,27 @@ use crate::label::Label;
 use crate::media::Image;
 use crate::modules::ModuleId;
 
+/// Separator between a type's package qualifier and its own name.
+///
+/// A type declared inside a package is stored as `#<id>::Name`, so two
+/// packages may both declare `Config` without one silently becoming the
+/// other. `#` cannot start a Kora identifier, so a qualified name can never
+/// collide with one somebody wrote. Types of the root program carry no
+/// qualifier at all, which keeps every existing program byte-identical.
+pub const TYPE_QUALIFIER: &str = "::";
+
+/// The name as it was written, with any package qualifier removed.
+///
+/// Qualifiers are an identity mechanism, not something to read: an error
+/// saying `expected #3::Receipt` would name a number the source never
+/// mentions.
+pub fn short_type_name(qualified: &str) -> &str {
+    match qualified.rsplit_once(TYPE_QUALIFIER) {
+        Some((_, name)) => name,
+        None => qualified,
+    }
+}
+
 #[derive(Debug, Clone)]
 pub enum Value {
     Int(i64),
@@ -101,13 +122,13 @@ impl Value {
             Value::List(_) => "list".into(),
             Value::Dict(_) => "dict".into(),
             Value::Func { def, .. } => format!("function {}", def.name),
-            Value::Object { type_name, .. } => type_name.as_str().into(),
+            Value::Object { type_name, .. } => short_type_name(type_name).into(),
             Value::Builtin(name) => format!("builtin {name}"),
             Value::Variant { tag, .. } => tag.as_str().into(),
             Value::Image(_) => "image".into(),
             Value::Module { name } => format!("module {name}"),
             Value::UserModule { alias, .. } => format!("module {alias}"),
-            Value::TypeRef { name } => format!("type {name}"),
+            Value::TypeRef { name } => format!("type {}", short_type_name(name)),
             Value::PyModule { module } => format!("python module {module}"),
             Value::McpServer { alias } => format!("mcp server {alias}"),
             Value::McpTool { server, name } => format!("tool {server}.{name}"),
@@ -276,7 +297,7 @@ impl fmt::Display for Value {
                     .iter()
                     .map(|(k, v)| format!("{k}={}", v.repr()))
                     .collect();
-                write!(f, "{type_name}({})", inner.join(", "))
+                write!(f, "{}({})", short_type_name(type_name), inner.join(", "))
             }
             Value::Builtin(name) => write!(f, "<builtin {name}>"),
             Value::Variant { tag, payload } => {
@@ -290,7 +311,7 @@ impl fmt::Display for Value {
             Value::Image(image) => write!(f, "{}", image.summary()),
             Value::Module { name } => write!(f, "<module {name}>"),
             Value::UserModule { alias, .. } => write!(f, "<module {alias}>"),
-            Value::TypeRef { name } => write!(f, "<type {name}>"),
+            Value::TypeRef { name } => write!(f, "<type {}>", short_type_name(name)),
             Value::PyModule { module } => write!(f, "<python module {module}>"),
             Value::McpServer { alias } => write!(f, "<mcp server {alias}>"),
             Value::McpTool { server, name } => write!(f, "<tool {server}.{name}>"),

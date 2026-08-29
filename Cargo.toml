@@ -5,6 +5,7 @@ members = [
     "crates/kora-types",
     "crates/kora-runtime",
     "crates/kora-models",
+    "crates/kora-pkg",
     "crates/kora-lsp",
     "crates/kora-dap",
     "crates/kora-mcp",
@@ -31,6 +32,7 @@ kora-syntax = { path = "crates/kora-syntax", version = "0.0.2" } # x-release-ple
 kora-types = { path = "crates/kora-types", version = "0.0.2" } # x-release-please-version
 kora-runtime = { path = "crates/kora-runtime", version = "0.0.2" } # x-release-please-version
 kora-models = { path = "crates/kora-models", version = "0.0.2" } # x-release-please-version
+kora-pkg = { path = "crates/kora-pkg", version = "0.0.2" } # x-release-please-version
 kora-lsp = { path = "crates/kora-lsp", version = "0.0.2" } # x-release-please-version
 kora-dap = { path = "crates/kora-dap", version = "0.0.2" } # x-release-please-version
 kora-mcp = { path = "crates/kora-mcp", version = "0.0.2" } # x-release-please-version
@@ -39,7 +41,11 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ureq = { version = "2", features = ["json"] }
 toml = "0.8"
+# Format-preserving, for editing a human-authored kora.toml. Same version
+# `toml` already pulls in, so it is not a second copy in the tree.
+toml_edit = "0.22"
 regex = "1"
+sha2 = "0.10"
 lsp-server = "0.7"
 lsp-types = "0.95"
 rusqlite = { version = "0.32", features = ["bundled"] }

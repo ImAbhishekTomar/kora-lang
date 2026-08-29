@@ -6,6 +6,33 @@ Read [DECISIONS.md](DECISIONS.md) first. It records *why* the language is the
 way it is; the docs record *what*. A change that contradicts a decision needs
 that file updated in the same commit, not a comment explaining the exception.
 
+`DECISIONS.md` stays at the repository root -- that is where everyone, human
+and agent, already looks for it. It is also published, as the site's
+`/decisions` page, so the reasoning is public rather than folklore. That page is **generated**: edit `DECISIONS.md` and run
+`python3 scripts/sync_decisions.py`. Never edit
+`site/app/decisions/page.mdx` by hand; `check_docs.py` fails when the two
+drift.
+
+## Where things live
+
+```
+crates/          the compiler, runtime, language server, and debugger
+editors/vscode   the VS Code extension
+examples/        runnable .ko programs
+benches/         performance benchmarks
+docs/            language, stdlib, and CLI references (markdown)
+site/            the public documentation site (Next.js + Nextra)
+scripts/         check_docs.py, sync_decisions.py, bench.py, packaging
+DECISIONS.md     why the language is the way it is
+```
+
+The site is a self-contained project: its `package.json`, `pnpm-lock.yaml`,
+`tsconfig.json`, `next.config.mjs`, `styles.css`, and `public/` all live under
+`site/`, and pnpm commands run from there. Its one reach outside is
+`site/next.config.mjs`, which imports the Kora TextMate grammar from
+`editors/vscode/syntaxes/` so the site highlights Kora with the same grammar
+the editor uses.
+
 ## The rule that matters most
 
 **A language change is not done when the runtime works.** Kora ships a
@@ -14,8 +41,23 @@ public docs site, and a runnable example set. All of them describe the same
 language. Any one of them left behind is a bug that reaches a user before it
 reaches CI.
 
+
 So: when you add or change a construct, walk the whole list below and either
 update the item or say out loud why it needs nothing.
+
+## Kora Lang Project Management
+
+A GitHub Project named **`Kora Lang`** has been created for this repository.
+
+Always keep the project up to date using the **GitHub CLI (`gh`)**. Before making any changes, ensure that the GitHub CLI is authenticated and authorized to access the project.
+
+The project contains two views:
+
+1. **`Kora Lang - Tracker`**
+   Manage tasks across the **Todo**, **In Progress**, and **Done** stages.
+
+2. **`Kora Lang - Roadmap`**
+   Manage and track the roadmap for Kora Lang.
 
 ## Package vs core compiler — decide out loud, every time
 
@@ -46,6 +88,22 @@ line is enough:
 If genuinely ambiguous, say so and pick the smaller-blast-radius reading
 (package over compiler) rather than asking, unless the ambiguity changes
 what gets built enough to need a decision from the user.
+
+## Two answers that are already decided
+
+Both come up whenever packages are discussed. Neither is open.
+
+**Never load a native shared library.** A `.so` or `.dll` runs inside the
+process with full operating-system rights and does not pass through
+`call_module_fn`, so no capability grant ever sees it. One native package and
+the confinement the whole package system rests on is gone. Compiled
+third-party code arrives as WASM components or not at all — see
+[DECISIONS.md](DECISIONS.md#wasm-components-for-native-packages).
+
+**A manifest has no field for install scripts.** Not off by default, not
+gated: the format has nowhere to put one. That is the whole `postinstall`
+attack class, refused by the file format rather than by a setting somebody
+can turn on.
 
 ## Checklist for a language change
 
@@ -96,10 +154,17 @@ order:
 - `docs/stdlib.md` — if a module or function changed
 - `docs/cli.md` — if a command's behavior changed, including `kora lsp` and
   `kora dap`
-- `DECISIONS.md` — the *why*, and the trade-offs deliberately accepted
-- `app/language/page.mdx` and `app/reference/page.mdx` — the public docs site
-  is a separate copy; it goes stale silently. `app/ecosystem/page.mdx` and
-  `app/installation/page.mdx` describe the editor experience
+- `DECISIONS.md` — the *why*, and the trade-offs deliberately accepted. Run
+  `python3 scripts/sync_decisions.py` after changing it, so the published
+  page matches
+- `site/app/language/page.mdx` and `site/app/reference/page.mdx` — the public
+  docs site is a separate copy, and it is the copy people actually read.
+  `site/app/ecosystem/page.mdx` and `site/app/installation/page.mdx` describe
+  the editor experience. Site pages mark Kora snippets ```` ```kora ````, not
+  ```` ```python ````; `check_docs.py` parses both, so a fence typo means the
+  snippet is silently unchecked
+- a new page under `site/app/` must be added to `DOCS` in
+  `scripts/check_docs.py`, which fails if it is not
 
 **Examples and tests**
 
@@ -125,14 +190,63 @@ and the debugging sections of `docs/cli.md`, `README.md`, and
 cargo fmt --all
 cargo clippy --all-targets --all-features
 cargo test
+python3 scripts/sync_decisions.py    # only if DECISIONS.md changed
 cargo build && python3 scripts/check_docs.py --kora ./target/debug/kora
 ./target/debug/kora check examples/*.ko examples/lib/*.ko
 ```
 
-`scripts/check_docs.py` parses every code block in the docs, verifies every
-documented command and flag exists, and checks every internal link. It is the
-backstop for the rule above, not a replacement for it: it cannot tell that a
-feature is missing from a page, only that what is written is wrong.
+And, if anything under `site/` changed:
+
+```bash
+cd site && pnpm install --frozen-lockfile && pnpm build
+```
+
+`scripts/check_docs.py` parses every Kora code block in the reference
+documents **and in every site page**, verifies every documented command and
+flag exists, checks every internal link and every site route, and checks that
+the published Decisions page still matches `DECISIONS.md`. It is the backstop
+for the rule above, not a replacement for it: it cannot tell that a feature is
+missing from a page, only that what is written is wrong.
+
+## What CI checks, and what to update when you add something
+
+Seven workflows. Two of them care about where files live, so a move that does
+not update them fails quietly -- the job simply stops running, which looks the
+same as passing.
+
+| workflow | covers |
+|---|---|
+| `ci.yml` | format, clippy, tests on three platforms, release-mode tests, MSRV, `cargo deny`, the Kora test suite, the examples, benchmarks, the VS Code package, and the documentation |
+| `docs-site.yml` | builds and deploys `site/` to Vercel |
+| `release.yml` | tag builds, archives, crates.io, npm, Homebrew, both extension marketplaces |
+| `release-please.yml` | the version and the changelog |
+| `publish-npm.yml`, `publish-homebrew.yml` | manual re-publishes |
+| `dependabot.yml` | auto-merges non-major bumps |
+
+So:
+
+- a new **example** that runs deterministically goes in the `examples` job of
+  `ci.yml`; a new `test` block goes in `kora-tests`
+- a new **page under `site/app/`** goes in `DOCS` in `scripts/check_docs.py`;
+  the `check_site_coverage` check fails if it does not. The `lychee` step in
+  the `docs` job already globs `site/app/**/*.mdx`, so external links on it
+  are covered without another change
+- a new **image or asset the site serves** goes in `site/public/`, and is
+  referenced by its route (`/marketing/x.png`, not a file path).
+  `check_site_assets` fails on a reference with no file behind it, because a
+  dead `<img>` renders as a broken icon and nothing else notices
+- a new **file the site needs at build time** that lives outside `site/` must
+  be added to the trigger `paths` of `docs-site.yml`, or a change to it
+  deploys nothing. Today that is only
+  `editors/vscode/syntaxes/kora.tmLanguage.json`
+- **pnpm commands run from `site/`.** `docs-site.yml` sets
+  `working-directory: site` once, and points `pnpm/action-setup` at
+  `site/package.json` and the Node cache at `site/pnpm-lock.yaml`. All three
+  have to agree
+- the Vercel project's **Root Directory must stay unset**: the workflow
+  already runs the CLI from inside `site/`, so setting it would resolve to
+  `site/site`. `docs-site.yml` reads the setting out of the `vercel pull`
+  output and fails the job if someone sets it, rather than deploying a 404
 
 ## Releasing
 

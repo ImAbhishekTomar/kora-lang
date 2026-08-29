@@ -60,8 +60,9 @@ design changes and should be deliberate.
   syntaxes rather than one namespace, so an import can never be ambiguous and
   adding a stdlib module can never shadow somebody's file.
 - Paths resolve against the **importing file**, never the working directory.
-  A program is a directory, and it moves or vendors whole. Package names and
-  a registry are a later problem; paths need no infrastructure to work.
+  A program is a directory, and it moves or vendors whole. A package is
+  named rather than pathed (see Ecosystem strategy); paths need no
+  infrastructure to work, so they came first.
 - `as <name>` is **required**. A path has no natural bare name, and inventing
   one from the file stem would bind a name the source never mentions.
 - **Everything top-level is exported.** No `export` keyword yet: adding
@@ -70,9 +71,15 @@ design changes and should be deliberate.
 - **Each file reads its own top level.** A function resolves free names in
   the file it was written in, so importing a module cannot change what its
   code means. This is why functions carry their home module at runtime.
-- **Types are global across the module graph.** A `Money` is one type
-  everywhere, so values cross file boundaries without conversion; declaring
-  the same name differently in two files is an error, not two types.
+- **Types are global across the files of one package.** A `Money` is one type
+  everywhere inside it, so values cross file boundaries without conversion;
+  declaring the same name differently in two of its files is an error, not
+  two types. The sharing stops at the package boundary: two dependencies may
+  each declare `Config` and they are different types, because the alternative
+  is a hard error the consumer cannot fix, owning neither package. A type is
+  identified internally by its package and name, and displayed by its name
+  alone — except where two short names collide, which is the one case a
+  reader cannot otherwise resolve.
 - **A file's top level runs once per run.** Imports are cached by canonical
   path, so a diamond is one module, not two with separate state.
 - **Cycles are an error**, reported with the chain. A half-initialized module
@@ -296,15 +303,135 @@ four thesis pillars:
 Cost accepted: per-call serialization, and no live-object interop
 (`df.groupby().apply(lambda ...)`). Negligible next to real work per call.
 
-**Kora's own packages** come later: `kora.toml` dependencies, a lockfile,
-`kora add`. One tool, lockfile by default, no global installs, reproducible.
-A new registry is a ghost town for years, so layers 1 and 2 carry the weight.
+**Kora's own packages** are being built, starting with local path
+dependencies. One tool, no global installs, reproducible. A new registry is a
+ghost town for years, so layers 1 and 2 carry the weight meanwhile, and
+fetching is deliberately the *last* piece rather than the first.
+
+Four decisions distinguish it from what everyone else ships:
+
+- **The graph is derived from the source, not the manifest.** `[dependencies]`
+  says where a package comes from; the `use pkg` statements say whether it is
+  needed. Declaring a hundred and importing four resolves four, transitively.
+  This is exact rather than heuristic because a package name is always a
+  literal token and Kora has no dynamic import — the property that makes
+  `depcheck` and its equivalents guess elsewhere. A typo'd dependency is
+  therefore never fetched at all, which is where dependency-confusion attacks
+  start.
+- **There is no `[dev-dependencies]` table.** `test` is a language construct,
+  so test-only reachability is computed rather than declared, and there is no
+  wrong half to put something in. Runtime and test reachability come from
+  running the same walk twice rather than propagating a label down the graph:
+  a package reached by both a test path and a runtime path is a runtime
+  dependency, and propagating "dev" would drop a shared transitive dependency
+  from a shipped program. A dependency's own tests are never roots for its
+  consumer.
+- **Names resolve against the manifest that wrote them**, never a global
+  table — the same rule as file paths resolving against the importing file.
+  Two packages may bind one bare name to different sources, and a program
+  cannot reach its dependencies' dependencies.
+- **Confinement lands before fetching.** Per-package capability grants come
+  before git dependencies, so no package is ever published into an
+  unconfined ecosystem. npm's ordering — fetch first, security retrofitted —
+  is the mistake being avoided, and it is not recoverable afterwards.
+  Grants are checked where the effect happens, and confinement follows
+  *execution* rather than the call site: a package cannot shed it by
+  spawning, by being reached through a `tool` a model called, or by handing
+  the work to a dependency of its own. A parent may only pass on what it
+  holds, so compromising a leaf gains an attacker nothing that every link
+  above it lacked. One package granted two different ways by two importers is
+  refused: the union would let a permissive importer widen what a careful one
+  withheld, and the intersection would break the permissive one's code.
+
+The lockfile is **authoritative**: once a repository is locked, its commit is
+what gets fetched, never the tag again. Re-resolving the reference is how a
+force-pushed tag lands on a machine with a cold cache — the lockfile would be
+rewritten to the attacker's commit and nothing would look wrong. That case is
+a test, because it is the whole reason the file exists.
+
+An append-only checksum log closes the window the lockfile cannot: a
+project's *first* fetch has nothing to check against, so a backdoor published
+briefly and withdrawn leaves no trace in any lockfile. The first sighting of a
+commit fixes what it contains, and a later disagreement is refused rather than
+resolved. Two logs are consulted — the project's committed `kora.sums`, and a
+machine-level one shared across every project on the computer, so an honest
+fetch in one project protects the next. It is deliberately not a hosted
+transparency log: that needs a service somebody runs, and this narrows the
+window without one.
+
+A manifest has **no field for install scripts**, and will not gain one. That
+is the whole of the `postinstall` attack class, refused by the file format
+rather than by a setting someone can turn off.
+
+`kora update` is the only sanctioned way past the lockfile, and so the place a
+new version's *authority* is examined: it refuses a bump that asks for
+capabilities the old version did not, or that declassifies in more places,
+until someone says they have looked. Advisory rather than load-bearing — the
+runtime still refuses to grant what kora.toml did not — because two
+independent gates beat one.
+
 For third-party *native* packages, the destination is WASM components rather
 than dynamic libraries: sandboxed by construction, language-agnostic, and a
-sandboxed package cannot exfiltrate classified data. Immature today.
+sandboxed package cannot exfiltrate classified data. A component declares its
+capabilities, which makes it a named sink like any other, so `declassify x
+for pkg:weather` checks the same way MCP servers already do. Immature today.
 
-All three layers are built. What is left is a package manager and WASM
-components, both deliberately deferred until there is a reason.
+Layers 1 through 3 are built. Packages are under way; WASM components wait.
+
+## Deferred, and what would start them
+
+Neither of these is a hole in what exists. Both *extend* the package system,
+and each is waiting on something that is not code.
+
+### A hosted checksum log
+
+**What is built.** `kora.sums` records what a commit contained the first time
+it was seen, in two places: the project's own file, committed and shared with
+everyone who clones, and a machine-level one under `~/.kora` shared across
+every project on that computer. A later fetch that disagrees is refused.
+
+**The window it does not close.** If nobody in your world has ever fetched a
+package, and the attacker's version is live the first time anyone does, that
+version becomes the record. The log is protecting the wrong bytes and there
+was never anything to compare against.
+
+**What a hosted log adds.** One log everyone reports to, so the first fetch
+*by anyone* fixes what a version means for everyone after. Being the second
+person on Earth to fetch a package is then enough. This is what
+`sum.golang.org` does for Go.
+
+**Why it is deferred.** It is a server: somebody runs it, pays for it, keeps
+it up, and every Kora user has to trust it. That is an operational and trust
+commitment, not a coding decision, and committing code cannot make it.
+
+**What would start it.** Packages being fetched by people who did not write
+them — that is, a real third-party ecosystem rather than a handful of
+first-party ones. Until then the two local logs cover everyone who exists.
+
+### WASM components for native packages
+
+**The gap.** A package is `.ko` source. Someone who wants to ship a fast PDF
+parser or an image codec, written in Rust, cannot: there is no way to include
+compiled code.
+
+**The answer that must never be taken.** Loading a native shared library.
+A `.so` runs inside the process with full operating-system rights — it can
+read `~/.ssh`, open sockets, and write anywhere, and none of it passes through
+`call_module_fn`, so no grant check ever sees it. One native package and the
+capability system is gone. This is a permanent refusal, not a deferral.
+
+**Why WASM instead.** A component runs in a sandbox the runtime controls and
+can only touch what it is handed. A WASM package that declares `net` gets the
+network; one that does not, physically cannot reach it — the same rule `.ko`
+packages already follow, enforced by the sandbox rather than by our checks.
+Being language-agnostic is a bonus; being unable to escape is the reason.
+
+**Why it is deferred.** Nothing needs it yet. MCP covers tools, the Python
+sidecar covers the long tail, and the component tooling is still young.
+
+**What would start it.** A package that genuinely cannot be written in Kora or
+reached through MCP or Python — a codec, a parser, something CPU-bound enough
+that the sidecar's per-call serialization dominates.
 
 ## Parked / non-goals
 
@@ -319,8 +446,10 @@ components, both deliberately deferred until there is a reason.
 ## Status
 
 Phases 0 through 6 are complete, as are the standard library, MCP
-integration, the Python sidecar, and images as values. What remains is a
-package manager and WASM components — see the ecosystem strategy above.
+integration, the Python sidecar, and images as values. Packages have begun
+with path and git dependencies, capability grants, and a content-hashed
+lockfile, a checksum log, and the packaging commands; what remains is a
+hosted checksum log and WASM components — see the ecosystem strategy above.
 
 Reference documentation lives in [docs/](docs): the
 [language](docs/language.md), the [standard library](docs/stdlib.md), and the
@@ -345,7 +474,15 @@ Ecosystem work, sequenced alongside the phases above:
 - MCP integration (`use mcp <server> as <alias>`) — **done**
 - Python sidecar (`use python <module> as <alias>`) — **done**
 - Images as values (`fs.image`, multimodal `analyze`, `fs.glob`) — **done**
-- Kora package manager + WASM components — later
+- Package dependencies (`use pkg`, path dependencies, reachability-derived
+  graph) — **done**
+- Per-package type namespacing — **done**
+- Per-package capability grants — **done**
+- Git dependencies, content-hashed lockfile, parallel fetch — **done**
+- Append-only checksum log — **done**
+- `kora add` / `remove` / `update` / `vendor`, `kora audit --deps` — **done**
+- A hosted checksum log, and WASM components — deferred; see
+  [Deferred, and what would start them](#deferred-and-what-would-start-them)
 
 Each phase ends with a runnable demo program. Demo programs live in
 `examples/`.

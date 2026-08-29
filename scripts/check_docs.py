@@ -9,8 +9,14 @@ Checks:
   1. Every Kora code block in the docs parses and resolves.
   2. Every `kora <command>` and `--flag` mentioned exists in the binary.
   3. Every stdlib module and function documented is exported by the runtime.
-  4. Every relative markdown link resolves.
+  4. Every relative markdown link, and every site route, resolves.
   5. Every example file passes `kora check`.
+  6. The published copy of DECISIONS.md matches the source.
+
+"The docs" means the reference documents at the root *and* the pages the
+public site serves out of `site/app/`. The site was unchecked for a while and
+that is precisely where a broken snippet does the most damage: it is the copy
+people actually read.
 
 Usage: scripts/check_docs.py [--kora path/to/kora]
 """
@@ -25,8 +31,41 @@ import sys
 import tempfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-DOCS = ["README.md", "DECISIONS.md", "AGENTS.md", "docs/language.md",
-        "docs/stdlib.md", "docs/cli.md", "examples/README.md"]
+
+# Markdown marks Kora snippets as ```python, because that is what renders
+# usefully on GitHub. The site has real syntax highlighting for the language,
+# so it marks them ```kora -- and its ```python blocks are genuinely Python,
+# on the comparison page. Checking the wrong fence per file would either miss
+# every site snippet or send Python to the Kora parser.
+MARKDOWN, SITE = "markdown", "site"
+FENCE = {MARKDOWN: "python", SITE: "kora"}
+
+DOCS = [
+    ("README.md", MARKDOWN),
+    ("DECISIONS.md", MARKDOWN),
+    ("AGENTS.md", MARKDOWN),
+    ("docs/language.md", MARKDOWN),
+    ("docs/stdlib.md", MARKDOWN),
+    ("docs/cli.md", MARKDOWN),
+    ("examples/README.md", MARKDOWN),
+    ("site/app/page.mdx", SITE),
+    ("site/app/comparison/page.mdx", SITE),
+    ("site/app/ecosystem/page.mdx", SITE),
+    ("site/app/installation/page.mdx", SITE),
+    ("site/app/language/page.mdx", SITE),
+    ("site/app/model-calls/page.mdx", SITE),
+    ("site/app/reference/page.mdx", SITE),
+    ("site/app/roadmap/page.mdx", SITE),
+    ("site/app/start-here/page.mdx", SITE),
+    ("site/app/versions/page.mdx", SITE),
+]
+
+# Generated from DECISIONS.md, which is in the list above already. Checking it
+# twice would only report the same problem in two places.
+GENERATED = {"site/app/decisions/page.mdx"}
+
+SITE_APP = "site/app"
+SITE_PUBLIC = "site/public"
 
 # Blocks that are not Kora at all, or that deliberately show a failure.
 SKIP_MARKERS = (
@@ -48,11 +87,10 @@ def read(path: str) -> str:
         return f.read()
 
 
-def code_blocks(text: str) -> list[tuple[int, str]]:
-    """Fenced ```python blocks, with the line each starts on."""
+def code_blocks(text: str, fence: str) -> list[tuple[int, str]]:
+    """Fenced blocks in the given language, with the line each starts on."""
     out = []
-    line_no = 1
-    for chunk in re.finditer(r"```python\n(.*?)```", text, re.S):
+    for chunk in re.finditer(r"```" + fence + r"\n(.*?)```", text, re.S):
         start = text[: chunk.start()].count("\n") + 1
         out.append((start, chunk.group(1)))
     return out
@@ -62,8 +100,8 @@ def check_code_blocks(kora: str) -> None:
     """Every Kora snippet in the docs should parse and resolve."""
     print("Kora code blocks")
     checked = skipped = 0
-    for doc in DOCS:
-        for line_no, block in code_blocks(read(doc)):
+    for doc, kind in DOCS:
+        for line_no, block in code_blocks(read(doc), FENCE[kind]):
             if any(marker in block for marker in SKIP_MARKERS):
                 skipped += 1
                 continue
@@ -105,7 +143,7 @@ def check_commands(kora: str) -> None:
     # `kora <file.ko>` and `kora --version` are documented but not subcommands.
     real_commands |= {"run"}
 
-    for doc in DOCS:
+    for doc, _kind in DOCS:
         text = read(doc)
         for command in set(re.findall(r"`?kora ([a-z]+)", text)):
             if command in real_commands:
@@ -155,21 +193,104 @@ def check_stdlib() -> None:
     print(f"  {len(real_modules)} modules, {functions} functions verified")
 
 
+def route_exists(route: str) -> bool:
+    """Does `/foo` correspond to a page the site actually serves?"""
+    slug = route.strip("/")
+    page = os.path.join(ROOT, SITE_APP, slug, "page.mdx") if slug else \
+        os.path.join(ROOT, SITE_APP, "page.mdx")
+    return os.path.exists(page)
+
+
 def check_links() -> None:
-    """Every relative link should point at something."""
+    """Every relative link, and every site route, should point at something."""
     print("Internal links")
     count = 0
-    for doc in DOCS:
+    for doc, kind in DOCS:
+        text = read(doc)
+        links = re.findall(r"\[([^\]]+)\]\(([^)]+)\)", text)
+        # The site pages are MDX, so some links are JSX attributes rather
+        # than markdown. A dead `href` is just as dead.
+        if kind == SITE:
+            links += [("href", href) for href in re.findall(r'href="([^"]+)"', text)]
+
         base = os.path.dirname(doc)
-        for text, link in re.findall(r"\[([^\]]+)\]\(([^)]+)\)", read(doc)):
+        for label, link in links:
             if link.startswith(("http", "#", "mailto")):
                 continue
-            target = os.path.normpath(os.path.join(ROOT, base, link.split("#")[0]))
+            bare = link.split("#")[0]
+            if not bare:
+                continue
+            if kind == SITE:
+                # A site link is a route, not a path on disk: `/reference`
+                # is served by `site/app/reference/page.mdx`.
+                if not link.startswith("/"):
+                    fail(f"{doc}: [{label}]({link}) is not an absolute site "
+                         "route; the site serves routes, not file paths")
+                elif not route_exists(bare):
+                    fail(f"{doc}: [{label}]({link}) is not a page the site serves")
+                else:
+                    count += 1
+                continue
+            target = os.path.normpath(os.path.join(ROOT, base, bare))
             if not os.path.exists(target):
-                fail(f"{doc}: [{text}]({link}) points at nothing")
+                fail(f"{doc}: [{label}]({link}) points at nothing")
             else:
                 count += 1
     print(f"  {count} links verified")
+
+
+def check_site_coverage() -> None:
+    """A new site page must be checked, so it has to be listed above."""
+    print("Site page coverage")
+    listed = {doc for doc, kind in DOCS if kind == SITE} | GENERATED
+    found = set()
+    for directory, _subdirs, files in os.walk(os.path.join(ROOT, SITE_APP)):
+        for name in files:
+            if name.endswith(".mdx"):
+                found.add(os.path.relpath(
+                    os.path.join(directory, name), ROOT).replace(os.sep, "/"))
+    for missing in sorted(found - listed):
+        fail(f"{missing} is served by the site but is not checked; add it to "
+             "DOCS in scripts/check_docs.py")
+    for stale in sorted(listed - found - GENERATED):
+        fail(f"DOCS lists {stale}, which does not exist")
+    print(f"  {len(found)} site pages, all checked")
+
+
+def check_site_assets() -> None:
+    """Every image the site serves should be a file that exists.
+
+    A dead `<img>` renders as a broken icon rather than an error, so nothing
+    else in this repository would notice. lychee cannot check these: it
+    resolves root-relative links against `site/app`, and assets live in
+    `site/public`.
+    """
+    print("Site assets")
+    count = 0
+    for doc, kind in DOCS:
+        if kind != SITE:
+            continue
+        for src in re.findall(r'src="(/[^"]+)"', read(doc)):
+            asset = os.path.join(ROOT, SITE_PUBLIC, src.lstrip("/"))
+            if not os.path.exists(asset):
+                fail(f"{doc}: src=\"{src}\" has no file at "
+                     f"{SITE_PUBLIC}{src}")
+            else:
+                count += 1
+    print(f"  {count} assets verified")
+
+
+def check_decisions_page() -> None:
+    """The published copy of DECISIONS.md should match the source."""
+    print("Published decisions")
+    script = os.path.join(ROOT, "scripts", "sync_decisions.py")
+    result = subprocess.run([sys.executable, script, "--check"],
+                            capture_output=True, text=True)
+    if result.returncode != 0:
+        detail = (result.stdout or result.stderr).strip().splitlines()
+        fail(detail[-1].strip() if detail else "sync_decisions.py --check failed")
+    else:
+        print("  site/app/decisions/page.mdx matches DECISIONS.md")
 
 
 def check_examples(kora: str) -> None:
@@ -211,6 +332,9 @@ def main() -> int:
     check_commands(args.kora)
     check_stdlib()
     check_links()
+    check_site_coverage()
+    check_site_assets()
+    check_decisions_page()
     check_examples(args.kora)
 
     print()

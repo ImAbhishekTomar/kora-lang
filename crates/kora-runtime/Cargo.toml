@@ -10,6 +10,7 @@ description = "Tree-walking interpreter and runtime for the Kora language"
 [dependencies]
 kora-syntax.workspace = true
 kora-models.workspace = true
+kora-pkg.workspace = true
 kora-mcp.workspace = true
 kora-python.workspace = true
 serde = { workspace = true }
