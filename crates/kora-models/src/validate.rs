@@ -132,11 +132,10 @@ fn coerce(field: &SchemaField, value: Value) -> Result<Value, ModelError> {
             other => bad(&json_kind(other)),
         },
         FieldType::Object(nested) => match value {
-            Value::Object(map) => {
-                Ok(Value::Object(validate_fields(map, nested).map_err(
-                    |e| ModelError::new(format!("field `{name}`: {}", e.message)),
-                )?))
-            }
+            Value::Object(map) => Ok(Value::Object(
+                validate_fields(map, nested)
+                    .map_err(|e| ModelError::new(format!("field `{name}`: {}", e.message)))?,
+            )),
             other => bad(&json_kind(&other)),
         },
         FieldType::ListOfObject(nested) => match value {

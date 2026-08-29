@@ -14,7 +14,9 @@ pub const UNCERTAIN_KEY: &str = "__uncertain__";
 /// response shapes, so refusal travels inside the object).
 pub fn build_json_schema(schema: &Schema) -> Value {
     let mut value = object_schema(schema);
-    let object = value.as_object_mut().expect("object_schema returns an object");
+    let object = value
+        .as_object_mut()
+        .expect("object_schema returns an object");
     let properties = object
         .get_mut("properties")
         .and_then(Value::as_object_mut)
@@ -103,7 +105,11 @@ fn describe_fields(schema: &Schema, indent: &str) -> String {
         .fields
         .iter()
         .map(|field| {
-            let mut line = format!("{indent}- {}: {}", field.name, field.field_type.display_name());
+            let mut line = format!(
+                "{indent}- {}: {}",
+                field.name,
+                field.field_type.display_name()
+            );
             if let Some(description) = &field.description {
                 line.push_str(&format!(" - {description}"));
             }

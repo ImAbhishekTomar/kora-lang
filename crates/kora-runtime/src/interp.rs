@@ -2550,13 +2550,19 @@ impl Interpreter {
                         Ok(FieldType::ListOfObject(Rc::new(nested)))
                     }
                     None => Err(RuntimeError::new(
-                        format!("field `{}` must be `list[str]` or `list[<declared type>]`", field.name),
+                        format!(
+                            "field `{}` must be `list[str]` or `list[<declared type>]`",
+                            field.name
+                        ),
                         field.span,
                     )
                     .with_hint(unsupported_hint)),
                 },
                 _ => Err(RuntimeError::new(
-                    format!("field `{}` must be `list[str]` or `list[<declared type>]`", field.name),
+                    format!(
+                        "field `{}` must be `list[str]` or `list[<declared type>]`",
+                        field.name
+                    ),
                     field.span,
                 )
                 .with_hint(unsupported_hint)),
