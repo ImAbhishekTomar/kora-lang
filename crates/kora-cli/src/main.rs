@@ -18,6 +18,7 @@ usage:
     --syntax                   parse only; skip name resolution
   kora test <file.ko>          run the `test` blocks in a file
   kora audit <file.ko>         list every declassification site
+  kora tree <file.ko>          show the packages the program actually uses
   kora runs <file.ko>          list durable runs and their status
   kora answer <file.ko> <id> <text>
                                answer a suspended run and resume it
@@ -107,6 +108,13 @@ fn main() -> ExitCode {
                 ExitCode::from(2)
             }
         },
+        Some("tree") => match args.get(1) {
+            Some(path) => package_tree(path),
+            None => {
+                eprintln!("usage: kora tree <file.ko>");
+                ExitCode::from(2)
+            }
+        },
         Some("audit") => match args.get(1) {
             Some(path) => audit_file(path),
             None => {
@@ -174,6 +182,70 @@ fn run_args(args: &[String]) -> ExitCode {
 ///
 /// The same analysis the editor shows, as a command: useful in CI, and the
 /// only way to check a file that needs resources this machine does not have.
+/// `kora tree` — the packages a program actually uses, and why.
+///
+/// The graph is derived from the source, so this is the list that would be
+/// fetched and shipped, not the list `kora.toml` declares. A package marked
+/// `(dev)` is reached only through `test` blocks and stays out of a shipped
+/// program. Nobody declares that: it is derived, and the line says which rule
+/// produced it, because a classification nobody can explain is the part of
+/// this that frustrates people elsewhere.
+fn package_tree(path: &str) -> ExitCode {
+    let program_path = Path::new(path);
+    if !program_path.is_file() {
+        eprintln!("error: cannot read `{path}`");
+        return ExitCode::from(1);
+    }
+    let resolution = kora_pkg::resolve(program_path);
+
+    println!("{path}");
+    let needed = resolution.needed();
+    if needed.is_empty() {
+        println!("  (no packages used)");
+    }
+    for package in &needed {
+        let name = package.name.as_deref().unwrap_or("?");
+        let version = package
+            .manifest
+            .version
+            .as_deref()
+            .map(|v| format!(" {v}"))
+            .unwrap_or_default();
+        let dev = if resolution.dev_only.contains(&package.id) {
+            "  (dev — reached only through test blocks)"
+        } else {
+            ""
+        };
+        println!("  {name}{version}{dev}");
+    }
+
+    for unused in &resolution.unused {
+        let who = resolution.packages[unused.declared_by.0]
+            .name
+            .as_deref()
+            .unwrap_or("this program");
+        println!("  {} — declared by {who}, never imported", unused.name);
+    }
+
+    for (file, why) in &resolution.unreadable {
+        eprintln!("warning: skipped {}: {why}", file.display());
+    }
+
+    if resolution.missing.is_empty() {
+        ExitCode::SUCCESS
+    } else {
+        for missing in &resolution.missing {
+            eprintln!(
+                "error: no package named `{}` ({}:{})",
+                missing.name,
+                missing.file.display(),
+                missing.span.line
+            );
+        }
+        ExitCode::from(1)
+    }
+}
+
 fn check_files(paths: &[String], syntax_only: bool) -> ExitCode {
     let mut problems = 0;
     let mut checked = 0;
@@ -207,6 +279,38 @@ fn check_files(paths: &[String], syntax_only: bool) -> ExitCode {
                     if let Some(hint) = &d.hint {
                         eprintln!("   = hint: {hint}");
                     }
+                    eprintln!();
+                    problems += 1;
+                }
+                // A dependency the source never names is not fetched and not
+                // shipped. Reporting it here is what keeps kora.toml honest;
+                // it is a warning rather than an error because a dependency
+                // added a minute ago has not been imported yet.
+                let resolution = kora_pkg::resolve(Path::new(path));
+                for unused in &resolution.unused {
+                    let who = resolution.packages[unused.declared_by.0]
+                        .name
+                        .as_deref()
+                        .unwrap_or("this program");
+                    eprintln!(
+                        "warning: `{}` is declared by {who} but never imported",
+                        unused.name
+                    );
+                    eprintln!(
+                        "   = hint: remove it from kora.toml, or write `use pkg {}`",
+                        unused.name
+                    );
+                    eprintln!();
+                }
+                for missing in &resolution.missing {
+                    eprintln!("error: no package named `{}`", missing.name);
+                    eprintln!(
+                        "  --> {}:{}:{}",
+                        missing.file.display(),
+                        missing.span.line,
+                        missing.span.col
+                    );
+                    eprintln!("   = hint: declare it under `[dependencies]` in kora.toml");
                     eprintln!();
                     problems += 1;
                 }
