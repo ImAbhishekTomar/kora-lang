@@ -1,0 +1,21 @@
+# Packages: dependencies named rather than pathed.
+#
+# `[dependencies]` in kora.toml says where a package comes from. Whether it
+# is needed is decided by this file: Kora derives the graph from the source,
+# so a dependency nothing imports is never fetched and never shipped.
+#
+#   kora tree examples/13_packages.ko    # what is actually used, and why
+#   kora check examples/13_packages.ko   # warns about anything declared and unused
+#
+# A `use pkg` inside a test block makes that package dev-only. Nothing
+# declares it: run `kora tree` and the classification is derived, along with
+# the rule that produced it.
+
+use pkg greet as g
+
+def main():
+    print(g.greet("Ada"))
+    print(f"the package's own constant: {g.GREETING}")
+
+test "the package function is callable from a test":
+    assert g.greet("Bo") == "hello, Bo", "unexpected greeting"

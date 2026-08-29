@@ -60,8 +60,9 @@ design changes and should be deliberate.
   syntaxes rather than one namespace, so an import can never be ambiguous and
   adding a stdlib module can never shadow somebody's file.
 - Paths resolve against the **importing file**, never the working directory.
-  A program is a directory, and it moves or vendors whole. Package names and
-  a registry are a later problem; paths need no infrastructure to work.
+  A program is a directory, and it moves or vendors whole. A package is
+  named rather than pathed (see Ecosystem strategy); paths need no
+  infrastructure to work, so they came first.
 - `as <name>` is **required**. A path has no natural bare name, and inventing
   one from the file stem would bind a name the source never mentions.
 - **Everything top-level is exported.** No `export` keyword yet: adding
@@ -296,15 +297,55 @@ four thesis pillars:
 Cost accepted: per-call serialization, and no live-object interop
 (`df.groupby().apply(lambda ...)`). Negligible next to real work per call.
 
-**Kora's own packages** come later: `kora.toml` dependencies, a lockfile,
-`kora add`. One tool, lockfile by default, no global installs, reproducible.
-A new registry is a ghost town for years, so layers 1 and 2 carry the weight.
+**Kora's own packages** are being built, starting with local path
+dependencies. One tool, no global installs, reproducible. A new registry is a
+ghost town for years, so layers 1 and 2 carry the weight meanwhile, and
+fetching is deliberately the *last* piece rather than the first.
+
+Four decisions distinguish it from what everyone else ships:
+
+- **The graph is derived from the source, not the manifest.** `[dependencies]`
+  says where a package comes from; the `use pkg` statements say whether it is
+  needed. Declaring a hundred and importing four resolves four, transitively.
+  This is exact rather than heuristic because a package name is always a
+  literal token and Kora has no dynamic import — the property that makes
+  `depcheck` and its equivalents guess elsewhere. A typo'd dependency is
+  therefore never fetched at all, which is where dependency-confusion attacks
+  start.
+- **There is no `[dev-dependencies]` table.** `test` is a language construct,
+  so test-only reachability is computed rather than declared, and there is no
+  wrong half to put something in. Runtime and test reachability come from
+  running the same walk twice rather than propagating a label down the graph:
+  a package reached by both a test path and a runtime path is a runtime
+  dependency, and propagating "dev" would drop a shared transitive dependency
+  from a shipped program. A dependency's own tests are never roots for its
+  consumer.
+- **Names resolve against the manifest that wrote them**, never a global
+  table — the same rule as file paths resolving against the importing file.
+  Two packages may bind one bare name to different sources, and a program
+  cannot reach its dependencies' dependencies.
+- **Confinement lands before fetching.** Per-package capability grants come
+  before git dependencies, so no package is ever published into an
+  unconfined ecosystem. npm's ordering — fetch first, security retrofitted —
+  is the mistake being avoided, and it is not recoverable afterwards.
+
+Ordering from here: type namespacing per package (a flat type table collides
+the moment two third parties both declare `Config`, and the consumer cannot
+fix either), then capability grants, then git dependencies with a
+content-hashed lockfile, then an append-only checksum log so a version number
+cannot come to mean different bytes over its lifetime.
+
+A manifest has **no field for install scripts**, and will not gain one. That
+is the whole of the `postinstall` attack class, refused by the file format
+rather than by a setting someone can turn off.
+
 For third-party *native* packages, the destination is WASM components rather
 than dynamic libraries: sandboxed by construction, language-agnostic, and a
-sandboxed package cannot exfiltrate classified data. Immature today.
+sandboxed package cannot exfiltrate classified data. A component declares its
+capabilities, which makes it a named sink like any other, so `declassify x
+for pkg:weather` checks the same way MCP servers already do. Immature today.
 
-All three layers are built. What is left is a package manager and WASM
-components, both deliberately deferred until there is a reason.
+Layers 1 through 3 are built. Packages are under way; WASM components wait.
 
 ## Parked / non-goals
 
@@ -319,8 +360,9 @@ components, both deliberately deferred until there is a reason.
 ## Status
 
 Phases 0 through 6 are complete, as are the standard library, MCP
-integration, the Python sidecar, and images as values. What remains is a
-package manager and WASM components — see the ecosystem strategy above.
+integration, the Python sidecar, and images as values. Packages have begun
+with local path dependencies; what remains is capability grants, fetched
+dependencies, and WASM components — see the ecosystem strategy above.
 
 Reference documentation lives in [docs/](docs): the
 [language](docs/language.md), the [standard library](docs/stdlib.md), and the
@@ -345,7 +387,10 @@ Ecosystem work, sequenced alongside the phases above:
 - MCP integration (`use mcp <server> as <alias>`) — **done**
 - Python sidecar (`use python <module> as <alias>`) — **done**
 - Images as values (`fs.image`, multimodal `analyze`, `fs.glob`) — **done**
-- Kora package manager + WASM components — later
+- Package dependencies (`use pkg`, path dependencies, reachability-derived
+  graph) — **done**
+- Capability grants, git dependencies, lockfile, checksum log — next
+- WASM components — later
 
 Each phase ends with a runnable demo program. Demo programs live in
 `examples/`.

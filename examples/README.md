@@ -21,6 +21,7 @@ no API key and no model installed.
 | [10_modules.ko](10_modules.ko) | splitting a program across files | `kora run` |
 | [11_receipt_classifier.ko](11_receipt_classifier.ko) | reading a receipt and extracting a typed expense record | `kora run --replay` |
 | [12_receipt_images.ko](12_receipt_images.ko) | the same job from the *pictures*: `fs.glob`, `fs.image`, a vision model | `kora run --replay` |
+| [13_packages.ko](13_packages.ko) | naming a dependency, and letting the source decide what is used | `kora run` |
 
 ```bash
 kora run examples/00_basics.ko

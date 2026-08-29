@@ -112,11 +112,11 @@ impl Resolution {
 pub fn resolve(entry: &Path) -> Resolution {
     let mut state = State::default();
 
-    let root_dir = entry
-        .parent()
-        .map(Path::to_path_buf)
-        .unwrap_or_else(|| PathBuf::from("."));
-    let root_manifest = Manifest::at(&root_dir).unwrap_or_default();
+    // The root program's manifest is found by walking up: a program file
+    // sits wherever is convenient while its kora.toml sits at the project
+    // root. Dependency paths are written relative to that manifest, so the
+    // directory it was found in — not the program file's — is the root.
+    let (root_dir, root_manifest) = Manifest::discover(entry);
     state.packages.push(ResolvedPackage {
         id: ROOT,
         name: None,
@@ -489,6 +489,27 @@ mod tests {
         let roots: HashSet<&PathBuf> = r.needed().iter().map(|p| &p.root).collect();
         assert_eq!(roots.len(), 4);
         assert!(r.missing.is_empty(), "{:?}", r.missing);
+    }
+
+    #[test]
+    fn the_root_manifest_is_found_by_walking_up_from_the_program() {
+        // A program sits wherever is convenient; its kora.toml sits at the
+        // project root, and dependency paths are relative to that manifest.
+        let tree = Tree::new(
+            "discover",
+            &[
+                (
+                    "kora.toml",
+                    "[dependencies]\ngreet = { path = \"./lib/greet\" }\n",
+                ),
+                ("examples/demo.ko", "use pkg greet as g\n"),
+                ("lib/greet/kora.toml", "[package]\nname = \"greet\"\n"),
+                ("lib/greet/src/lib.ko", "def hi() -> int:\n    return 1\n"),
+            ],
+        );
+        let r = tree.resolve("examples/demo.ko");
+        assert!(r.missing.is_empty(), "{:?}", r.missing);
+        assert_eq!(names(&r.needed()), ["greet"]);
     }
 
     #[test]

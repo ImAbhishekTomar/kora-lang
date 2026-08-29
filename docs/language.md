@@ -479,6 +479,79 @@ Budgets, labels, and the journal do not stop at a file boundary. An imported
 agent spends from the same budget, `classified` still propagates, and
 `kora audit` lists declassification sites across every imported file.
 
+### Packages
+
+A package is a directory with a `kora.toml` and an entry file. Importers name
+it rather than pathing into it:
+
+```python
+use pkg receipts as r
+
+def main():
+    print(r.describe("coffee", 4.5))
+```
+
+Where it comes from lives in `kora.toml`:
+
+```toml
+[dependencies]
+receipts = { path = "./receipts" }
+```
+
+The package's own manifest names it and points at its entry, which defaults
+to `src/lib.ko`:
+
+```toml
+[package]
+name = "receipts"
+version = "0.1.0"
+entry = "src/lib.ko"
+```
+
+`as` is optional, unlike a file path: a package name is a Kora identifier and
+so has a natural binding. Names are lowercase, digits, and underscores.
+
+**A dependency is used when the source says so.** `[dependencies]` says where
+a package comes from; the `use pkg` statements decide whether it is needed at
+all. Declaring a hundred and importing four resolves four, and the pruning is
+transitive — a dependency's own unused entries are never resolved either.
+This is exact rather than a guess: a package name is always a literal token,
+and Kora has no dynamic import, so scanning the source cannot miss one.
+
+```bash
+kora tree program.ko     # the packages actually used
+kora check program.ko    # warns about anything declared and never imported
+```
+
+**Names resolve against the manifest that wrote them.** A `use pkg` inside a
+package is answered by that package's `[dependencies]`, never the importing
+program's. So a package may depend on something its consumer has never heard
+of, two packages may bind the same bare name to different sources, and a
+program cannot reach its dependencies' dependencies.
+
+**Test-only packages are derived, not declared.** A package reached only
+through `test` blocks is dev-only and stays out of a shipped program:
+
+```python
+use pkg receipts as r          # runtime
+
+test "it parses a row":
+    use pkg fixtures as f      # dev-only
+    assert f.fake_row() == "fake", "bad fixture"
+```
+
+There is no `[dev-dependencies]` table to put something in the wrong half of.
+A package reached by both a test path and a runtime path is a runtime
+dependency — one runtime path anywhere is enough. And a dependency's *own*
+`test` blocks are never roots for its consumer, since only the root program's
+tests run, so you do not inherit a package's test helpers.
+
+Budgets, labels, and the journal cross a package boundary exactly as they
+cross a file boundary. `kora audit` lists declassification sites inside
+dependencies too — a `declassify` in a package releases the importing
+program's data, so an audit blind to it would make adding a dependency the
+way to hide one.
+
 ### MCP servers
 
 ```python

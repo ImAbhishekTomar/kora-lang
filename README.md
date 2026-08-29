@@ -135,7 +135,7 @@ not GitHub, and killing the process mid-`ask_human` loses nothing.
 | [Decisions](DECISIONS.md) | why the language is the way it is, and what was traded away |
 | [DECISIONS.md](DECISIONS.md) | the frozen design and why each call was made |
 | [AGENTS.md](AGENTS.md) | contributing: what a language change has to touch |
-| [examples/](examples) | twelve runnable programs, in order |
+| [examples/](examples) | thirteen runnable programs, in order |
 
 ## Agents, tools, and budgets
 

@@ -87,6 +87,40 @@ impl Manifest {
         Manifest::parse(&text)
     }
 
+    /// Find the manifest governing a program file, walking up from it.
+    ///
+    /// A program is written wherever it is convenient — `examples/x.ko`,
+    /// `src/main.ko` — while its `kora.toml` sits at the project root. This
+    /// is the same search the rest of the configuration already uses.
+    ///
+    /// Only the *root program* is discovered this way. A dependency's
+    /// manifest is read at its own root with [`Manifest::at`], because
+    /// walking up from a dependency would find whichever manifest happens to
+    /// sit above it — often the consumer's.
+    ///
+    /// Returns the directory the manifest was found in, since dependency
+    /// paths are written relative to it rather than to the program file.
+    pub fn discover(start: &Path) -> (PathBuf, Manifest) {
+        let mut dir = if start.is_dir() {
+            Some(start.to_path_buf())
+        } else {
+            start.parent().map(PathBuf::from)
+        };
+        while let Some(d) = dir {
+            if d.join("kora.toml").is_file() {
+                if let Ok(manifest) = Manifest::at(&d) {
+                    return (d, manifest);
+                }
+            }
+            dir = d.parent().map(PathBuf::from);
+        }
+        let fallback = start
+            .parent()
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("."));
+        (fallback, Manifest::default())
+    }
+
     pub fn parse(text: &str) -> Result<Manifest, ManifestError> {
         let root: toml::Value = text
             .parse()

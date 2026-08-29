@@ -1,0 +1,9 @@
+# A package: an ordinary directory with a kora.toml and an entry file.
+#
+# Every top-level name is exported, exactly as in a file module. What makes
+# this a package rather than a file is that importers name it, not its path.
+
+GREETING = "hello"
+
+def greet(name: str) -> str:
+    return f"{GREETING}, {name}"

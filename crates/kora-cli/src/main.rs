@@ -249,6 +249,11 @@ fn package_tree(path: &str) -> ExitCode {
 fn check_files(paths: &[String], syntax_only: bool) -> ExitCode {
     let mut problems = 0;
     let mut checked = 0;
+    // Manifest directory -> (package name, dependencies not yet seen used).
+    let mut dependency_use: std::collections::BTreeMap<
+        std::path::PathBuf,
+        (Option<String>, std::collections::BTreeSet<String>),
+    > = std::collections::BTreeMap::new();
 
     for path in paths {
         let Ok(source) = std::fs::read_to_string(path) else {
@@ -282,25 +287,30 @@ fn check_files(paths: &[String], syntax_only: bool) -> ExitCode {
                     eprintln!();
                     problems += 1;
                 }
-                // A dependency the source never names is not fetched and not
-                // shipped. Reporting it here is what keeps kora.toml honest;
-                // it is a warning rather than an error because a dependency
-                // added a minute ago has not been imported yet.
+                // Whether a dependency is used is a question about the whole
+                // program, not about one file: checking fifteen files of a
+                // project must not accuse it of never importing what a
+                // sixteenth imports. Findings accumulate per manifest and are
+                // reported once, after every file is in.
                 let resolution = kora_pkg::resolve(Path::new(path));
-                for unused in &resolution.unused {
-                    let who = resolution.packages[unused.declared_by.0]
-                        .name
-                        .as_deref()
-                        .unwrap_or("this program");
-                    eprintln!(
-                        "warning: `{}` is declared by {who} but never imported",
-                        unused.name
-                    );
-                    eprintln!(
-                        "   = hint: remove it from kora.toml, or write `use pkg {}`",
-                        unused.name
-                    );
-                    eprintln!();
+                for package in &resolution.packages {
+                    let entry = dependency_use
+                        .entry(package.root.clone())
+                        .or_insert_with(|| {
+                            (
+                                package.name.clone(),
+                                package.manifest.deps.keys().cloned().collect(),
+                            )
+                        });
+                    for declared in package.manifest.deps.keys() {
+                        let still_unused = resolution
+                            .unused
+                            .iter()
+                            .any(|u| u.declared_by == package.id && &u.name == declared);
+                        if !still_unused {
+                            entry.1.remove(declared);
+                        }
+                    }
                 }
                 for missing in &resolution.missing {
                     eprintln!("error: no package named `{}`", missing.name);
@@ -315,6 +325,18 @@ fn check_files(paths: &[String], syntax_only: bool) -> ExitCode {
                     problems += 1;
                 }
             }
+        }
+    }
+
+    // A dependency the source never names is not fetched and not shipped.
+    // Reporting it keeps kora.toml honest, as a warning rather than an error
+    // because a dependency added a minute ago has not been imported yet.
+    for (name, unused) in dependency_use.values() {
+        let who = name.as_deref().unwrap_or("this program");
+        for dep in unused {
+            eprintln!("warning: `{dep}` is declared by {who} but never imported");
+            eprintln!("   = hint: remove it from kora.toml, or write `use pkg {dep}`");
+            eprintln!();
         }
     }
 

@@ -22,6 +22,7 @@
     "language server",
     "syntax highlighting",
     "modules",
+    "packages",
     "debugger",
     "vision",
     "multimodal"

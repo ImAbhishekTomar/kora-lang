@@ -64,7 +64,10 @@ kora test examples/07_tests.ko
 List every place classified data is released, and to which sink. The list is
 complete rather than best-effort, because every release goes through a
 `declassify` block the parser can see. Imported files are part of the
-program, so the audit covers every file the program imports.
+program, so the audit covers every file the program imports and every
+package it uses. A `declassify` inside a dependency releases the importing
+program's data; an audit that could not see it would make adding a dependency
+the way to hide one.
 
 ```bash
 kora audit examples/03_salary_review.ko
@@ -75,6 +78,30 @@ kora audit examples/03_salary_review.ko
 
 1 declassification site
 ```
+
+### `kora tree <file.ko>`
+
+The packages the program actually uses. Kora derives the graph from the
+source, so this is what would be fetched and shipped, not what `kora.toml`
+declares.
+
+```bash
+kora tree examples/13_packages.ko
+```
+
+```
+examples/13_packages.ko
+  greet 0.1.0
+  fixtures 2.0.0  (dev — reached only through test blocks)
+  unused — declared by this program, never imported
+```
+
+A package reached only through `test` blocks is dev-only and stays out of a
+shipped program. Nothing declares that — there is no `[dev-dependencies]`
+table — and the line says which rule produced the classification.
+
+`kora check` reports the same unused entries as warnings, and errors on a
+`use pkg` naming something no manifest declares.
 
 ### Durable runs
 
@@ -157,6 +184,16 @@ endpoint = "http://localhost:11434"
 [sinks]                             # which labels may reach which sink
 local_model = { allow = ["classified"] }
 openai      = { allow = ["internal"], deny = ["classified"] }
+
+[package]                           # only when this project *is* a package
+name    = "receipts"
+version = "0.1.0"
+entry   = "src/lib.ko"              # the default
+
+[dependencies]                      # where a package comes from. Whether it
+receipts = { path = "./receipts" }  # is used is decided by the source, so
+                                    # declaring one costs nothing until
+                                    # something writes `use pkg receipts`
 
 [http]
 allow_private = false               # loopback and private ranges refused
