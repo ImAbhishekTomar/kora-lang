@@ -28,6 +28,8 @@ agent triage(raw: str) -> str:
             return f"??  needs a human: {reason}"
         case Exhausted(meter):
             return f"--  budget out of {meter}"
+        case Failed(why):
+            return f"!!  provider did not answer: {why}"
 
 def main():
     tickets = [

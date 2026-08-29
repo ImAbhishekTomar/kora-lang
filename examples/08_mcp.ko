@@ -34,6 +34,8 @@ agent read_the_directory(question: str) -> str:
             return f"uncertain: {why}"
         case Exhausted(meter):
             return f"budget out of {meter}"
+        case Failed(why):
+            return f"provider did not answer: {why}"
 
 def main():
     # `fsrv.tools` is every tool the server offers; `fsrv.read_file` would

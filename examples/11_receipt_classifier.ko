@@ -30,6 +30,8 @@ def classify_receipt(text: str) -> str:
             return f"SKIP    could not classify receipt: {reason}"
         case Exhausted(meter):
             return f"SKIP    budget exhausted: {meter}"
+        case Failed(why):
+            return f"RETRY   provider did not answer: {why}"
 
 def main():
     match fs.read("examples/receipts/sample.txt"):

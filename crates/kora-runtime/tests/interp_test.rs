@@ -255,3 +255,181 @@ fn wrong_constructor_arity_hint() {
     assert!(err.message.contains("takes 2 field(s)"));
     assert!(err.hint.as_deref().unwrap_or("").contains("x, y"));
 }
+
+// --- `case` guards and `else` bindings ---
+//
+// Both exist for the same reason: chaining model calls otherwise nests one
+// level per call, and the happy path ends up buried at the bottom of a
+// pyramid. These tests pin the behaviour that makes the flat form safe.
+
+#[test]
+fn guard_selects_a_later_arm_with_the_same_pattern() {
+    let src = r#"
+match Ok(3):
+    case Ok(v) if v > 10:
+        print("big")
+    case Ok(v):
+        print(f"small {v}")
+"#;
+    assert_eq!(run(src), vec!["small 3"]);
+}
+
+#[test]
+fn guard_reads_the_patterns_binders() {
+    let src = r#"
+match Ok(42):
+    case Ok(v) if v == 42:
+        print("exactly")
+    case _:
+        print("no")
+"#;
+    assert_eq!(run(src), vec!["exactly"]);
+}
+
+#[test]
+fn guards_are_tried_in_order() {
+    let src = r#"
+for n in [1, 7, 20]:
+    match Ok(n):
+        case Ok(v) if v > 10:
+            print("big")
+        case Ok(v) if v > 5:
+            print("medium")
+        case Ok(v):
+            print("small")
+"#;
+    assert_eq!(run(src), vec!["small", "medium", "big"]);
+}
+
+#[test]
+fn every_matching_arm_rejected_by_its_guard_says_so() {
+    let src = r#"
+match Ok(1):
+    case Ok(v) if v > 10:
+        print("big")
+"#;
+    let err = run_err(src);
+    assert!(
+        err.contains("rejected by its guard"),
+        "an arm refused by a guard should not be reported as an unmatched value: {err}"
+    );
+}
+
+#[test]
+fn a_guard_cannot_call_a_model_even_through_a_helper() {
+    let src = r#"
+type J:
+    ok: bool
+
+def sneaky(x: str) -> bool:
+    r: J = analyze(x, "well?")
+    match r:
+        case Ok(v):
+            return v.ok
+        case _:
+            return False
+
+agent main():
+    with mock analyze -> Ok(J(True)):
+        match Ok(1):
+            case Ok(v) if sneaky("hi"):
+                print("spent budget in a guard")
+            case _:
+                print("no")
+"#;
+    let err = run_err(src);
+    assert!(
+        err.contains("guard cannot call a model"),
+        "a guard reaching analyze indirectly must still be refused: {err}"
+    );
+}
+
+#[test]
+fn else_binding_unwraps_ok_and_takes_the_failure_path() {
+    let src = r#"
+def degrade(outcome, fallback: str) -> str:
+    v = outcome else:
+        return fallback
+    return f"got {v}"
+
+print(degrade(Ok("hi"), "fb"))
+print(degrade(Uncertain("meh"), "fb"))
+print(degrade(Exhausted("tokens"), "fb"))
+print(degrade(Err("nope"), "fb"))
+"#;
+    assert_eq!(run(src), vec!["got hi", "fb", "fb", "fb"]);
+}
+
+#[test]
+fn else_binding_can_name_the_reason() {
+    let src = r#"
+def why(outcome) -> str:
+    v = outcome else (reason):
+        return f"failed: {reason}"
+    return f"got {v}"
+
+print(why(Uncertain("too vague")))
+print(why(Exhausted("tokens")))
+"#;
+    assert_eq!(run(src), vec!["failed: too vague", "failed: tokens"]);
+}
+
+#[test]
+fn else_binding_can_continue_a_loop() {
+    let src = r#"
+total = 0
+for item in [Ok(1), Uncertain("x"), Ok(2), Exhausted("t"), Ok(3)]:
+    v = item else:
+        continue
+    total = total + v
+print(total)
+"#;
+    assert_eq!(run(src), vec!["6"]);
+}
+
+#[test]
+fn else_binding_refuses_a_value_that_is_not_an_outcome() {
+    let err = run_err("v = 5 else:\n    print(\"x\")\n");
+    assert!(
+        err.contains("expects an outcome"),
+        "a plain value must not be treated as success: {err}"
+    );
+}
+
+#[test]
+fn matching_a_classified_outcome_finds_the_arm_and_keeps_the_label() {
+    // Reading structure through a label must not change which arm runs, and
+    // must not strip the label off what the arm binds.
+    let src = r#"
+use fs
+
+classified secret = Ok("password123")
+match secret:
+    case Ok(v):
+        fs.write("/tmp/kora-should-not-exist.txt", v)
+    case _:
+        print("wrong arm")
+"#;
+    let err = run_err(src);
+    assert!(
+        err.contains("classified data"),
+        "destructuring a classified outcome must not launder the label: {err}"
+    );
+}
+
+#[test]
+fn else_binding_keeps_the_label_of_a_classified_outcome() {
+    let src = r#"
+use fs
+
+classified outcome = Ok("password123")
+v = outcome else:
+    print("no")
+fs.write("/tmp/kora-should-not-exist.txt", v)
+"#;
+    let err = run_err(src);
+    assert!(
+        err.contains("classified data"),
+        "unwrapping a classified outcome must not launder the label: {err}"
+    );
+}

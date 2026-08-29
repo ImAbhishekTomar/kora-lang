@@ -38,6 +38,8 @@ agent review(emp: Employee) -> str:
             return f"{emp.name}: needs a human ({reason})"
         case Exhausted(meter):
             return f"{emp.name}: budget out of {meter}"
+        case Failed(why):
+            return f"{emp.name}: provider did not answer: {why}"
 
 def main():
     team = [

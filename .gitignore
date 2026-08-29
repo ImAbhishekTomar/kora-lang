@@ -25,3 +25,5 @@
 # `vendor/` is deliberate and committed, unlike `.kora/`. Not ignored.
 .vercel
 .env*
+site.zip
+ruff.note

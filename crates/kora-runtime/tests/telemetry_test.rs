@@ -242,3 +242,41 @@ def main():
         "the secret reached the trace:\n{text}"
     );
 }
+
+/// A call the budget refused still produces a span.
+///
+/// `x = analyze(...) else:` can swallow an `Exhausted` on its way to a
+/// fallback. If the refusal left no trace, the run that quietly did the least
+/// would look like the cheapest one, which is the opposite of what a budget is
+/// for.
+#[test]
+fn a_budget_refused_call_is_still_traced() {
+    let src = r#"type Answer:
+    text: str
+
+agent ask() -> str:
+    budget: max_calls = 0
+    a: Answer = analyze("q", "answer it") else:
+        return "gave up"
+    return a.text
+
+def main():
+    ask()
+"#;
+    let payload = trace(src, Level::Calls, true);
+    let exhausted: Vec<_> = spans(&payload)
+        .into_iter()
+        .filter(|s| {
+            s["attributes"]
+                .as_array()
+                .map(|attrs| attrs.iter().any(|a| a["key"] == "kora.exhausted"))
+                .unwrap_or(false)
+        })
+        .collect();
+    assert_eq!(
+        exhausted.len(),
+        1,
+        "an `Exhausted` swallowed by `else` must still be visible in the trace: {:?}",
+        names(&payload)
+    );
+}

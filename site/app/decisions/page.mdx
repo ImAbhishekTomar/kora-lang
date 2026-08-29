@@ -53,11 +53,97 @@ design changes and should be deliberate.
 - Static types, checked. Type declarations on the left: `e: Expense = ...`.
 - New words (whole list): `analyze`, `tool`, `agent`, `budget`, `parallel for`,
   `classified` / `declassify`, `ask_human`, `test`, `mock`. `use` covers
-  stdlib modules, Python, MCP servers, and other `.ko` files.
+  stdlib modules, Python, MCP servers, and other `.ko` files. Guards and the
+  `else` binding reuse `if` and `else` rather than adding a word.
 - `analyze(data, "prompt")` returns a typed result via schema-constrained
-  output. Result is `Ok(T)` / `Uncertain(reason)` / `Exhausted(meter)`,
-  handled with `match`.
+  output. Result is `Ok(T)` / `Uncertain(reason)` / `Exhausted(meter)` /
+  `Failed(reason)`, handled with `match`.
 - No confidence float. Model must refuse explicitly (`Uncertain`).
+- **A provider that does not answer is `Failed(reason)`, not a crash.** A
+  refused connection, a timeout, a 429, a 5xx: the most common failure in a
+  real agent program used to be the one failure the language had no value for,
+  which made "failure is a value" true of everything except the part that
+  fails most. The runtime decides nothing about what it is worth; the program
+  does.
+  - **`Failed` is not `Uncertain`.** One is the model answering no, the other
+    is nobody answering. They are read by different people and fixed in
+    different places -- a prompt versus a provider -- and a program that
+    retries an `Uncertain` differently from a `Failed` is the normal case, not
+    an exotic one. Collapsing them would hide an outage inside a refusal.
+  - **It is a breaking change, and deliberately not softened.** Every existing
+    three-arm `match` over a model call becomes non-exhaustive the first time a
+    provider blinks. Mapping `Failed` onto `Uncertain` would have avoided that
+    by lying. The unmatched-value error names the arm to add, and `else` was
+    added first so the migration is one line rather than a fourth branch
+    everywhere.
+  - **Journaled, never recorded to a cassette.** A durable run that took the
+    failure branch must take it again on resume, or the replay diverges from
+    the history it is replaying. A cassette is the opposite: it is a fixture,
+    and freezing one afternoon's outage into it would fail every later run for
+    a reason that no longer exists.
+  - **Tokens already spent stay spent.** A tool loop that completed four turns
+    and then lost the provider charged those turns as they happened. A budget
+    that forgave them would let a failing call retry itself into a real bill.
+- **Model calls retry, with backoff, and there is no way to mean "never".**
+  `http` already retries a GET; the model transport was the one place the rule
+  "timeouts and retries are mandatory with defaults" was not applied, and a
+  hosted provider at its rate limit is the ordinary case rather than the
+  exceptional one. `[models] max_retries` tunes it and `0` disables it -- which
+  is honest for a local model on the same machine, where a refused connection
+  means the server is not running and waiting will not start it.
+  - Retried: refused connections, timeouts, 408, 409, 429, and every 5xx.
+    Not retried: the rest of the 4xx range, which is the request being wrong.
+    The classification is made where the failure is observed, not recovered
+    from the error message afterwards.
+  - A provider's `Retry-After` beats any locally computed backoff, capped so
+    that a provider asking for an hour does not hold a thread for one.
+  - The backoff is jittered, because `parallel for` fans out across every core
+    and a shared rate limit hits every branch at once. Unjittered, they all
+    march back into the provider together.
+  - Retrying wraps one HTTP request, not the tool loop around it: a call that
+    has already run three turns does not start over because the fourth request
+    was rate limited.
+- **A `parallel for` branch that raises still fails the loop.** An expected
+  failure is an outcome and comes back as a value in its own slot; a raise is a
+  bug, and a bug in one branch is a bug. What changed is that the error now
+  says how many branches had already finished, because "this is broken" and
+  "this is broken on one input in two hundred" are different problems.
+- **`case` arms take a guard: `case Ok(a) if a.risk == "low":`.** A guard is
+  evaluated with the pattern's binders in scope, and a false one falls through
+  to the next arm. Binders stay bound on a rejected arm, because Kora scopes by
+  function like Python and an arm that had its own scope would be the single
+  exception in the language.
+- **A guard cannot call a model.** Arms are tried in order, so a guard may run
+  for an arm that never executes, and a model call there would make the token
+  cost of a `match` depend on arm order — invisible spending is what budgets
+  exist to prevent. The checker rejects a literal `analyze` in a guard; the
+  runtime refuses one reached through a helper, because whether an arbitrary
+  `def` eventually calls a model is not decidable at check time. Checker for
+  the good message, runtime for the guarantee.
+- **"Every matching arm was guarded off" is its own error**, distinct from "no
+  arm matched". They have different fixes, and sending the reader to the wrong
+  half of the `match` costs more than the branch that tells them apart.
+- **`x: T = <outcome> else:` binds the payload or leaves.** Every model call
+  returns three ways, so chaining them with `match` costs one indentation level
+  per call and buries the path that matters. The `else` form keeps the
+  successful path at its own level and makes failure the exception.
+  - The block **must** diverge (`return` / `break` / `continue`), checked, so
+    the bound name is always defined afterwards. A name that might not exist is
+    worse than a required keyword.
+  - The right-hand side must be an outcome. Treating a plain value as success
+    would mean the failure path could never run, which is a silently dead
+    branch — the thing this language most wants not to have.
+  - It deliberately collapses `Uncertain` and `Exhausted`. That is a real loss:
+    `Exhausted` means the budget ran out, not that the model declined. It is
+    accepted because both are handled identically in the code this exists to
+    flatten, and because the outcome is still recorded — a swallowed
+    `Exhausted` is not an invisible one. When the difference matters, `match`
+    is still there.
+- **Destructuring reads through a label and re-applies it.** `match` on a
+  classified outcome used to skip every `Ok(...)` arm, so a classified value
+  silently took a different branch than the same value unclassified. Reading
+  the structure through the wrapper fixes that; re-applying the label to every
+  binding is what keeps the fix from becoming a laundering hole.
 - Fixes over Python: no GIL, no async coloring, mandatory-at-boundary types,
   no bare except, one packaging story, no mutable-default-arg footgun.
 

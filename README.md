@@ -34,6 +34,9 @@ def main():
   parallel work. Exhaustion is a value, not a crash; partial work survives.
 - **Typed model calls** — `analyze(data, "prompt")` returns your declared
   type or an explicit `Uncertain`. No raw-string parsing, no confidence theater.
+- **A provider outage is a value too** — calls retry with backoff, and a
+  provider that still does not answer comes back as `Failed(reason)` rather
+  than taking the run down with it.
 - **Record/replay + OpenTelemetry built into the runtime** — deterministic
   CI with zero tokens; every agent and call is a span.
 - **Source-derived packages** — only packages a program imports are fetched
@@ -116,6 +119,8 @@ agent review(customer: Customer) -> str:
             return f"needs a human: {why}"
         case Exhausted(meter):
             return f"out of {meter}"
+        case Failed(why):
+            return f"the provider did not answer: {why}"
 
 def main():
     with budget(max_tokens = 50000):
@@ -410,8 +415,8 @@ error: the mock is missing field `summary`
 
 An untyped mocking framework cannot catch that — it has no idea what the call
 site expected, so a mock that drifts from reality keeps passing. And the
-failure paths nobody tests today (`Uncertain`, `Exhausted`) are forceable,
-because they are ordinary values.
+failure paths nobody tests today (`Uncertain`, `Exhausted`, `Failed`) are
+forceable, because they are ordinary values.
 
 ## Editor support
 

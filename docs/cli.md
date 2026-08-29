@@ -254,6 +254,7 @@ smart   = "openai:gpt-4o"           # needs OPENAI_API_KEY
 vision  = "local:gemma4:12b"        # named by `analyze(..., model="vision")`
 
 timeout_secs = 600                  # one model call; 0 is clamped, not honoured
+max_retries = 2                     # three attempts; 0 turns retrying off
 
 [models.openai]
 max_output_tokens = 4096            # bounds worst-case budget reservation

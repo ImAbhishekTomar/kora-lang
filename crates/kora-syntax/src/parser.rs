@@ -112,6 +112,13 @@ impl Parser {
             let ty = self.type_expr()?;
             self.expect(&TokenKind::Eq, "expected `=` after type annotation")?;
             let value = self.expression()?;
+            if self.check(&TokenKind::Else) {
+                let name = match &expr.kind {
+                    ExprKind::Name(n) => n.clone(),
+                    _ => unreachable!("annotated assignment target is a name"),
+                };
+                return self.bind_or_else(name, Some(ty), value, false, span);
+            }
             self.expect_newline("assignment")?;
             return Ok(Stmt {
                 kind: StmtKind::Assign {
@@ -142,6 +149,19 @@ impl Parser {
                 return self.parallel_for(Some(name));
             }
             let value = self.expression()?;
+            if self.check(&TokenKind::Else) {
+                let name = match &expr.kind {
+                    ExprKind::Name(n) => n.clone(),
+                    _ => {
+                        return Err(SyntaxError::new(
+                            "`else` binding requires a plain variable on the left",
+                            expr.span,
+                        )
+                        .with_hint("write `name = <outcome> else:`"))
+                    }
+                };
+                return self.bind_or_else(name, None, value, false, span);
+            }
             self.expect_newline("assignment")?;
             return Ok(Stmt {
                 kind: StmtKind::Assign {
@@ -559,6 +579,9 @@ impl Parser {
         };
         self.expect(&TokenKind::Eq, "expected `=` in a classified declaration")?;
         let value = self.expression()?;
+        if self.check(&TokenKind::Else) {
+            return self.bind_or_else(name, ty, value, true, span);
+        }
         self.expect_newline("declaration")?;
         Ok(Stmt {
             kind: StmtKind::Assign {
@@ -569,6 +592,43 @@ impl Parser {
                 ty,
                 value,
                 classified: true,
+            },
+            span,
+        })
+    }
+
+    /// The tail of `name = <outcome> else:` -- called with the cursor on
+    /// `else`, after the value expression has been parsed.
+    ///
+    /// `else (reason):` names why the outcome was not successful. Without it
+    /// the reason is dropped, which is why the runtime still records the
+    /// outcome: a swallowed `Exhausted` must not become an invisible one.
+    fn bind_or_else(
+        &mut self,
+        name: String,
+        ty: Option<TypeExpr>,
+        value: Expr,
+        classified: bool,
+        span: Span,
+    ) -> Result<Stmt, SyntaxError> {
+        self.advance(); // else
+        let reason = if self.check(&TokenKind::LParen) {
+            self.advance();
+            let bound = self.expect_ident("a name for the reason")?;
+            self.expect(&TokenKind::RParen, "expected `)` after the reason name")?;
+            Some(bound)
+        } else {
+            None
+        };
+        let else_body = self.block("the `else` block of a binding")?;
+        Ok(Stmt {
+            kind: StmtKind::BindOrElse {
+                name,
+                ty,
+                value,
+                classified,
+                reason,
+                else_body,
             },
             span,
         })
@@ -835,9 +895,18 @@ impl Parser {
             let arm_span = self.peek_span();
             self.advance(); // case
             let pattern = self.pattern()?;
+            // `case P if cond:` -- the guard sits between the pattern and the
+            // `:`, so the block parser below still sees what it expects.
+            let guard = if self.check(&TokenKind::If) {
+                self.advance();
+                Some(self.expression()?)
+            } else {
+                None
+            };
             let body = self.block("case body")?;
             arms.push(MatchArm {
                 pattern,
+                guard,
                 body,
                 span: arm_span,
             });

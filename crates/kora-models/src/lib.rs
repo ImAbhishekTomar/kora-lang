@@ -66,6 +66,14 @@ pub struct ModelConfig {
     /// How long to wait for one response. There is no "off": a request that
     /// waits forever is the most common way a program hangs.
     pub timeout_secs: u64,
+    /// How many times to retry a request that failed for a reason that may
+    /// not repeat: a refused connection, a timeout, a 429, a 5xx.
+    ///
+    /// There is no "off" for the same reason `http` retries a GET: a provider
+    /// under load is the ordinary case, not the exceptional one, and a
+    /// program that gives up on the first 429 is a program that gives up
+    /// several times an hour.
+    pub max_retries: u32,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -151,17 +159,47 @@ pub enum AnalyzeOutcome {
         tokens_in: u64,
         tokens_out: u64,
     },
+    /// The provider did not answer: refused connection, timeout, rate limit,
+    /// server error, or a response that was not a model response at all.
+    ///
+    /// Distinct from `Uncertain`, which is the model answering "no". These
+    /// have different fixes -- one is a prompt, the other is a provider --
+    /// and collapsing them would hide an outage inside a refusal.
+    ///
+    /// Token counts are what the call had already spent when it failed: a
+    /// tool loop may have completed several turns before the provider
+    /// stopped answering, and that spend is real.
+    Failed {
+        reason: String,
+        tokens_in: u64,
+        tokens_out: u64,
+    },
 }
 
 #[derive(Debug)]
 pub struct ModelError {
     pub message: String,
+    /// Whether trying the same request again could plausibly succeed.
+    ///
+    /// Set where the failure is observed rather than guessed at from the
+    /// message afterwards: only the transport knows that a 429 is worth
+    /// waiting on and a 401 never will be.
+    pub retryable: bool,
 }
 
 impl ModelError {
     pub fn new(message: impl Into<String>) -> Self {
         ModelError {
             message: message.into(),
+            retryable: false,
+        }
+    }
+
+    /// A failure that may not repeat: connection refused, timeout, 429, 5xx.
+    pub fn retryable(message: impl Into<String>) -> Self {
+        ModelError {
+            message: message.into(),
+            retryable: true,
         }
     }
 }
