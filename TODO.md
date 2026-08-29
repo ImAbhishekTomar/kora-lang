@@ -99,6 +99,7 @@ The problem other ecosystems cannot fix, and what Kora does instead:
 - [x] Add and connect every sidebar page shown in the selected documentation
       reference, then verify the full navigation.
 - [x] Run the site build and documentation checks after the content refresh.
+- [x] Tighten the landing page hero, proof row, and footer spacing to match the supplied reference composition.
 
 ## Queue
 

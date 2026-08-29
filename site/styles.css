@@ -52,3 +52,35 @@ body:has(.kora-landing) article { padding:0 !important; }
 @media (min-width:651px) and (max-height:880px) { .landing-mascot-area>img { width:min(31rem,100%); } }
 .landing-proof { grid-template-columns:1.08fr .92fr; }.landing-feature-list { align-items:stretch; }.landing-feature-list article { box-sizing:border-box; min-height:0; height:14.3rem; }.landing-feature-list span svg { width:1.65rem; height:1.65rem; }.landing-feature-list h2 { white-space:nowrap; }
 @media (min-width:651px) and (max-height:880px) { .landing-feature-list article { height:10.9rem; }.landing-feature-list span svg { width:1.25rem; height:1.25rem; }.landing-feature-list h2 { white-space:normal; } }
+
+/* Reference composition tuning: keep the hero and proof row visible together on short desktop screens. */
+@media (min-width:651px) {
+  .kora-landing { overflow-x:hidden; }
+  .landing-nav,.landing-hero-section,.landing-proof,.landing-footer { width:min(100% - 6rem, 1376px); }
+  .landing-nav { min-height:4.2rem; }
+  .landing-hero-section { grid-template-columns:minmax(0, .9fr) minmax(0, 1.1fr); gap:2rem; min-height:0; padding:1.15rem 0 .8rem; }
+  .landing-hero-copy h1 { font-size:clamp(3.5rem, 5.2vw, 5.35rem); line-height:.91; }
+  .landing-hero-copy>p { max-width:30rem; margin-top:1rem; font-size:1rem; }
+  .landing-ctas { margin-top:1.35rem; }
+  .landing-mascot-area { min-height:20rem; }
+  .landing-mascot-area>img { width:min(34rem, 100%); }
+  .landing-proof { grid-template-columns:1.08fr .92fr; gap:1.25rem; padding-top:.7rem; }
+  .landing-feature-list { gap:.8rem; }
+  .landing-feature-list article { height:12.4rem; padding:1rem; }
+  .landing-feature-list h2 { margin:.65rem 0 .4rem; font-size:1.05rem; }
+  .landing-feature-list p { font-size:.78rem; line-height:1.42; }
+  .landing-run-card pre { min-height:12.4rem; }
+  .landing-footer { margin-top:.8rem; padding:.65rem 0 .9rem; }
+}
+@media (min-width:651px) and (max-height:820px) {
+  .landing-hero-section { padding-top:.7rem; padding-bottom:.35rem; }
+  .landing-mascot-area { min-height:17rem; }
+  .landing-mascot-area>img { width:min(29rem, 100%); }
+  .landing-feature-list article,.landing-run-card pre { height:10.8rem; min-height:10.8rem; }
+  .landing-footer { margin-top:.45rem; padding-top:.4rem; }
+}
+@media (max-width:650px) {
+  .landing-hero-section { gap:1rem; padding-bottom:0; }
+  .landing-mascot-area { min-height:13rem; overflow:hidden; }
+  .landing-mascot-area>img { position:static; display:block; width:min(25rem, 100%); margin:0 auto; }
+}
