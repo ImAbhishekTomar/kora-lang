@@ -206,3 +206,179 @@ fn a_packages_types_survive_the_parallel_boundary() {
     );
     assert_eq!(run(&main).unwrap(), vec!["left.example", "left.example"]);
 }
+
+// --- capability grants ---
+//
+// A dependency has no ambient authority. What these pin down is that the
+// confinement follows *execution*, not the call site: a package cannot shed
+// it by spawning, by being called through a tool, or by handing work to a
+// dependency of its own.
+
+#[test]
+fn a_dependency_cannot_reach_the_filesystem_ungranted() {
+    let scratch = Scratch::new("nofs");
+    scratch.write("kora.toml", "[dependencies.reader]\npath = \"./reader\"\n");
+    scratch.write("reader/kora.toml", "[package]\nname = \"reader\"\n");
+    scratch.write(
+        "reader/src/lib.ko",
+        "use fs\n\ndef peek(p: str) -> str:\n    match fs.read(p):\n        case Ok(t):\n            return t\n        case Err(w):\n            return \"no\"\n",
+    );
+    let main = scratch.write(
+        "main.ko",
+        "use pkg reader as r\n\ndef main():\n    print(r.peek(\"kora.toml\"))\n",
+    );
+    let err = run(&main).unwrap_err();
+    assert!(err.contains("not allowed to use `fs`"), "{err}");
+}
+
+#[test]
+fn a_granted_capability_lets_the_call_through() {
+    let scratch = Scratch::new("withfs");
+    scratch.write(
+        "kora.toml",
+        "[dependencies.reader]\npath = \"./reader\"\ngrants = { fs = true }\n",
+    );
+    scratch.write("reader/kora.toml", "[package]\nname = \"reader\"\n");
+    let data = scratch.write("reader/data.txt", "contents");
+    scratch.write(
+        "reader/src/lib.ko",
+        "use fs\n\ndef peek(p: str) -> str:\n    match fs.read(p):\n        case Ok(t):\n            return t\n        case Err(w):\n            return \"no\"\n",
+    );
+    // An absolute path: `fs` resolves against the process's working
+    // directory, which is the crate root under `cargo test`.
+    let main = scratch.write(
+        "main.ko",
+        &format!(
+            "use pkg reader as r\n\ndef main():\n    print(r.peek(\"{}\"))\n",
+            data.display()
+        ),
+    );
+    assert_eq!(run(&main).unwrap(), vec!["contents"]);
+}
+
+#[test]
+fn confinement_survives_a_parallel_for() {
+    // A worker is a fresh interpreter. If grants did not cross that
+    // boundary, spawning would be the way out of the sandbox.
+    let scratch = Scratch::new("parallel-escape");
+    scratch.write("kora.toml", "[dependencies.reader]\npath = \"./reader\"\n");
+    scratch.write("reader/kora.toml", "[package]\nname = \"reader\"\n");
+    scratch.write(
+        "reader/src/lib.ko",
+        "use fs\n\nagent sneak(n: int) -> str:\n    match fs.read(\"kora.toml\"):\n        case Ok(t):\n            return \"LEAKED\"\n        case Err(w):\n            return \"no\"\n\ndef escape() -> str:\n    out = parallel for i in range(2):\n        return sneak(i)\n    return out[0]\n",
+    );
+    let main = scratch.write(
+        "main.ko",
+        "use pkg reader as r\n\ndef main():\n    print(r.escape())\n",
+    );
+    let err = run(&main).unwrap_err();
+    assert!(err.contains("not allowed to use `fs`"), "{err}");
+}
+
+#[test]
+fn confinement_follows_a_tool_a_model_would_call() {
+    let scratch = Scratch::new("tool-escape");
+    scratch.write("kora.toml", "[dependencies.reader]\npath = \"./reader\"\n");
+    scratch.write("reader/kora.toml", "[package]\nname = \"reader\"\n");
+    scratch.write(
+        "reader/src/lib.ko",
+        "use fs\n\ntool sniff(p: str) -> str:\n    \"Read a file.\"\n    match fs.read(p):\n        case Ok(t):\n            return \"LEAKED\"\n        case Err(w):\n            return \"no\"\n",
+    );
+    let main = scratch.write(
+        "main.ko",
+        "use pkg reader as r\n\ndef main():\n    print(r.sniff(\"kora.toml\"))\n",
+    );
+    let err = run(&main).unwrap_err();
+    assert!(err.contains("not allowed to use `fs`"), "{err}");
+}
+
+#[test]
+fn a_dependency_cannot_declassify_by_default() {
+    // Otherwise adding a dependency becomes the way to launder a secret out
+    // of a program.
+    let scratch = Scratch::new("launder");
+    scratch.write(
+        "kora.toml",
+        "[sinks]\nlocal_model = { allow = [\"classified\"] }\n\n[dependencies.reader]\npath = \"./reader\"\n",
+    );
+    scratch.write("reader/kora.toml", "[package]\nname = \"reader\"\n");
+    scratch.write(
+        "reader/src/lib.ko",
+        "def launder(secret: str) -> str:\n    declassify secret as s for local_model:\n        return s\n    return \"\"\n",
+    );
+    let main = scratch.write(
+        "main.ko",
+        "use pkg reader as r\n\ndef main():\n    classified token = \"sk-secret\"\n    print(r.launder(token))\n",
+    );
+    let err = run(&main).unwrap_err();
+    assert!(err.contains("not allowed to declassify"), "{err}");
+}
+
+#[test]
+fn declassify_needs_the_sink_as_well_as_the_permission() {
+    let scratch = Scratch::new("sink-grant");
+    scratch.write(
+        "kora.toml",
+        "[sinks]\nlocal_model = { allow = [\"classified\"] }\n\n[dependencies.reader]\npath = \"./reader\"\ngrants = { declassify = true }\n",
+    );
+    scratch.write("reader/kora.toml", "[package]\nname = \"reader\"\n");
+    scratch.write(
+        "reader/src/lib.ko",
+        "def launder(secret: str) -> str:\n    declassify secret as s for local_model:\n        return s\n    return \"\"\n",
+    );
+    let main = scratch.write(
+        "main.ko",
+        "use pkg reader as r\n\ndef main():\n    classified token = \"sk-secret\"\n    print(r.launder(token))\n",
+    );
+    let err = run(&main).unwrap_err();
+    assert!(err.contains("not allowed to release data to"), "{err}");
+}
+
+#[test]
+fn a_dependency_cannot_pass_on_a_capability_it_lacks() {
+    // `receipts` grants `helper` the filesystem it was never given itself.
+    let scratch = Scratch::new("capped-runtime");
+    scratch.write(
+        "kora.toml",
+        "[dependencies.receipts]\npath = \"./receipts\"\n",
+    );
+    scratch.write(
+        "receipts/kora.toml",
+        "[package]\nname = \"receipts\"\n\n[dependencies.helper]\npath = \"../helper\"\ngrants = { fs = true }\n",
+    );
+    scratch.write(
+        "receipts/src/lib.ko",
+        "use pkg helper as h\n\ndef go() -> str:\n    return h.peek(\"kora.toml\")\n",
+    );
+    scratch.write("helper/kora.toml", "[package]\nname = \"helper\"\n");
+    scratch.write(
+        "helper/src/lib.ko",
+        "use fs\n\ndef peek(p: str) -> str:\n    match fs.read(p):\n        case Ok(t):\n            return \"LEAKED\"\n        case Err(w):\n            return \"no\"\n",
+    );
+    let main = scratch.write(
+        "main.ko",
+        "use pkg receipts as r\n\ndef main():\n    print(r.go())\n",
+    );
+    let err = run(&main).unwrap_err();
+    assert!(err.contains("not allowed to use `fs`"), "{err}");
+}
+
+#[test]
+fn the_root_program_keeps_its_own_authority() {
+    // Grants confine dependencies. A program is bounded by its own
+    // kora.toml and nothing else, or every program predating them breaks.
+    let scratch = Scratch::new("root-free");
+    scratch.write("kora.toml", "[dependencies]\n");
+    scratch.write("data.txt", "mine");
+    let main = scratch.write(
+        "main.ko",
+        "use fs\n\ndef main():\n    match fs.read(\"data.txt\"):\n        case Ok(t):\n            print(t)\n        case Err(w):\n            print(\"no\")\n",
+    );
+    // Paths resolve against the process's working directory, so this only
+    // needs to reach the module at all — the point is that it is not refused.
+    let out = run(&main);
+    assert!(
+        !format!("{out:?}").contains("not allowed"),
+        "the root program must not be confined: {out:?}"
+    );
+}

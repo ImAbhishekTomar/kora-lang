@@ -599,6 +599,30 @@ impl Interpreter {
                 let released = self.eval(value, scope)?;
                 let label = released.label();
 
+                // Releasing classified data is authority of its own. Off by
+                // default, because adding a dependency must not become the
+                // way to launder a secret out of a program.
+                if !self.grants().allows_declassify() {
+                    let package = self.current_package_name();
+                    return Err(RuntimeError::new(
+                        format!("package `{package}` is not allowed to declassify"),
+                        stmt.span,
+                    )
+                    .with_hint(format!(
+                        "if that is intended, grant it in kora.toml: `[dependencies.{package}]` with `grants = {{ declassify = true }}`"
+                    )));
+                }
+                if !self.grants().allows_sink(sink) {
+                    let package = self.current_package_name();
+                    return Err(RuntimeError::new(
+                        format!("package `{package}` is not allowed to release data to `{sink}`"),
+                        stmt.span,
+                    )
+                    .with_hint(format!(
+                        "grant it in kora.toml: `[dependencies.{package}]` with `grants = {{ sinks = [\"{sink}\"] }}`"
+                    )));
+                }
+
                 if !self.sinks.is_known_sink(sink) {
                     let known = self.sinks.known_sinks();
                     let mut err =
@@ -3433,6 +3457,57 @@ impl Interpreter {
         self.modules[self.current_module].path.clone()
     }
 
+    /// The authority the package running right now holds.
+    ///
+    /// Read through `current_module`, so it follows execution across a
+    /// package boundary automatically: a `tool` defined in a dependency runs
+    /// under that dependency's grants even when a model called it.
+    fn grants(&self) -> &kora_pkg::Grants {
+        static UNRESTRICTED: std::sync::OnceLock<kora_pkg::Grants> = std::sync::OnceLock::new();
+        let package = self.modules[self.current_module].package;
+        self.packages
+            .packages
+            .get(package.0)
+            .map(|p| &p.grants)
+            // A program run without a resolution — an embedded interpreter,
+            // or a test — is the root program, and unrestricted.
+            .unwrap_or_else(|| UNRESTRICTED.get_or_init(kora_pkg::Grants::unrestricted))
+    }
+
+    /// The name of the package running right now, for error messages.
+    fn current_package_name(&self) -> String {
+        let package = self.modules[self.current_module].package;
+        self.packages
+            .packages
+            .get(package.0)
+            .and_then(|p| p.name.clone())
+            .unwrap_or_else(|| "this program".to_string())
+    }
+
+    /// Refuse an effect the running package was never granted.
+    fn require_capability(
+        &self,
+        capability: kora_pkg::Capability,
+        what: &str,
+        span: Span,
+    ) -> Result<(), RuntimeError> {
+        if self.grants().allows(capability) {
+            return Ok(());
+        }
+        let package = self.current_package_name();
+        Err(RuntimeError::new(
+            format!(
+                "package `{package}` is not allowed to use {what}: no `{}` capability",
+                capability.name()
+            ),
+            span,
+        )
+        .with_hint(format!(
+            "grant it in kora.toml: `[dependencies.{package}]` with `grants = {{ {} = true }}`",
+            capability.name()
+        )))
+    }
+
     /// Qualify a bare type name with the package the current file belongs to.
     ///
     /// Types are shared across the *files* of one package, exactly as before,
@@ -3682,6 +3757,13 @@ impl Interpreter {
             )
             .with_hint(format!("{module_name} provides: {}", available.join(", "))));
         };
+        // Every stdlib call passes through here, so one check covers the
+        // network, the filesystem, the database, and the environment. The
+        // modules with no entry — json, csv, re, time — compute over values
+        // the caller already holds, and have nothing to gate.
+        if let Some(capability) = kora_pkg::Capability::for_module(module_name) {
+            self.require_capability(capability, &format!("`{module_name}`"), span)?;
+        }
         native(self, args, span)
     }
 
@@ -3972,6 +4054,18 @@ impl Interpreter {
 impl Interpreter {
     /// Start a configured server, or reuse one already connected.
     fn connect_mcp(&mut self, name: &str, span: Span) -> Result<(), RuntimeError> {
+        // A server is a separate process with credentials of its own, so
+        // reaching one is authority a dependency has to be given by name.
+        if !self.grants().allows_mcp(name) {
+            let package = self.current_package_name();
+            return Err(RuntimeError::new(
+                format!("package `{package}` is not allowed to reach MCP server `{name}`"),
+                span,
+            )
+            .with_hint(format!(
+                "grant it in kora.toml: `[dependencies.{package}]` with `grants = {{ mcp = [\"{name}\"] }}`"
+            )));
+        }
         let mut servers = self.mcp.lock().unwrap_or_else(|e| e.into_inner());
         if servers.contains_key(name) {
             return Ok(());
@@ -4165,6 +4259,7 @@ impl Interpreter {
         args: Vec<Value>,
         span: Span,
     ) -> Result<Value, RuntimeError> {
+        self.require_capability(kora_pkg::Capability::Python, "Python", span)?;
         // Python is a separate process, so it is a sink: a secret released to
         // a model has not been released to Python.
         for arg in &args {
