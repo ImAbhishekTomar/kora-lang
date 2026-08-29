@@ -290,10 +290,15 @@ timeout_secs = 30                   # 0 is clamped, not honoured
 [python]
 command = "python3"                 # or a virtualenv's interpreter
 
+[mcp]                               # defaults for every server below
+timeout_secs = 60                   # one request; 0 is clamped, not honoured
+max_retries = 2                     # starting a server only, never a tool call
+
 [mcp.github]                        # how to launch a server
 command = "npx"
 args = ["-y", "@modelcontextprotocol/server-github"]
 env = { GITHUB_PERSONAL_ACCESS_TOKEN = "$GITHUB_TOKEN" }
+timeout_secs = 120                  # this one reaches a slow API
 
 [telemetry]
 exporter = "file"                   # "file" | "otlp" | omit for none

@@ -34,9 +34,12 @@ def main():
   parallel work. Exhaustion is a value, not a crash; partial work survives.
 - **Typed model calls** — `analyze(data, "prompt")` returns your declared
   type or an explicit `Uncertain`. No raw-string parsing, no confidence theater.
-- **A provider outage is a value too** — calls retry with backoff, and a
+- **An outage is a value too** — model calls retry with backoff, and a
   provider that still does not answer comes back as `Failed(reason)` rather
-  than taking the run down with it.
+  than taking the run down with it. So does an MCP tool server: every request
+  has a deadline, and one that goes quiet ends the call the same way. Tool
+  calls are never retried, because a timeout is exactly when whether the
+  effect ran is unknown.
 - **Record/replay + OpenTelemetry built into the runtime** — deterministic
   CI with zero tokens; every agent and call is a span.
 - **Source-derived packages** — only packages a program imports are fetched

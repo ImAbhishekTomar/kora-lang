@@ -11,6 +11,10 @@
 #   command = "npx"
 #   args = ["-y", "@modelcontextprotocol/server-filesystem", "examples/mcp-data"]
 #
+# A server is a separate process, and a process can wedge, so every request
+# carries a deadline -- `[mcp] timeout_secs`, 60 by default. One that does not
+# answer arrives as `Failed`, below, rather than stopping the program.
+#
 #   kora run examples/08_mcp.ko
 
 use mcp files as fsrv
@@ -34,8 +38,10 @@ agent read_the_directory(question: str) -> str:
             return f"uncertain: {why}"
         case Exhausted(meter):
             return f"budget out of {meter}"
+        # Covers both halves of "nobody answered": the provider, and a tool
+        # server that went quiet. The reason names which.
         case Failed(why):
-            return f"provider did not answer: {why}"
+            return f"no answer: {why}"
 
 def main():
     # `fsrv.tools` is every tool the server offers; `fsrv.read_file` would
