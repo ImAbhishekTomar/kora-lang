@@ -100,8 +100,17 @@ A package reached only through `test` blocks is dev-only and stays out of a
 shipped program. Nothing declares that — there is no `[dev-dependencies]`
 table — and the line says which rule produced the classification.
 
+Each package's line is followed by the authority it holds:
+
+```
+  receipts 0.3.1
+      grants: net, sink:stripe
+```
+
 `kora check` reports the same unused entries as warnings, and errors on a
-`use pkg` naming something no manifest declares.
+`use pkg` naming something no manifest declares, on a package requiring
+authority nobody granted it, and on one package granted two different ways
+by two importers.
 
 ### Durable runs
 
@@ -190,10 +199,13 @@ name    = "receipts"
 version = "0.1.0"
 entry   = "src/lib.ko"              # the default
 
-[dependencies]                      # where a package comes from. Whether it
-receipts = { path = "./receipts" }  # is used is decided by the source, so
+[dependencies.receipts]             # where a package comes from. Whether it
+path = "./receipts"                 # is used is decided by the source, so
                                     # declaring one costs nothing until
                                     # something writes `use pkg receipts`
+grants = { net = true, sinks = ["stripe"] }   # and what it may do. Absent
+                                    # means nothing: a dependency never
+                                    # given the network cannot reach it
 
 [http]
 allow_private = false               # loopback and private ranges refused

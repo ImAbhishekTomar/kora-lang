@@ -334,6 +334,14 @@ Four decisions distinguish it from what everyone else ships:
   before git dependencies, so no package is ever published into an
   unconfined ecosystem. npm's ordering — fetch first, security retrofitted —
   is the mistake being avoided, and it is not recoverable afterwards.
+  Grants are checked where the effect happens, and confinement follows
+  *execution* rather than the call site: a package cannot shed it by
+  spawning, by being reached through a `tool` a model called, or by handing
+  the work to a dependency of its own. A parent may only pass on what it
+  holds, so compromising a leaf gains an attacker nothing that every link
+  above it lacked. One package granted two different ways by two importers is
+  refused: the union would let a permissive importer widen what a careful one
+  withheld, and the intersection would break the permissive one's code.
 
 Ordering from here: type namespacing per package (a flat type table collides
 the moment two third parties both declare `Config`, and the consumer cannot
@@ -367,8 +375,8 @@ Layers 1 through 3 are built. Packages are under way; WASM components wait.
 
 Phases 0 through 6 are complete, as are the standard library, MCP
 integration, the Python sidecar, and images as values. Packages have begun
-with local path dependencies; what remains is capability grants, fetched
-dependencies, and WASM components — see the ecosystem strategy above.
+with local path dependencies and capability grants; what remains is fetched
+dependencies and WASM components — see the ecosystem strategy above.
 
 Reference documentation lives in [docs/](docs): the
 [language](docs/language.md), the [standard library](docs/stdlib.md), and the
@@ -396,7 +404,8 @@ Ecosystem work, sequenced alongside the phases above:
 - Package dependencies (`use pkg`, path dependencies, reachability-derived
   graph) — **done**
 - Per-package type namespacing — **done**
-- Capability grants, git dependencies, lockfile, checksum log — next
+- Per-package capability grants — **done**
+- Git dependencies, lockfile, checksum log — next
 - WASM components — later
 
 Each phase ends with a runnable demo program. Demo programs live in

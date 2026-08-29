@@ -1,3 +1,8 @@
 [package]
 name = "greet"
 version = "0.1.0"
+
+# What this package needs from whoever imports it. A shortfall is reported
+# by `kora check` before the program runs, not at the first call.
+[package.requires]
+fs = true

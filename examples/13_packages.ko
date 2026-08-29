@@ -4,7 +4,7 @@
 # is needed is decided by this file: Kora derives the graph from the source,
 # so a dependency nothing imports is never fetched and never shipped.
 #
-#   kora tree examples/13_packages.ko    # what is actually used, and why
+#   kora tree examples/13_packages.ko    # what is used, what it may do, and why
 #   kora check examples/13_packages.ko   # warns about anything declared and unused
 #
 # A `use pkg` inside a test block makes that package dev-only. Nothing
@@ -16,6 +16,9 @@ use pkg greet as g
 def main():
     print(g.greet("Ada"))
     print(f"the package's own constant: {g.GREETING}")
+    # The package reaches the filesystem because kora.toml granted it `fs`.
+    # Remove that grant and this call is refused inside the package.
+    print(f"files in the package: {g.greeting_count()}")
 
 test "the package function is callable from a test":
     assert g.greet("Bo") == "hello, Bo", "unexpected greeting"

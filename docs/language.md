@@ -555,6 +555,60 @@ error: expected `Config`, got `Config`
            they are different types with the same name
 ```
 
+**A dependency has no ambient authority.** It reaches the network, the
+filesystem, a database, the environment, a Python worker, or an MCP server
+only where the importing program said so:
+
+```toml
+[dependencies.receipts]
+path = "./receipts"
+grants = { net = true, sinks = ["stripe"] }
+```
+
+Note the table form. TOML forbids extending an inline table, so
+`receipts = { path = "..." }` followed by `[dependencies.receipts.grants]` is
+not valid TOML.
+
+Ungranted, a call is refused where it is written:
+
+```
+error: package `reader` is not allowed to use `fs`: no `fs` capability
+   = hint: grant it in kora.toml: `[dependencies.reader]` with `grants = { fs = true }`
+```
+
+The capabilities are `net`, `fs`, `sql`, `env`, and `python`, plus `sinks`
+and `mcp` as lists of names and `declassify` as a flag. `json`, `csv`, `re`,
+and `time` need no grant: they compute over values the caller already holds.
+
+Three rules make this hold up:
+
+- **Confinement follows execution, not the call site.** A package cannot shed
+  it by spawning a `parallel for`, by being reached through a `tool` a model
+  called, or by handing the work to a dependency of its own.
+- **A parent may only pass on what it holds.** Granting `fs` to a dependency
+  you were never given `fs` yourself grants nothing. Compromising a leaf of
+  the graph therefore gains an attacker nothing that every link above it
+  lacked.
+- **`declassify` needs two grants**, the permission and the named sink, and
+  both are off by default. Adding a dependency must not become the way to
+  launder a secret out of a program.
+
+A package states what it needs, and a shortfall is reported before the run
+rather than at whichever call first needs it:
+
+```toml
+[package.requires]
+net = true
+sinks = ["stripe"]
+```
+
+```
+error: package `receipts` requires net, sink `stripe`, but was granted fs
+```
+
+The root program is unrestricted, bounded by its own `kora.toml` and nothing
+else. Capabilities are coarse today — `net = true`, not a list of hosts.
+
 **Test-only packages are derived, not declared.** A package reached only
 through `test` blocks is dev-only and stays out of a shipped program:
 
