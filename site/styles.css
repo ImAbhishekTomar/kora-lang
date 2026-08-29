@@ -66,8 +66,8 @@ body:has(.kora-landing) article { padding:0 !important; }
   .landing-mascot-area>img { width:min(34rem, 100%); }
   .landing-proof { grid-template-columns:1.08fr .92fr; gap:1.25rem; padding-top:.7rem; }
   .landing-feature-list { gap:.8rem; }
-  .landing-feature-list article { height:12.4rem; padding:1rem; }
-  .landing-feature-list h2 { margin:.65rem 0 .4rem; font-size:1.05rem; }
+  .landing-feature-list article { height:12.4rem; padding:1.15rem 1.2rem 1.1rem; }
+  .landing-feature-list h2 { margin:.75rem 0 .45rem; font-size:1.05rem; }
   .landing-feature-list p { font-size:.78rem; line-height:1.42; }
   .landing-run-card pre { min-height:12.4rem; }
   .landing-footer { margin-top:.8rem; padding:.65rem 0 .9rem; }
@@ -76,7 +76,8 @@ body:has(.kora-landing) article { padding:0 !important; }
   .landing-hero-section { padding-top:.7rem; padding-bottom:.35rem; }
   .landing-mascot-area { min-height:17rem; }
   .landing-mascot-area>img { width:min(29rem, 100%); }
-  .landing-feature-list article,.landing-run-card pre { height:10.8rem; min-height:10.8rem; }
+  .landing-feature-list article { height:10.8rem; min-height:10.8rem; padding:.9rem 1rem .85rem; }
+  .landing-run-card pre { height:10.8rem; min-height:10.8rem; }
   .landing-footer { margin-top:.45rem; padding-top:.4rem; }
 }
 @media (max-width:650px) {
