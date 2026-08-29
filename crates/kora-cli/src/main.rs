@@ -229,6 +229,14 @@ fn install_packages(path: &str, jobs: Option<usize>) -> ExitCode {
     if outcome.lock_changed {
         println!("  updated  {}", kora_pkg::Lock::FILE);
     }
+    if outcome.newly_recorded > 0 {
+        println!(
+            "  recorded {} commit{} in {}",
+            outcome.newly_recorded,
+            if outcome.newly_recorded == 1 { "" } else { "s" },
+            kora_pkg::SumLog::FILE
+        );
+    }
 
     let used = outcome.resolution.needed().len();
     if outcome.failed.is_empty() {

@@ -349,8 +349,15 @@ force-pushed tag lands on a machine with a cold cache — the lockfile would be
 rewritten to the attacker's commit and nothing would look wrong. That case is
 a test, because it is the whole reason the file exists.
 
-What remains is an append-only checksum log, so a first fetch by anyone fixes
-what a version means for everyone after.
+An append-only checksum log closes the window the lockfile cannot: a
+project's *first* fetch has nothing to check against, so a backdoor published
+briefly and withdrawn leaves no trace in any lockfile. The first sighting of a
+commit fixes what it contains, and a later disagreement is refused rather than
+resolved. Two logs are consulted — the project's committed `kora.sums`, and a
+machine-level one shared across every project on the computer, so an honest
+fetch in one project protects the next. It is deliberately not a hosted
+transparency log: that needs a service somebody runs, and this narrows the
+window without one.
 
 A manifest has **no field for install scripts**, and will not gain one. That
 is the whole of the `postinstall` attack class, refused by the file format
@@ -379,7 +386,8 @@ Layers 1 through 3 are built. Packages are under way; WASM components wait.
 Phases 0 through 6 are complete, as are the standard library, MCP
 integration, the Python sidecar, and images as values. Packages have begun
 with path and git dependencies, capability grants, and a content-hashed
-lockfile; what remains is the checksum log and WASM components — see the ecosystem strategy above.
+lockfile, and a checksum log; what remains is packaging ergonomics and WASM
+components — see the ecosystem strategy above.
 
 Reference documentation lives in [docs/](docs): the
 [language](docs/language.md), the [standard library](docs/stdlib.md), and the
@@ -409,7 +417,8 @@ Ecosystem work, sequenced alongside the phases above:
 - Per-package type namespacing — **done**
 - Per-package capability grants — **done**
 - Git dependencies, content-hashed lockfile, parallel fetch — **done**
-- Append-only checksum log — next
+- Append-only checksum log — **done**
+- `kora add` / `update` / `vendor`, `kora audit --deps` — next
 - WASM components — later
 
 Each phase ends with a runnable demo program. Demo programs live in

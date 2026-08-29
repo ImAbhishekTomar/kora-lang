@@ -18,6 +18,7 @@ pub(crate) mod lock;
 pub(crate) mod manifest;
 pub(crate) mod resolve;
 mod scan;
+mod sumlog;
 
 pub use fetch::{all as fetch_all, default_jobs, Fetched, Request};
 pub use grants::{Capability, Grants};
@@ -27,3 +28,4 @@ pub use lock::{deps_dir, Lock, Locked};
 pub use manifest::{is_valid_name, Dep, DepSpec, GitRef, Manifest, ManifestError, DEFAULT_ENTRY};
 pub use resolve::{resolve, MissingDep, PackageId, Resolution, ResolvedPackage, UnusedDep, ROOT};
 pub use scan::{imports, Import, Imports};
+pub use sumlog::{SumLog, Verdict};

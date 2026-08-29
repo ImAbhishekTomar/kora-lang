@@ -12,6 +12,7 @@ use std::path::Path;
 use crate::lock::{deps_dir, Lock};
 use crate::manifest::{GitRef, Manifest};
 use crate::resolve::Resolution;
+use crate::sumlog::{SumLog, Verdict};
 
 /// What one install did.
 pub struct Installed {
@@ -22,6 +23,8 @@ pub struct Installed {
     pub failed: Vec<(String, String)>,
     /// Whether the lockfile changed and was rewritten.
     pub lock_changed: bool,
+    /// Commits recorded in the checksum log for the first time.
+    pub newly_recorded: usize,
 }
 
 /// Resolve `entry`, fetching any git dependency that is not on disk.
@@ -38,6 +41,7 @@ pub fn install(entry: &Path, jobs: usize, write_lock: bool) -> Installed {
 
     let mut lock = Lock::at(&root_dir).unwrap_or_default();
     let before = lock.render();
+    let mut sums = SumLog::shared(&root_dir);
     let mut fetched = Vec::new();
     let mut failed = Vec::new();
 
@@ -88,6 +92,35 @@ pub fn install(entry: &Path, jobs: usize, write_lock: bool) -> Installed {
         {
             match outcome {
                 Ok(locked) => {
+                    // What this commit has always meant, to anyone. The
+                    // lockfile cannot help with a project's *first* fetch —
+                    // there is nothing to check against yet — so a backdoor
+                    // published briefly and withdrawn leaves no trace in any
+                    // lockfile. The log is what remembers.
+                    match sums.check(&locked.url, &locked.commit, &locked.hash) {
+                        Verdict::New | Verdict::Known => {}
+                        Verdict::Conflict { recorded } => {
+                            failed.push((
+                                locked.url.clone(),
+                                [
+                                    format!(
+                                        "commit {} does not have the contents it had when \
+                                         first seen",
+                                        &locked.commit[..locked.commit.len().min(12)]
+                                    ),
+                                    format!("recorded {recorded}"),
+                                    format!("fetched  {}", locked.hash),
+                                    "the identity was reused: a rewritten repository, or a \
+                                     release republished as something else"
+                                        .to_string(),
+                                ]
+                                .join("\n"),
+                            ));
+                            continue;
+                        }
+                    }
+                    sums.record(&locked.url, &locked.commit, &locked.hash);
+
                     // A locked repository must come back with the bytes it
                     // had when it was locked. Different bytes under the same
                     // commit means the repository was rewritten.
@@ -127,12 +160,17 @@ pub fn install(entry: &Path, jobs: usize, write_lock: bool) -> Installed {
     if write_lock && lock_changed {
         let _ = lock.write(&root_dir);
     }
+    let newly_recorded = sums.pending();
+    if write_lock {
+        let _ = sums.append_shared(&root_dir);
+    }
 
     Installed {
         resolution,
         fetched,
         failed,
         lock_changed,
+        newly_recorded,
     }
 }
 

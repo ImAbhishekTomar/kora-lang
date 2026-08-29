@@ -90,8 +90,9 @@ kora install program.ko
 kora install --jobs 4 program.ko
 ```
 
-Sources land in `.kora/deps/<repository>@<commit>/` and `kora.lock` records
-what was resolved. Fetching is IO-bound, so the default width is not the core
+Sources land in `.kora/deps/<repository>@<commit>/`, `kora.lock` records what
+was resolved, and `kora.sums` records what each commit contained the first
+time it was seen. Both files are committed; `.kora/` is not. Fetching is IO-bound, so the default width is not the core
 count; `[install] jobs` sets it.
 
 Cold resolution is wave-shaped — what a package depends on is unknowable

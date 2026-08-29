@@ -578,6 +578,35 @@ never the tag again.** A maintainer account taken over and a tag force-pushed
 to a backdoor changes nothing about what runs, including on a machine with a
 cold cache, which is where re-resolving the tag would otherwise land it.
 
+**`kora.sums` records what a commit has always meant.** A lockfile cannot
+help with the fetch that *creates* it — at that moment there is nothing to
+check against, so a backdoor published briefly and withdrawn leaves no trace
+in anybody's lockfile. The first time a commit is seen, its hash is recorded;
+every fetch afterwards is checked against the record instead of re-trusting
+the source.
+
+There are two logs and a fetch is checked against both. The project's
+`kora.sums` is committed, so it is reviewable in a diff and travels with the
+repository. A machine-level log under `~/.kora` is shared across every
+project on that computer, so a package fetched honestly in one project
+protects the next project that reaches for it — which the lockfile, being
+per-project, cannot do.
+
+Both are append-only. A disagreement is refused, never resolved:
+
+```
+error: commit 949d114a6492 does not have the contents it had when first seen
+   recorded sha256:a34b05...
+   fetched  sha256:7c1f92...
+   the identity was reused: a rewritten repository, or a release
+   republished as something else
+```
+
+This is not a hosted transparency log: two machines that have never fetched
+the same package cannot cross-check each other. It narrows the window from
+"every project, every time" to "the first time anyone on this machine, or in
+this repository, ever saw it".
+
 Hashes are checked on every `run`, `test`, and `check`, not only at install:
 a cached dependency edited on disk must not run just because the directory is
 there.
