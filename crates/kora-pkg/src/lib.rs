@@ -11,11 +11,15 @@
 //! the syntax tree cannot miss a use, and nothing has to be guessed.
 
 mod grants;
+mod hash;
+mod lock;
 mod manifest;
 mod resolve;
 mod scan;
 
 pub use grants::{Capability, Grants};
-pub use manifest::{is_valid_name, Dep, DepSpec, Manifest, ManifestError, DEFAULT_ENTRY};
+pub use hash::tree as hash_tree;
+pub use lock::{deps_dir, Lock, Locked};
+pub use manifest::{is_valid_name, Dep, DepSpec, GitRef, Manifest, ManifestError, DEFAULT_ENTRY};
 pub use resolve::{resolve, MissingDep, PackageId, Resolution, ResolvedPackage, UnusedDep, ROOT};
 pub use scan::{imports, Import, Imports};

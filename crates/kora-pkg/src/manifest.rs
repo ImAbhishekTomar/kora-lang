@@ -14,14 +14,42 @@ use std::path::{Path, PathBuf};
 pub const DEFAULT_ENTRY: &str = "src/lib.ko";
 
 /// Where a dependency's source comes from.
-///
-/// Only local paths today. Fetched sources arrive with the lockfile, and the
-/// resolver is written so that adding a variant here is the whole change.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DepSpec {
     /// `receipts = { path = "../receipts" }`, resolved against the manifest
     /// that wrote it.
     Path { path: PathBuf },
+    /// `receipts = { git = "github.com/org/receipts", tag = "v0.3.1" }`.
+    ///
+    /// Identity is the full repository path, never a short name. There is no
+    /// flat namespace to squat in, which is where dependency-confusion
+    /// attacks begin.
+    Git { url: String, reference: GitRef },
+}
+
+/// Which revision of a repository a dependency names.
+///
+/// What a human writes is a tag or a branch; what is actually used is the
+/// commit the lockfile pinned. A tag can be moved and a branch always does,
+/// so neither is an identity on its own.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GitRef {
+    Tag(String),
+    Branch(String),
+    Commit(String),
+    /// No reference given: the repository's default branch.
+    Default,
+}
+
+impl GitRef {
+    pub fn describe(&self) -> String {
+        match self {
+            GitRef::Tag(t) => t.clone(),
+            GitRef::Branch(b) => b.clone(),
+            GitRef::Commit(c) => c.clone(),
+            GitRef::Default => "default branch".to_string(),
+        }
+    }
 }
 
 /// One dependency entry, kept with the position it was written at so an
@@ -180,18 +208,40 @@ fn parse_dep(name: &str, spec: &toml::Value) -> Result<Dep, ManifestError> {
             .with_hint(format!("write `{name} = {{ path = \"../{name}\" }}`"))
     })?;
 
-    let Some(path) = table.get("path").and_then(|v| v.as_str()) else {
-        return Err(
-            ManifestError::new(format!("dependency `{name}` has no source"))
-                .with_hint(format!("write `{name} = {{ path = \"../{name}\" }}`")),
-        );
-    };
-
     let grants = table
         .get("grants")
         .and_then(|v| v.as_table())
         .map(Grants::from_toml)
         .unwrap_or_default();
+
+    if let Some(url) = table.get("git").and_then(|v| v.as_str()) {
+        let reference = if let Some(tag) = table.get("tag").and_then(|v| v.as_str()) {
+            GitRef::Tag(tag.to_string())
+        } else if let Some(branch) = table.get("branch").and_then(|v| v.as_str()) {
+            GitRef::Branch(branch.to_string())
+        } else if let Some(commit) = table.get("rev").and_then(|v| v.as_str()) {
+            GitRef::Commit(commit.to_string())
+        } else {
+            GitRef::Default
+        };
+        return Ok(Dep {
+            name: name.to_string(),
+            spec: DepSpec::Git {
+                url: normalize_git_url(url),
+                reference,
+            },
+            grants,
+        });
+    }
+
+    let Some(path) = table.get("path").and_then(|v| v.as_str()) else {
+        return Err(
+            ManifestError::new(format!("dependency `{name}` has no source")).with_hint(format!(
+                "write `{name} = {{ path = \"../{name}\" }}` or \
+                 `{name} = {{ git = \"github.com/org/{name}\", tag = \"v1.0.0\" }}`"
+            )),
+        );
+    };
 
     Ok(Dep {
         name: name.to_string(),
@@ -200,6 +250,23 @@ fn parse_dep(name: &str, spec: &toml::Value) -> Result<Dep, ManifestError> {
         },
         grants,
     })
+}
+
+/// Strip a scheme and any trailing `.git`, so one repository is one identity.
+///
+/// `https://github.com/org/x`, `github.com/org/x`, and
+/// `https://github.com/org/x.git` name the same thing. Treating them as three
+/// would put three copies in the graph and three rows in the lockfile.
+fn normalize_git_url(url: &str) -> String {
+    let url = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+        .or_else(|| url.strip_prefix("ssh://"))
+        .unwrap_or(url);
+    url.strip_suffix(".git")
+        .unwrap_or(url)
+        .trim_end_matches('/')
+        .to_string()
 }
 
 /// Package names are Kora identifiers, so `use pkg <name>` can bind the name

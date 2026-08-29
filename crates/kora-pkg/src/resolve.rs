@@ -20,7 +20,8 @@ use std::path::{Path, PathBuf};
 use kora_syntax::token::Span;
 
 use crate::grants::Grants;
-use crate::manifest::{DepSpec, Manifest};
+use crate::lock::{deps_dir, Lock};
+use crate::manifest::{Dep, DepSpec, Manifest};
 use crate::scan;
 
 /// Index into [`Resolution::packages`]. Zero is the root program.
@@ -44,6 +45,8 @@ pub struct ResolvedPackage {
     /// The authority this package actually holds, after being capped by
     /// every parent that granted to it.
     pub grants: Grants,
+    /// The repository this came from, when it was fetched rather than pathed.
+    pub git: Option<String>,
 }
 
 /// A dependency declared in a manifest that no source file imports.
@@ -72,6 +75,19 @@ pub struct GrantShortfall {
     pub package: String,
     pub missing: Vec<String>,
     pub granted: String,
+}
+
+/// A git dependency that has not been fetched, or is absent from the lock.
+///
+/// Reported rather than fatal, so `kora check` can say what to run instead of
+/// failing on the first import.
+#[derive(Debug, Clone)]
+pub struct Unfetched {
+    pub name: String,
+    pub url: String,
+    pub reference: String,
+    /// Whether the lockfile knows about it at all.
+    pub locked: bool,
 }
 
 /// A `use pkg` that names something the manifest does not declare.
@@ -103,6 +119,10 @@ pub struct Resolution {
     /// "this package has no dependencies", which is exactly the wrong
     /// conclusion to draw from a typo.
     pub bad_manifests: Vec<(PathBuf, String)>,
+    /// Git dependencies whose source is not on disk yet.
+    pub unfetched: Vec<Unfetched>,
+    /// Fetched trees whose bytes no longer match the lockfile.
+    pub tampered: Vec<(String, String, String)>,
 }
 
 impl Resolution {
@@ -124,9 +144,25 @@ impl Resolution {
     pub fn dep_of(&self, from: PackageId, name: &str) -> Option<&ResolvedPackage> {
         let parent = self.packages.get(from.0)?;
         let dep = parent.manifest.deps.get(name)?;
-        let DepSpec::Path { path } = &dep.spec;
-        let root = canonical(&parent.root.join(path));
-        self.packages.iter().find(|p| p.root == root)
+        // Every resolved package already knows its own root, so the name is
+        // matched against what resolution produced rather than recomputed.
+        // A git dependency's directory depends on the lockfile, and this
+        // must give the same answer resolution did.
+        self.packages
+            .iter()
+            .find(|p| p.name.as_deref() == Some(name) && self.parented_by(p, parent, dep))
+    }
+
+    fn parented_by(
+        &self,
+        candidate: &ResolvedPackage,
+        parent: &ResolvedPackage,
+        dep: &Dep,
+    ) -> bool {
+        match &dep.spec {
+            DepSpec::Path { path } => candidate.root == canonical(&parent.root.join(path)),
+            DepSpec::Git { url, .. } => candidate.git.as_deref() == Some(url),
+        }
     }
 
     /// What a shipped program needs. Test-only packages are excluded.
@@ -149,6 +185,11 @@ pub fn resolve(entry: &Path) -> Resolution {
     // root. Dependency paths are written relative to that manifest, so the
     // directory it was found in — not the program file's — is the root.
     let (root_dir, root_manifest) = Manifest::discover(entry);
+    state.store = deps_dir(&root_dir);
+    match Lock::at(&root_dir) {
+        Ok(lock) => state.lock = lock,
+        Err(why) => state.bad_manifests.push((root_dir.join(Lock::FILE), why)),
+    }
     state.packages.push(ResolvedPackage {
         id: ROOT,
         name: None,
@@ -157,6 +198,7 @@ pub fn resolve(entry: &Path) -> Resolution {
         manifest: root_manifest,
         // The program is bounded by its own kora.toml and nothing else.
         grants: Grants::unrestricted(),
+        git: None,
     });
     state.by_root.insert(canonical(&root_dir), ROOT);
 
@@ -176,6 +218,8 @@ pub fn resolve(entry: &Path) -> Resolution {
         shortfalls: Vec::new(),
         unreadable: std::mem::take(&mut state.unreadable),
         bad_manifests: std::mem::take(&mut state.bad_manifests),
+        unfetched: std::mem::take(&mut state.unfetched),
+        tampered: std::mem::take(&mut state.tampered),
     };
 
     // A dependency is unused when the package that declared it never names
@@ -213,6 +257,21 @@ pub fn resolve(entry: &Path) -> Resolution {
         }
     }
 
+    // Both passes walk the same graph, so anything found by inspecting a
+    // dependency is found twice. Report each once.
+    out.unfetched
+        .sort_by(|a, b| (&a.url, &a.name).cmp(&(&b.url, &b.name)));
+    out.unfetched
+        .dedup_by(|a, b| a.url == b.url && a.name == b.name);
+    out.tampered.sort();
+    out.tampered.dedup();
+    out.bad_manifests.sort();
+    out.bad_manifests.dedup();
+    out.grant_conflicts
+        .sort_by(|a, b| (&a.package, &a.first, &a.second).cmp(&(&b.package, &b.first, &b.second)));
+    out.grant_conflicts
+        .dedup_by(|a, b| a.package == b.package && a.first == b.first && a.second == b.second);
+
     out.missing
         .sort_by(|a, b| (&a.file, a.span.line, &a.name).cmp(&(&b.file, b.span.line, &b.name)));
     out.missing
@@ -231,6 +290,16 @@ struct State {
     unreadable: Vec<(PathBuf, String)>,
     grant_conflicts: Vec<GrantConflict>,
     bad_manifests: Vec<(PathBuf, String)>,
+    unfetched: Vec<Unfetched>,
+    tampered: Vec<(String, String, String)>,
+    /// Where fetched dependencies live, and what was locked.
+    store: PathBuf,
+    lock: Lock,
+    /// The verdict for each tree hashed this resolve, so a package is
+    /// hashed once but its *refusal* still applies on every later look.
+    /// Caching only "already checked" would let a tampered package through
+    /// on the second walk.
+    verified: HashMap<PathBuf, bool>,
 }
 
 impl State {
@@ -313,12 +382,69 @@ impl State {
         }
     }
 
+    /// Where a dependency's source sits on disk.
+    ///
+    /// A path dependency is wherever the manifest said. A git dependency is
+    /// under `.kora/deps`, in a directory named for its repository and the
+    /// commit the lockfile pinned — so a moved tag gets its own directory
+    /// rather than silently reusing the bytes already there.
+    fn dep_root(&mut self, from: PackageId, dep: &Dep) -> Option<PathBuf> {
+        match &dep.spec {
+            DepSpec::Path { path } => Some(canonical(&self.packages[from.0].root.join(path))),
+            DepSpec::Git { url, reference } => {
+                let Some(locked) = self.lock.get(url).cloned() else {
+                    self.unfetched.push(Unfetched {
+                        name: dep.name.clone(),
+                        url: url.clone(),
+                        reference: reference.describe(),
+                        locked: false,
+                    });
+                    return None;
+                };
+                let root = self.store.join(locked.slug());
+                if !root.is_dir() {
+                    self.unfetched.push(Unfetched {
+                        name: dep.name.clone(),
+                        url: url.clone(),
+                        reference: reference.describe(),
+                        locked: true,
+                    });
+                    return None;
+                }
+                // Verified on every resolve, not only at fetch time: a cached
+                // tree edited on disk must not run just because it is there.
+                let ok = match self.verified.get(&root) {
+                    Some(verdict) => *verdict,
+                    None => {
+                        let verdict = match crate::hash::tree(&root) {
+                            Ok(actual) if actual == locked.hash => true,
+                            Ok(actual) => {
+                                self.tampered
+                                    .push((url.clone(), locked.hash.clone(), actual));
+                                false
+                            }
+                            Err(why) => {
+                                self.bad_manifests.push((root.clone(), why));
+                                false
+                            }
+                        };
+                        self.verified.insert(root.clone(), verdict);
+                        verdict
+                    }
+                };
+                if !ok {
+                    return None;
+                }
+                Some(canonical(&root))
+            }
+        }
+    }
+
     /// Resolve one dependency name against the manifest of the package that
     /// wrote it, registering the package if this is the first sight of it.
     fn load_dep(&mut self, from: PackageId, name: &str) -> Option<PackageId> {
         let dep = self.packages[from.0].manifest.deps.get(name)?.clone();
-        let DepSpec::Path { path } = &dep.spec;
-        let root = canonical(&self.packages[from.0].root.join(path));
+        let root = self.dep_root(from, &dep)?;
 
         // A parent may only pass on what it holds, so an attacker who
         // compromises a leaf gains nothing that every link above it lacked.
@@ -353,6 +479,10 @@ impl State {
             entry,
             manifest,
             grants: effective,
+            git: match &dep.spec {
+                DepSpec::Git { url, .. } => Some(url.clone()),
+                DepSpec::Path { .. } => None,
+            },
         });
         self.by_root.insert(root, id);
         Some(id)
@@ -415,7 +545,7 @@ mod tests {
         }
     }
 
-    fn names(packages: &[&ResolvedPackage]) -> Vec<String> {
+    pub(super) fn names(packages: &[&ResolvedPackage]) -> Vec<String> {
         let mut out: Vec<String> = packages.iter().filter_map(|p| p.name.clone()).collect();
         out.sort();
         out
@@ -626,7 +756,7 @@ mod tests {
 
 #[cfg(test)]
 mod grant_tests {
-    use super::tests::Tree;
+    use super::tests::{names, Tree};
     use super::*;
     use crate::grants::Capability;
 
@@ -761,6 +891,116 @@ mod grant_tests {
         );
         let r = tree.resolve("main.ko");
         assert_eq!(r.bad_manifests.len(), 1, "{:?}", r.bad_manifests);
+    }
+
+    #[test]
+    fn a_git_dependency_absent_from_the_lock_is_reported_not_guessed() {
+        let tree = Tree::new(
+            "unlocked",
+            &[
+                (
+                    "kora.toml",
+                    "[dependencies.receipts]\ngit = \"github.com/org/receipts\"\ntag = \"v1.0.0\"\n",
+                ),
+                ("main.ko", "use pkg receipts as r\n"),
+            ],
+        );
+        let r = tree.resolve("main.ko");
+        assert_eq!(r.unfetched.len(), 1, "{:?}", r.unfetched);
+        assert!(!r.unfetched[0].locked, "the lockfile does not know it yet");
+        assert_eq!(r.unfetched[0].url, "github.com/org/receipts");
+    }
+
+    #[test]
+    fn a_locked_but_missing_checkout_is_reported_as_fetchable() {
+        let tree = Tree::new(
+            "notfetched",
+            &[
+                (
+                    "kora.toml",
+                    "[dependencies.receipts]\ngit = \"github.com/org/receipts\"\ntag = \"v1.0.0\"\n",
+                ),
+                (
+                    "kora.lock",
+                    "[[package]]\ngit = \"github.com/org/receipts\"\nref = \"v1.0.0\"\ncommit = \"abcdef123456\"\nhash = \"sha256:0\"\n",
+                ),
+                ("main.ko", "use pkg receipts as r\n"),
+            ],
+        );
+        let r = tree.resolve("main.ko");
+        assert_eq!(r.unfetched.len(), 1, "{:?}", r.unfetched);
+        assert!(
+            r.unfetched[0].locked,
+            "the lockfile has it; the disk does not"
+        );
+    }
+
+    #[test]
+    fn a_fetched_tree_that_no_longer_matches_the_lock_is_refused() {
+        // Editing a cached dependency on disk must not run just because the
+        // directory is there. This is the check that makes the lockfile mean
+        // something after the fetch, not only during it.
+        let tree = Tree::new(
+            "tampered",
+            &[
+                (
+                    "kora.toml",
+                    "[dependencies.receipts]\ngit = \"github.com/org/receipts\"\ntag = \"v1.0.0\"\n",
+                ),
+                (
+                    "kora.lock",
+                    "[[package]]\ngit = \"github.com/org/receipts\"\nref = \"v1.0.0\"\ncommit = \"abcdef123456\"\nhash = \"sha256:not-the-real-hash\"\n",
+                ),
+                ("main.ko", "use pkg receipts as r\n"),
+                (
+                    ".kora/deps/github.com~org~receipts@abcdef123456/src/lib.ko",
+                    "def x() -> int:\n    return 1\n",
+                ),
+            ],
+        );
+        let r = tree.resolve("main.ko");
+        assert_eq!(r.tampered.len(), 1, "{:?}", r.tampered);
+        assert_eq!(r.tampered[0].0, "github.com/org/receipts");
+        assert!(r.needed().is_empty(), "a tampered package must not resolve");
+    }
+
+    #[test]
+    fn a_fetched_tree_matching_the_lock_resolves() {
+        let root = std::env::temp_dir().join("kora-pkg-verified");
+        let _ = std::fs::remove_dir_all(&root);
+        let checkout = root.join(".kora/deps/github.com~org~receipts@abcdef123456");
+        std::fs::create_dir_all(checkout.join("src")).unwrap();
+        std::fs::write(
+            checkout.join("src/lib.ko"),
+            "def x() -> int:\n    return 1\n",
+        )
+        .unwrap();
+        std::fs::write(
+            checkout.join("kora.toml"),
+            "[package]\nname = \"receipts\"\n",
+        )
+        .unwrap();
+        let hash = crate::hash::tree(&checkout).unwrap();
+
+        std::fs::write(
+            root.join("kora.toml"),
+            "[dependencies.receipts]\ngit = \"github.com/org/receipts\"\ntag = \"v1.0.0\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join("kora.lock"),
+            format!(
+                "[[package]]\ngit = \"github.com/org/receipts\"\nref = \"v1.0.0\"\ncommit = \"abcdef123456\"\nhash = \"{hash}\"\n"
+            ),
+        )
+        .unwrap();
+        std::fs::write(root.join("main.ko"), "use pkg receipts as r\n").unwrap();
+
+        let r = super::resolve(&root.join("main.ko"));
+        assert!(r.tampered.is_empty(), "{:?}", r.tampered);
+        assert!(r.unfetched.is_empty(), "{:?}", r.unfetched);
+        assert_eq!(names(&r.needed()), ["receipts"]);
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
