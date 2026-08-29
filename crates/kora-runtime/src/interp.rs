@@ -2833,6 +2833,13 @@ impl Interpreter {
         let program_name = self.program_name.clone();
         let body: Vec<Stmt> = body.to_vec();
         let budget = self.budget.clone();
+        // Crosses the thread boundary as data, like everything else a worker
+        // is seeded with.
+        let mocked_analyze: Vec<Portable> = self
+            .mocked_analyze
+            .iter()
+            .map(Portable::from_value)
+            .collect();
 
         // Workers share one cassette handle: replay works inside parallel
         // bodies, and recordings from every worker land in the same file.
@@ -2868,6 +2875,7 @@ impl Interpreter {
                         &sinks,
                         &program_name,
                         &budget,
+                        &mocked_analyze,
                         cassette.as_ref(),
                         &journal,
                         &parent_scope,
@@ -2953,6 +2961,7 @@ fn run_one(
     sinks: &SinkPolicy,
     program_name: &str,
     budget: &Budget,
+    mocked_analyze: &[Portable],
     cassette: Option<&Arc<Mutex<Cassette>>>,
     journal: &Arc<Mutex<Journal>>,
     parent_scope: &journal::Scope,
@@ -2971,6 +2980,14 @@ fn run_one(
     interp.sinks = sinks.clone();
     interp.program_name = program_name.to_string();
     interp.budget = budget.clone();
+    // A mock is part of the test that set it up, and a `parallel for` inside
+    // that test is still inside it. Without this the fan-out reaches for a
+    // real model, which makes the one path most worth testing the one path
+    // that cannot be.
+    interp.mocked_analyze = mocked_analyze
+        .iter()
+        .map(|m| m.clone().into_value())
+        .collect();
     for (name, value) in seed {
         interp
             .globals

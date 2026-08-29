@@ -1,0 +1,95 @@
+# Pattern: orchestrator-worker.
+#
+# An orchestrator plans the subtasks, workers run them in parallel, and one
+# step synthesizes the result. Unlike parallelization, the subtasks are not
+# known until the model has planned them.
+#
+# LangGraph needs its `Send` API for this: a conditional edge that builds a
+# worker per section, a separate `WorkerState`, and an
+# `Annotated[list, operator.add]` reducer so the workers can write to one key
+# concurrently. `parallel for` over the planned list is all three, because it
+# already takes a list computed at runtime and already returns results in
+# order.
+#
+# What is NOT good yet, and is honest to see in an example: `analyze` cannot
+# request a list of declared types, so the plan comes back as two parallel
+# `list[str]` fields that this code zips by index. With nested schemas the
+# `Plan` type below would be `sections: list[Section]` and `plan_jobs` would
+# not exist. See the note at the bottom of README.md.
+
+type Plan:
+    names: list[str] @description("Section names, in report order")
+    descriptions: list[str] @description("One description per section, in the same order as names")
+
+type Section:
+    body: str
+
+agent write_section(job: dict) -> str:
+    budget: max_tokens = 6000
+
+    s: Section = analyze(job, "write this report section in markdown, with no preamble") else (why):
+        return f"(section dropped: {why})"
+
+    return s.body
+
+# Pairing the two arrays is the workaround made explicit. A plan whose arrays
+# disagree is the model's mistake, not the program's, so the shorter of the
+# two wins rather than the program reading past the end of one.
+def plan_jobs(plan: Plan) -> list[dict]:
+    count = min(len(plan.names), len(plan.descriptions))
+    jobs = []
+    for i in range(count):
+        append(jobs, {"name": plan.names[i], "description": plan.descriptions[i]})
+    return jobs
+
+def synthesize(sections: list[str]) -> str:
+    out = ""
+    for s in sections:
+        out = out + s + "\n\n---\n\n"
+    return out
+
+agent report(topic: str) -> str:
+    budget: max_tokens = 60000
+
+    plan: Plan = analyze(topic, "plan the sections of a short report on this topic") else (why):
+        return f"no plan: {why}"
+
+    jobs = plan_jobs(plan)
+    if len(jobs) == 0:
+        return "the plan had no sections"
+
+    # One worker per planned section, each with its own heap, all drawing on
+    # the budget declared above.
+    sections = parallel for j in jobs:
+        return write_section(j)
+
+    return synthesize(sections)
+
+def main():
+    print(report("LLM scaling laws"))
+
+test "the plan is zipped into one job per section":
+    plan = Plan(["Intro", "Method"], ["what this covers", "how it was measured"])
+    jobs = plan_jobs(plan)
+    assert len(jobs) == 2, "one job per section"
+    assert jobs[1]["description"] == "how it was measured", "the pairing holds"
+
+test "a ragged plan is truncated rather than read past the end":
+    # The failure mode the parallel-array workaround introduces, pinned down
+    # so it stays a truncation rather than becoming a crash.
+    plan = Plan(["Intro", "Method", "Results"], ["only one description"])
+    assert len(plan_jobs(plan)) == 1, "the shorter array decides"
+
+test "sections are joined in planned order":
+    assert synthesize(["one", "two"]) == "one\n\n---\n\ntwo\n\n---\n\n"
+
+test "a worker that loses the provider drops only its own section":
+    with mock analyze -> Failed("connection refused"):
+        jobs = [{"name": "Intro", "description": "what this covers"}]
+        sections = parallel for j in jobs:
+            return write_section(j)
+        assert sections[0] == "(section dropped: connection refused)", f"got: {sections[0]}"
+
+test "a plan that never arrives does not fail the run":
+    with mock analyze -> Uncertain("the topic is too broad"):
+        assert report("everything") == "no plan: the topic is too broad"

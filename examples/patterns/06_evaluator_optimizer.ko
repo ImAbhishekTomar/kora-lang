@@ -1,0 +1,86 @@
+# Pattern: evaluator-optimizer.
+#
+# One call produces a draft, another grades it, and the loop runs until the
+# grade is good enough. The generator sees the previous round's feedback.
+#
+# LangGraph draws this as two nodes and a conditional edge that points back at
+# the generator, with a recursion limit to stop it running forever. Here the
+# loop is a `while` and the stop condition is the budget itself — which is the
+# resource that actually runs out, rather than a hop count standing in for it.
+#
+# Swap `grade` for `ask_human(...)` and this becomes the human-in-the-loop
+# variant: the program stops, the process may exit, and it resumes on the next
+# line when someone answers. That needs no checkpointer and no extra
+# configuration, because durability is already how the runtime works.
+
+type Draft:
+    text: str
+
+type Verdict:
+    grade: str
+        description: "funny when the joke lands, not funny when it does not"
+        pattern: "^(funny|not funny)$"
+    feedback: str @description("If it is not funny, how to improve it")
+
+# The loop needs a reserve: with fewer tokens than one round costs, another
+# round can only end in `Exhausted`, and stopping with the best draft so far
+# beats spending the remainder discovering that.
+RESERVE = 1500
+
+def worth_another_round(best: str) -> bool:
+    if tokens_remaining() < RESERVE:
+        return False
+    return True
+
+agent optimize(topic: str) -> str:
+    budget: max_tokens = 20000, max_calls = 8
+
+    note = ""
+    best = ""
+
+    while worth_another_round(best):
+        draft: Draft = analyze(
+            {"topic": topic, "feedback": note},
+            "write a joke about the topic, taking any feedback into account"
+        ) else:
+            return best
+
+        best = draft.text
+
+        verdict: Verdict = analyze(draft.text, "grade this joke funny or not funny, and say how to improve it") else:
+            # The grader is the optional half: with no grade, the draft that
+            # exists is better than no answer at all.
+            return best
+
+        if verdict.grade == "funny":
+            return best
+
+        note = verdict.feedback
+
+    return best
+
+def main():
+    print(optimize("cats"))
+
+test "the loop stops when the budget cannot fund another round":
+    with budget(max_tokens = 100):
+        assert not worth_another_round("a draft"), "under the reserve, stop"
+
+test "a funded loop keeps going":
+    with budget(max_tokens = 50000):
+        assert worth_another_round(""), "over the reserve, continue"
+
+test "a generator that never answers returns what there is":
+    with mock analyze -> Uncertain("no idea"):
+        assert optimize("cats") == "", "no draft was ever produced"
+
+test "a provider outage ends the loop instead of spinning on it":
+    with mock analyze -> Failed("connection refused"):
+        assert optimize("cats") == ""
+
+# The happy path of this loop cannot be tested with a mock today: `mock`
+# takes one value, checked against each call site it reaches, and this loop
+# calls `analyze` for a `Draft` and then for a `Verdict`. An `Ok(Draft(...))`
+# mock reaches the grader and is rejected there rather than falling through.
+# The failure paths above are testable because a failure mock carries no type.
+# Per-type mocks would close this; see README.md.

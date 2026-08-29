@@ -1,0 +1,50 @@
+# Pattern: the augmented LLM.
+#
+# The base of every other pattern here: a model call with a declared result
+# type and a set of tools it may call.
+#
+# LangChain spells this `llm.with_structured_output(SearchQuery)` and
+# `llm.bind_tools([multiply])` — two wrappers applied to a model object. In
+# Kora the annotation *is* the schema and a `tool` signature *is* the tool
+# declaration, so there is nothing to bind and nothing to remember to apply.
+
+type SearchQuery:
+    search_query: str @description("A query optimized for web search")
+    justification: str @description("Why this query answers what was asked")
+
+tool multiply(a: int, b: int) -> int:
+    "Multiply a and b."
+    return a * b
+
+agent ask(question: str) -> str:
+    budget: max_tokens = 4000, max_steps = 4
+
+    # The declared type becomes the schema the model must satisfy, and the
+    # `else` block runs for any outcome that is not a usable answer.
+    q: SearchQuery = analyze(
+        question,
+        "turn this into one web search query, and say why it is the right one",
+        tools=[multiply]
+    ) else (why):
+        return f"no query: {why}"
+
+    return f"{q.search_query}\n  because: {q.justification}"
+
+def main():
+    print(ask("How does a calcium CT score relate to high cholesterol?"))
+
+test "a structured answer comes back as ordinary typed data":
+    with mock analyze -> Ok(SearchQuery("calcium ct score cholesterol", "both measure cardiac risk")):
+        result = ask("anything")
+        assert result == "calcium ct score cholesterol\n  because: both measure cardiac risk", f"got: {result}"
+
+test "a model that declines is a value, not an exception":
+    with mock analyze -> Uncertain("the question is ambiguous"):
+        assert ask("anything") == "no query: the question is ambiguous"
+
+test "a provider outage is a value too":
+    with mock analyze -> Failed("connection refused"):
+        assert ask("anything") == "no query: connection refused"
+
+test "a tool is declared by its signature, not by a decorator":
+    assert multiply(6, 7) == 42

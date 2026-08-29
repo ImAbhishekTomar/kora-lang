@@ -136,6 +136,11 @@ design changes and should be deliberate.
   silently took a different branch than the same value unclassified. Reading
   the structure through the wrapper fixes that; re-applying the label to every
   binding is what keeps the fix from becoming a laundering hole.
+- **A mock is part of the test, so it crosses a `parallel for` boundary.**
+  Workers are fresh interpreters seeded with what they need, and the mock stack
+  was the one thing not seeded — so a test that fanned out silently reached for
+  a real model. The fan-out is the path most worth testing; leaving it the one
+  path that could not be tested was a hole, not a design.
 - Fixes over Python: no GIL, no async coloring, mandatory-at-boundary types,
   no bare except, one packaging story, no mutable-default-arg footgun.
 

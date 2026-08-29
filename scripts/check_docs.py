@@ -330,20 +330,35 @@ def check_examples(kora: str) -> None:
     library_files = sorted(
         os.path.join("lib", f) for f in os.listdir(library) if f.endswith(".ko")
     ) if os.path.isdir(library) else []
+    # The pattern set is a second tour with its own index, so it is checked
+    # and indexed by the same rules rather than being trusted to stay right.
+    patterns = os.path.join(directory, "patterns")
+    pattern_files = sorted(
+        os.path.join("patterns", f)
+        for f in os.listdir(patterns)
+        if f.endswith(".ko")
+    ) if os.path.isdir(patterns) else []
+    every = files + library_files + pattern_files
     result = subprocess.run(
-        [kora, "check"]
-        + [os.path.join(directory, f) for f in files + library_files],
+        [kora, "check"] + [os.path.join(directory, f) for f in every],
         capture_output=True, text=True)
     if result.returncode != 0:
         fail("an example does not check:\n" + result.stderr.strip())
     else:
-        print(f"  {len(files) + len(library_files)} example files check")
+        print(f"  {len(every)} example files check")
 
     # Every example should be listed in the index, or nobody will find it.
     index = read("examples/README.md")
     for name in files:
         if name not in index:
             fail(f"examples/{name} is not listed in examples/README.md")
+
+    if pattern_files:
+        pattern_index = read("examples/patterns/README.md")
+        for name in pattern_files:
+            base = os.path.basename(name)
+            if base not in pattern_index:
+                fail(f"examples/{name} is not listed in examples/patterns/README.md")
 
 
 def main() -> int:

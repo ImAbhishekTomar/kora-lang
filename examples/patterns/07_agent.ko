@@ -1,0 +1,80 @@
+# Pattern: the agent.
+#
+# A model in a loop with tools, deciding for itself which to call and when to
+# stop. Everything above has a predetermined path; this one does not.
+#
+# LangGraph builds the loop by hand — an `llm_call` node, a `tool_node`, a
+# `should_continue` conditional edge, and `MessagesState` threading the
+# conversation between them — or hands you the prebuilt `ToolNode`. In Kora
+# the loop is inside `analyze`, and `max_steps` bounds it.
+#
+# What that buys: a tool is an ordinary function, its signature is the schema,
+# its docstring is the description, and the result is still a declared type
+# rather than a message list to pick through.
+#
+# What it costs, honestly: the loop is not open. There is no hook to approve,
+# log, or rewrite an individual tool call before it runs — LangGraph's
+# `ToolNode` and its `ToolRuntime` state injection have no equivalent here
+# yet. See README.md.
+
+type Answer:
+    result: str @description("The final numeric answer, as text")
+    working: str @description("How the tools were used to reach it")
+
+tool add(a: int, b: int) -> int:
+    "Add a and b."
+    return a + b
+
+tool multiply(a: int, b: int) -> int:
+    "Multiply a and b."
+    return a * b
+
+tool divide(a: float, b: float) -> float:
+    "Divide a by b. Returns 0.0 when b is zero."
+    # A tool that raises would take the agent down with it, so the awkward
+    # case is answered rather than thrown.
+    if b == 0.0:
+        return 0.0
+    return a / b
+
+agent calculator(question: str) -> str:
+    # `max_steps` bounds the loop. Without one, a model that keeps asking for
+    # tools is stopped by a turn limit with a worse error.
+    budget: max_tokens = 10000, max_steps = 8
+
+    a: Answer = analyze(question, "answer this using the arithmetic tools", tools=[add, multiply, divide])
+    match a:
+        case Ok(v):
+            return f"{v.result}  ({v.working})"
+        case Uncertain(why):
+            return f"no answer: {why}"
+        case Exhausted(meter):
+            return f"stopped early, out of {meter}"
+        case Failed(why):
+            return f"provider did not answer: {why}"
+
+def main():
+    print(calculator("Add 3 and 4, then multiply the result by 5."))
+
+test "the tools are ordinary functions and can be tested as such":
+    assert add(3, 4) == 7
+    assert multiply(7, 5) == 35
+    assert divide(10.0, 4.0) == 2.5
+
+test "a tool answers its awkward case instead of raising":
+    # A raise inside a tool ends the agent. Dividing by zero is the one input
+    # this tool has to have an answer for.
+    assert divide(1.0, 0.0) == 0.0
+
+test "the agent returns its answer and its working":
+    with mock analyze -> Ok(Answer("35", "added 3 and 4, multiplied by 5")):
+        result = calculator("Add 3 and 4, then multiply by 5")
+        assert result == "35  (added 3 and 4, multiplied by 5)", f"got: {result}"
+
+test "running out of steps mid-loop is an outcome, not an error":
+    with mock analyze -> Exhausted("steps"):
+        assert calculator("something long") == "stopped early, out of steps"
+
+test "a provider outage is reported rather than crashing the agent":
+    with mock analyze -> Failed("connection refused"):
+        assert calculator("2 + 2") == "provider did not answer: connection refused"

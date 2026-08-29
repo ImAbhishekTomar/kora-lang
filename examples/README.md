@@ -23,6 +23,25 @@ no API key and no model installed.
 | [12_receipt_images.ko](12_receipt_images.ko) | the same job from the *pictures*: `fs.glob`, `fs.image`, a vision model | `kora run --replay` |
 | [13_packages.ko](13_packages.ko) | naming a dependency, and letting the source decide what is used | `kora run` |
 
+## The pattern set
+
+[`patterns/`](patterns) is a second, parallel tour: the seven agent and
+workflow patterns from LangGraph's
+[Workflows and agents](https://docs.langchain.com/oss/python/langgraph/workflows-agents)
+guide, written in Kora so the two can be read side by side. Prompt chaining,
+parallelization, routing, orchestrator-worker, evaluator-optimizer, and the
+agent loop.
+
+Every one runs its own tests with no model, no API key, and no cassette:
+
+```bash
+kora test examples/patterns/07_agent.ko
+```
+
+Its [README](patterns/README.md) also says what is *not* good yet — nested
+schemas, the closed tool loop, single-valued mocks — which is the honest half
+of a comparison.
+
 ```bash
 kora run examples/00_basics.ko
 kora run --replay examples/03_salary_review.ko
