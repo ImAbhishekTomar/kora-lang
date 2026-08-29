@@ -1,0 +1,63 @@
+---
+title: Kora 0.1.0
+description: Release notes, compatibility information, and migration guidance for Kora 0.1.0.
+---
+
+# Kora `0.1.0`
+
+Published 29 August 2026. [View the release and downloads](https://github.com/ImAbhishekTomar/kora-lang/releases/tag/v0.1.0).
+
+`0.1.0` adds Kora's secure, reproducible package system. Dependencies are
+declared in project configuration but resolved from the packages the program
+actually imports, so unused declarations are not fetched or shipped.
+
+## Changes
+
+- `use pkg <name> as <alias>` imports packages from local paths or pinned Git
+  sources.
+- Package reachability is derived from runtime and test roots, which keeps
+  unused dependencies out of the resolved graph and the final program.
+- Per-package capability grants apply at execution boundaries, including
+  work reached through tools and transitive package calls.
+- `kora.lock` pins exact Git commits and content hashes. `kora.sums` records
+  first-seen checksums in project and machine-level logs to detect changed
+  package contents.
+- `kora add`, `remove`, `update`, `tree`, `vendor`, and `audit --deps` manage
+  and inspect dependencies.
+- Fetches run in parallel, with configurable concurrency, and cache paths are
+  portable across macOS, Linux, and Windows.
+
+## Breaking changes
+
+None. Existing projects that do not use packages need no source or
+configuration changes.
+
+## Migration from `0.0.2`
+
+Upgrade the CLI and verify your existing program before adopting packages:
+
+```bash
+npm install -g @abhishektomar/kora-cli@0.1.0
+kora --version
+kora check main.ko
+kora test main.ko
+```
+
+To add a package, use the CLI instead of editing generated dependency files
+by hand. Kora writes the manifest and lockfile, then resolves only packages
+reachable from your `use pkg` statements:
+
+```bash
+kora add main.ko example-package github.com/example/example-package --rev <commit>
+```
+
+Review the package's requested grants in `kora.toml`, commit `kora.lock` and
+`kora.sums`, and run `kora audit --deps` before shipping. See the
+[ecosystem guide](/ecosystem) and [reference](/reference) for the complete
+package model.
+
+## Compatibility
+
+Kora remains pre-alpha. Package sources use pinned commits rather than moving
+tags, and the lockfile is authoritative once created. Upgrade package versions
+with `kora update`, not by changing a tag or lockfile manually.

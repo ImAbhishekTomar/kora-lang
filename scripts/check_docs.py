@@ -59,6 +59,7 @@ DOCS = [
     ("site/app/releases/page.mdx", SITE),
     ("site/app/releases/0.0.1/page.mdx", SITE),
     ("site/app/releases/0.0.2/page.mdx", SITE),
+    ("site/app/releases/0.1.0/page.mdx", SITE),
     ("site/app/start-here/page.mdx", SITE),
     ("site/app/versions/page.mdx", SITE),
 ]
