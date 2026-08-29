@@ -37,7 +37,7 @@ kora-lsp = { path = "crates/kora-lsp", version = "0.2.0" } # x-release-please-ve
 kora-dap = { path = "crates/kora-dap", version = "0.2.0" } # x-release-please-version
 kora-mcp = { path = "crates/kora-mcp", version = "0.2.0" } # x-release-please-version
 kora-python = { path = "crates/kora-python", version = "0.2.0" } # x-release-please-version
-serde = { version = "1", features = ["derive"] }
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 ureq = { version = "2", features = ["json"] }
 toml = "0.8"

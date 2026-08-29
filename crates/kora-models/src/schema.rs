@@ -13,12 +13,12 @@ pub const UNCERTAIN_KEY: &str = "__uncertain__";
 /// `__uncertain__` string field (OpenAI strict mode forbids alternative
 /// response shapes, so refusal travels inside the object).
 pub fn build_json_schema(schema: &Schema) -> Value {
-    let mut properties = serde_json::Map::new();
-    let mut required: Vec<Value> = Vec::new();
-    for field in &schema.fields {
-        properties.insert(field.name.clone(), field_schema(field));
-        required.push(Value::String(field.name.clone()));
-    }
+    let mut value = object_schema(schema);
+    let object = value.as_object_mut().expect("object_schema returns an object");
+    let properties = object
+        .get_mut("properties")
+        .and_then(Value::as_object_mut)
+        .expect("object_schema always has properties");
     properties.insert(
         UNCERTAIN_KEY.to_string(),
         json!({
@@ -26,7 +26,25 @@ pub fn build_json_schema(schema: &Schema) -> Value {
             "description": "Empty string when confident; otherwise the reason you cannot comply."
         }),
     );
+    let required = object
+        .get_mut("required")
+        .and_then(Value::as_array_mut)
+        .expect("object_schema always has required");
     required.push(Value::String(UNCERTAIN_KEY.to_string()));
+    value
+}
+
+/// Build the plain `{"type": "object", ...}` shape for a schema, with no
+/// `__uncertain__` field — used both for the top-level request (which adds
+/// it) and for nested `type`-declared fields (which never carry a refusal
+/// channel of their own; only the outermost result can be `Uncertain`).
+pub(crate) fn object_schema(schema: &Schema) -> Value {
+    let mut properties = serde_json::Map::new();
+    let mut required: Vec<Value> = Vec::new();
+    for field in &schema.fields {
+        properties.insert(field.name.clone(), field_schema(field));
+        required.push(Value::String(field.name.clone()));
+    }
     json!({
         "type": "object",
         "properties": properties,
@@ -35,13 +53,15 @@ pub fn build_json_schema(schema: &Schema) -> Value {
     })
 }
 
-fn field_schema(field: &SchemaField) -> Value {
-    let mut schema = match field.field_type {
+pub(crate) fn field_schema(field: &SchemaField) -> Value {
+    let mut schema = match &field.field_type {
         FieldType::Str => json!({"type": "string"}),
         FieldType::Int => json!({"type": "integer"}),
         FieldType::Float => json!({"type": "number"}),
         FieldType::Bool => json!({"type": "boolean"}),
         FieldType::ListOfStr => json!({"type": "array", "items": {"type": "string"}}),
+        FieldType::Object(nested) => object_schema(nested),
+        FieldType::ListOfObject(nested) => json!({"type": "array", "items": object_schema(nested)}),
     };
     let object = schema.as_object_mut().expect("field schemas are objects");
     if let Some(description) = &field.description {
@@ -58,21 +78,7 @@ fn field_schema(field: &SchemaField) -> Value {
 
 /// System message explaining the output contract.
 pub fn system_prompt(schema: &Schema) -> String {
-    let field_list = schema
-        .fields
-        .iter()
-        .map(|field| {
-            let mut line = format!("- {}: {}", field.name, field.field_type.display_name());
-            if let Some(description) = &field.description {
-                line.push_str(&format!(" - {description}"));
-            }
-            if let Some(pattern) = &field.pattern {
-                line.push_str(&format!(" (must match /{pattern}/)"));
-            }
-            line
-        })
-        .collect::<Vec<_>>()
-        .join("\n");
+    let field_list = describe_fields(schema, "");
     format!(
         "You are a data analysis engine. Respond with ONLY a single JSON object \
          matching the type `{type_name}` with exactly these fields:\n{field_list}\n\
@@ -88,6 +94,36 @@ pub fn system_prompt(schema: &Schema) -> String {
          Never output prose, markdown, or code fences. Output only the JSON object.",
         type_name = schema.type_name,
     )
+}
+
+/// Render a field list for the system prompt, recursing into nested
+/// declared types so the model sees their shape too, not just their name.
+fn describe_fields(schema: &Schema, indent: &str) -> String {
+    schema
+        .fields
+        .iter()
+        .map(|field| {
+            let mut line = format!("{indent}- {}: {}", field.name, field.field_type.display_name());
+            if let Some(description) = &field.description {
+                line.push_str(&format!(" - {description}"));
+            }
+            if let Some(pattern) = &field.pattern {
+                line.push_str(&format!(" (must match /{pattern}/)"));
+            }
+            let nested = match &field.field_type {
+                FieldType::Object(nested) => Some(nested),
+                FieldType::ListOfObject(nested) => Some(nested),
+                _ => None,
+            };
+            if let Some(nested) = nested {
+                let child_indent = format!("{indent}  ");
+                line.push('\n');
+                line.push_str(&describe_fields(nested, &child_indent));
+            }
+            line
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// User message: instruction plus the data payload.

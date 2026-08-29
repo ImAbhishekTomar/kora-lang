@@ -9,6 +9,7 @@ mod schema;
 mod validate;
 
 use std::fmt;
+use std::rc::Rc;
 
 pub use provider::{parse_model_spec, DEFAULT_TIMEOUT_SECS};
 
@@ -37,17 +38,24 @@ pub enum FieldType {
     Float,
     Bool,
     ListOfStr,
+    /// Another declared type, nested inline. Shared rather than copied since
+    /// the same nested schema is rebuilt on every recursive field lookup.
+    Object(Rc<Schema>),
+    /// `list[T]` where `T` is a declared type, not `str`.
+    ListOfObject(Rc<Schema>),
 }
 
 impl FieldType {
     /// Human-readable name used in validation error messages.
-    pub(crate) fn display_name(&self) -> &'static str {
+    pub(crate) fn display_name(&self) -> String {
         match self {
-            FieldType::Str => "string",
-            FieldType::Int => "integer",
-            FieldType::Float => "float",
-            FieldType::Bool => "boolean",
-            FieldType::ListOfStr => "list of strings",
+            FieldType::Str => "string".to_string(),
+            FieldType::Int => "integer".to_string(),
+            FieldType::Float => "float".to_string(),
+            FieldType::Bool => "boolean".to_string(),
+            FieldType::ListOfStr => "list of strings".to_string(),
+            FieldType::Object(schema) => format!("object `{}`", schema.type_name),
+            FieldType::ListOfObject(schema) => format!("list of `{}` objects", schema.type_name),
         }
     }
 }

@@ -111,6 +111,13 @@ fn param_schema(ty: &FieldType) -> Value {
         FieldType::Float => json!({"type": "number"}),
         FieldType::Bool => json!({"type": "boolean"}),
         FieldType::ListOfStr => json!({"type": "array", "items": {"type": "string"}}),
+        // `field_type_of` never produces these for tool params today — the
+        // runtime gate is stricter than this enum — but the match must stay
+        // exhaustive as `FieldType` grows for `analyze()` results.
+        FieldType::Object(nested) => crate::schema::object_schema(nested),
+        FieldType::ListOfObject(nested) => {
+            json!({"type": "array", "items": crate::schema::object_schema(nested)})
+        }
     }
 }
 
