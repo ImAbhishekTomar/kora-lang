@@ -11,5 +11,9 @@
 //! the syntax tree cannot miss a use, and nothing has to be guessed.
 
 mod manifest;
+mod resolve;
+mod scan;
 
 pub use manifest::{is_valid_name, Dep, DepSpec, Manifest, ManifestError, DEFAULT_ENTRY};
+pub use resolve::{resolve, MissingDep, PackageId, Resolution, ResolvedPackage, UnusedDep, ROOT};
+pub use scan::{imports, Import, Imports};

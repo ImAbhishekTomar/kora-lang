@@ -129,16 +129,14 @@ impl Manifest {
 
 fn parse_dep(name: &str, spec: &toml::Value) -> Result<Dep, ManifestError> {
     let table = spec.as_table().ok_or_else(|| {
-        ManifestError::new(format!("dependency `{name}` must be a table")).with_hint(format!(
-            "write `{name} = {{ path = \"../{name}\" }}`"
-        ))
+        ManifestError::new(format!("dependency `{name}` must be a table"))
+            .with_hint(format!("write `{name} = {{ path = \"../{name}\" }}`"))
     })?;
 
     let Some(path) = table.get("path").and_then(|v| v.as_str()) else {
         return Err(
-            ManifestError::new(format!("dependency `{name}` has no source")).with_hint(format!(
-                "write `{name} = {{ path = \"../{name}\" }}`"
-            )),
+            ManifestError::new(format!("dependency `{name}` has no source"))
+                .with_hint(format!("write `{name} = {{ path = \"../{name}\" }}`")),
         );
     };
 
