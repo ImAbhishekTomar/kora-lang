@@ -1,5 +1,26 @@
 # Changelog
 
+## [0.2.0](https://github.com/ImAbhishekTomar/kora-lang/compare/v0.1.0...v0.2.0) (2026-08-29)
+
+
+### ⚠ BREAKING CHANGES
+
+* **lang:** `analyze` can return `Failed(reason)`, so an existing three-arm `match` over a model call is no longer exhaustive. The unmatched-value error names the arm to add, and `else` collapses the whole thing to one line where the difference does not matter.
+
+### Features
+
+* **examples:** the agent and workflow patterns, and a mock that crosses a fan-out ([20fd6ac](https://github.com/ImAbhishekTomar/kora-lang/commit/20fd6ac0dd5f0dc481dbc701b0ceccd8b5b49743))
+* **lang:** match guards, the `else` binding, and provider failure as an outcome ([a10aa4c](https://github.com/ImAbhishekTomar/kora-lang/commit/a10aa4c7e2922e617c8a7ce272c96aac5b8d805e))
+* **lsp:** resolve `use pkg` for completion and go-to-definition ([a8e0108](https://github.com/ImAbhishekTomar/kora-lang/commit/a8e0108a5a3916263a5a09afd3d9b9776d0c1648))
+
+
+### Fixes
+
+* **ci:** give every workflow an explicit least-privilege token ([f59a852](https://github.com/ImAbhishekTomar/kora-lang/commit/f59a8523dd3640a9d7d7dc953ca0cb67deb9f827))
+* **docs:** repair the documentation check after the site restructure ([d8ba9a8](https://github.com/ImAbhishekTomar/kora-lang/commit/d8ba9a81244e86ea1a8937632d85ee1179dfec53))
+* **pkg:** a local repository path means the same on every host ([c2e272e](https://github.com/ImAbhishekTomar/kora-lang/commit/c2e272e27efe14f5260f7edb0bcc83a8af7a3175))
+* **pkg:** agree on what a local repository path is ([5d62e97](https://github.com/ImAbhishekTomar/kora-lang/commit/5d62e975be9c0ee34fe6374fcafa1afcc6e9ebd5))
+
 ## [0.1.0](https://github.com/ImAbhishekTomar/kora-lang/compare/v0.0.2...v0.1.0) (2026-08-29)
 
 
