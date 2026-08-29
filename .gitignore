@@ -27,3 +27,6 @@
 .env*
 site.zip
 ruff.note
+
+# Python bytecode from scripts/
+__pycache__/
