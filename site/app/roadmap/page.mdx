@@ -21,7 +21,11 @@ Release `0.0.2` includes:
 - Classified data, scoped `declassify`, sink policies, and audit output.
 - Native `json`, `csv`, `fs`, `http`, `sql`, `time`, `re`, and `env` modules,
   with `fs.image` and `fs.glob` for working over a folder of files.
-- Python sidecar and MCP tool integrations through project configuration.
+- Python sidecar and MCP tool integrations through project configuration,
+  with a deadline on every MCP request. A tool server that does not answer
+  comes back as `Failed(reason)` instead of ending the run, and tool calls are
+  never retried, because a timeout is exactly when whether the effect ran is
+  unknown.
 - VS Code syntax highlighting, file icons, language-server features, and run
   and test commands.
 

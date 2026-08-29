@@ -226,11 +226,18 @@ pub struct Interpreter {
     /// Frames, breakpoints, and step state. Untouched unless a debugger is
     /// attached.
     debug: debug::Session,
+    /// Non-zero while a `case` guard is being evaluated.
+    ///
+    /// Guards are speculative -- an arm may be tried and rejected -- so a
+    /// model call inside one would spend budget on a branch that never ran.
+    /// The checker rejects the obvious spelling; this catches the rest,
+    /// including a guard that reaches `analyze` through a helper.
+    in_guard: u32,
 }
 
 /// Tags a program may construct directly: the outcomes of a model call and
 /// the stdlib's result shape.
-const OUTCOME_TAGS: &[&str] = &["Ok", "Err", "Uncertain", "Exhausted"];
+const OUTCOME_TAGS: &[&str] = &["Ok", "Err", "Uncertain", "Exhausted", "Failed"];
 
 const BUILTINS: &[&str] = &[
     "print",
@@ -304,6 +311,7 @@ impl Interpreter {
             python: Arc::new(Mutex::new(Option::None)),
             debugger: Option::None,
             debug: debug::Session::default(),
+            in_guard: 0,
         }
     }
 
@@ -729,19 +737,113 @@ impl Interpreter {
             StmtKind::Pass => Ok(Flow::Normal),
             StmtKind::Match { subject, arms } => {
                 let value = self.eval(subject, scope)?;
+                let mut guard_rejected = false;
                 for arm in arms {
-                    if let Some(bindings) = match_pattern(&arm.pattern, &value) {
-                        for (name, v) in bindings {
-                            scope.insert(name, v);
+                    let Some(bindings) = match_pattern(&arm.pattern, &value) else {
+                        continue;
+                    };
+                    // Bound before the guard runs, so the guard can read them.
+                    // They are deliberately left bound when the guard fails:
+                    // Kora scopes by function like Python, and a binder that
+                    // vanished on a rejected arm would be the one place in the
+                    // language where a block had its own scope.
+                    for (name, v) in bindings {
+                        scope.insert(name, v);
+                    }
+                    if let Some(guard) = &arm.guard {
+                        self.in_guard += 1;
+                        let verdict = self.eval(guard, scope);
+                        self.in_guard -= 1;
+                        if !verdict?.truthy() {
+                            guard_rejected = true;
+                            continue;
                         }
-                        return self.exec_block(&arm.body, scope);
+                    }
+                    return self.exec_block(&arm.body, scope);
+                }
+                // Distinguishing the two is worth a branch: "nothing matched"
+                // and "everything that matched was refused by its guard" have
+                // different fixes, and guessing wrong sends the reader to the
+                // wrong half of the `match`.
+                if guard_rejected {
+                    Err(RuntimeError::new(
+                        format!(
+                            "every `case` arm matching {} was rejected by its guard",
+                            value.type_name()
+                        ),
+                        stmt.span,
+                    )
+                    .with_hint("add an unguarded arm for the same pattern, or `case _:`"))
+                } else {
+                    // `Failed` is newer than the three-arm `match` most
+                    // programs were written against, so it is the one
+                    // unmatched value with a known fix. Naming the arm beats
+                    // the generic advice, which here would be actively bad:
+                    // `case _:` turns a provider outage into whatever the
+                    // catch-all happens to say.
+                    let hint = if matches!(
+                        value.unlabeled(),
+                        Value::Variant { tag, .. } if tag.as_str() == "Failed"
+                    ) {
+                        "add `case Failed(why):` — the provider did not answer, \
+                         which is not the model declining"
+                    } else {
+                        "add a catch-all arm: `case _:`"
+                    };
+                    Err(RuntimeError::new(
+                        format!("no `case` arm matched {}", value.type_name()),
+                        stmt.span,
+                    )
+                    .with_hint(hint))
+                }
+            }
+            StmtKind::BindOrElse {
+                name,
+                ty,
+                value,
+                classified,
+                reason,
+                else_body,
+            } => {
+                // Same special case as an annotated assignment: `analyze` is
+                // handed the declared type so it can build the model schema.
+                let outcome = match (ty, analyze_args(value)) {
+                    (Some(t), Some((args, kwargs))) => {
+                        self.eval_analyze(t, args, kwargs, value.span, scope)?
+                    }
+                    _ => self.eval(value, scope)?,
+                };
+                match unwrap_outcome(&outcome, stmt.span)? {
+                    Ok(payload) => {
+                        if let Some(t) = ty {
+                            self.check_annotation(&payload, t, value.span)?;
+                        }
+                        let payload = if *classified {
+                            payload.with_label(Label::CLASSIFIED)
+                        } else {
+                            payload
+                        };
+                        scope.insert(name.clone(), payload);
+                        Ok(Flow::Normal)
+                    }
+                    Err(why) => {
+                        if let Some(reason) = reason {
+                            scope.insert(reason.clone(), why);
+                        }
+                        match self.exec_block(else_body, scope)? {
+                            // The checker proves the block diverges, so this
+                            // is unreachable in a program that passed `check`.
+                            // A program reaching it anyway must not continue
+                            // with `name` unbound.
+                            Flow::Normal => Err(RuntimeError::new(
+                                format!("the `else` block of `{name}` fell through"),
+                                stmt.span,
+                            )
+                            .with_hint("end it with `return`, `break`, or `continue`")),
+                            other => Ok(other),
+                        }
                     }
                 }
-                Err(RuntimeError::new(
-                    format!("no `case` arm matched {}", value.type_name()),
-                    stmt.span,
-                )
-                .with_hint("add a catch-all arm: `case _:`"))
             }
         }
     }
@@ -1931,7 +2033,65 @@ fn close_enough(a: &str, b: &str) -> bool {
 
 /// Try to match a pattern against a value. Returns the bindings it introduces,
 /// or None when the arm does not apply.
+/// Split an outcome into its successful payload or the reason it was not.
+///
+/// `Ok(v)` / `Err(why)` / `Uncertain(why)` / `Exhausted(meter)` / `Failed(why)`
+/// are the shapes
+/// a model call and the stdlib produce. Anything else is refused rather than
+/// guessed at: silently treating a bare value as success would make
+/// `x = f() else:` quietly skip its own failure path.
+///
+/// A label on the outcome rides onto whichever side comes out, so unwrapping
+/// classified data cannot launder it.
+fn unwrap_outcome(value: &Value, span: Span) -> Result<Result<Value, Value>, RuntimeError> {
+    let label = value.label();
+    let relabel = |v: Value| v.with_label(label.clone());
+    match value.unlabeled() {
+        Value::Variant { tag, payload } => match tag.as_str() {
+            "Ok" => Ok(Ok(relabel(payload.first().cloned().unwrap_or(Value::None)))),
+            "Err" | "Uncertain" | "Exhausted" | "Failed" => Ok(Err(relabel(
+                payload.first().cloned().unwrap_or(Value::None),
+            ))),
+            other => Err(RuntimeError::new(
+                format!("`else` binding expects an outcome, found `{other}(...)`"),
+                span,
+            )
+            .with_hint("outcomes are `Ok`, `Err`, `Uncertain`, `Exhausted`, and `Failed`")),
+        },
+        other => Err(RuntimeError::new(
+            format!(
+                "`else` binding expects an outcome, found {}",
+                other.type_name()
+            ),
+            span,
+        )
+        .with_hint("use a plain `=` for a value that cannot fail")),
+    }
+}
+
+/// Test `value` against `pattern`, returning what the pattern binds.
+///
+/// Structure is read through any label wrapper, and every binding is re-wrapped
+/// with the label the subject carried. Without that, `match` on a classified
+/// outcome silently skipped every `Ok(...)` arm -- the classified value took a
+/// different branch than the same value unclassified. Looking through the
+/// wrapper without re-applying the label would be worse: it would launder the
+/// label off the payload.
 fn match_pattern(pattern: &Pattern, value: &Value) -> Option<Vec<(String, Value)>> {
+    let label = value.label();
+    let bindings = match_structure(pattern, value.unlabeled())?;
+    if label.is_plain() {
+        return Some(bindings);
+    }
+    Some(
+        bindings
+            .into_iter()
+            .map(|(name, v)| (name, v.with_label(label.clone())))
+            .collect(),
+    )
+}
+
+fn match_structure(pattern: &Pattern, value: &Value) -> Option<Vec<(String, Value)>> {
     match pattern {
         Pattern::Wildcard => Some(vec![]),
         Pattern::Bind(name) => Some(vec![(name.clone(), value.clone())]),
@@ -2004,6 +2164,19 @@ impl Interpreter {
         span: Span,
         scope: &mut Scope,
     ) -> Result<Value, RuntimeError> {
+        // A guard may be evaluated for an arm that is then rejected, so a
+        // model call inside one would spend budget on a branch that never
+        // ran. The checker catches `case P if analyze(...)`; this catches the
+        // same call reached through a helper, which it cannot see.
+        if self.in_guard > 0 {
+            return Err(RuntimeError::new(
+                "a `case` guard cannot call a model",
+                span,
+            )
+            .with_hint(
+                "guards are tried against arms that may not run; call `analyze` before the `match` and guard on its result",
+            ));
+        }
         if args.len() != 2 {
             return Err(RuntimeError::new(
                 format!(
@@ -2169,6 +2342,12 @@ impl Interpreter {
         // rather than discovering the overrun afterwards. Exhaustion is a
         // value, so partial work upstream survives.
         if let Some(meter) = self.budget.check() {
+            // Recorded even though nothing was sent. `x = analyze(...) else:`
+            // can swallow an `Exhausted` on its way to a fallback, and a
+            // budget that stopped a call has to stay visible to whoever reads
+            // the trace afterwards -- otherwise the cheapest-looking run is
+            // the one that quietly did the least.
+            self.trace_refused_call(&type_name, meter.name());
             return Ok(Value::Variant {
                 tag: Rc::new("Exhausted".to_string()),
                 payload: vec![Value::Str(Rc::new(meter.name().to_string()))],
@@ -2220,7 +2399,11 @@ impl Interpreter {
         // without paying for the call again.
         self.journal_record_model(&journal_site, &outcome, span)?;
 
-        if let Some(c) = self.cassette.as_ref() {
+        // A cassette is a fixture. Recording an outage into one would make
+        // every later replay fail for a reason that was over by the afternoon,
+        // and `--replay` is meant to be the deterministic half of the runtime.
+        let recordable = !matches!(outcome, AnalyzeOutcome::Failed { .. });
+        if let Some(c) = self.cassette.as_ref().filter(|_| recordable) {
             let mut c = c.lock().unwrap_or_else(|e| e.into_inner());
             if c.mode == Mode::Record {
                 c.insert(cassette::Entry {
@@ -2392,6 +2575,23 @@ impl Interpreter {
                     payload: vec![Value::Str(Rc::new(reason))],
                 })
             }
+            AnalyzeOutcome::Failed {
+                reason,
+                tokens_in,
+                tokens_out,
+            } => {
+                // Zero for a live failure -- the turns that did complete were
+                // charged as they happened -- but still added rather than
+                // skipped, because a `Failed` replayed from a journal carries
+                // what the original attempt spent.
+                self.tokens_in += tokens_in;
+                self.tokens_out += tokens_out;
+                self.budget.charge_call(tokens_in, tokens_out);
+                Ok(Value::Variant {
+                    tag: Rc::new("Failed".to_string()),
+                    payload: vec![Value::Str(Rc::new(reason))],
+                })
+            }
         }
     }
 }
@@ -2416,6 +2616,15 @@ fn record_from_outcome(outcome: &AnalyzeOutcome) -> RecordedOutcome {
             tokens_in: *tokens_in,
             tokens_out: *tokens_out,
         },
+        AnalyzeOutcome::Failed {
+            reason,
+            tokens_in,
+            tokens_out,
+        } => RecordedOutcome::Failed {
+            reason: reason.clone(),
+            tokens_in: *tokens_in,
+            tokens_out: *tokens_out,
+        },
     }
 }
 
@@ -2435,6 +2644,15 @@ fn outcome_from_record(record: RecordedOutcome) -> AnalyzeOutcome {
             tokens_in,
             tokens_out,
         } => AnalyzeOutcome::Uncertain {
+            reason,
+            tokens_in,
+            tokens_out,
+        },
+        RecordedOutcome::Failed {
+            reason,
+            tokens_in,
+            tokens_out,
+        } => AnalyzeOutcome::Failed {
             reason,
             tokens_in,
             tokens_out,
@@ -2615,6 +2833,13 @@ impl Interpreter {
         let program_name = self.program_name.clone();
         let body: Vec<Stmt> = body.to_vec();
         let budget = self.budget.clone();
+        // Crosses the thread boundary as data, like everything else a worker
+        // is seeded with.
+        let mocked_analyze: Vec<Portable> = self
+            .mocked_analyze
+            .iter()
+            .map(Portable::from_value)
+            .collect();
 
         // Workers share one cassette handle: replay works inside parallel
         // bodies, and recordings from every worker land in the same file.
@@ -2650,6 +2875,7 @@ impl Interpreter {
                         &sinks,
                         &program_name,
                         &budget,
+                        &mocked_analyze,
                         cassette.as_ref(),
                         &journal,
                         &parent_scope,
@@ -2691,6 +2917,18 @@ impl Interpreter {
             if e.span.line == 0 {
                 e.span = span;
             }
+            // A branch that errored is a bug in the program, not a failure the
+            // program modelled -- an expected failure is an outcome and comes
+            // back as a value in its own slot. So the loop still fails. But
+            // the work that did finish was paid for, and saying how much of it
+            // there was is the difference between "this is broken" and "this
+            // is broken on one input out of two hundred".
+            if collected.len() > 1 {
+                e = e.with_hint(format!(
+                    "{} of {total} branches had already finished; their results are lost with this error",
+                    collected.len()
+                ));
+            }
             return Err(e);
         }
         Ok(Value::List(Rc::new(RefCell::new(collected))))
@@ -2723,6 +2961,7 @@ fn run_one(
     sinks: &SinkPolicy,
     program_name: &str,
     budget: &Budget,
+    mocked_analyze: &[Portable],
     cassette: Option<&Arc<Mutex<Cassette>>>,
     journal: &Arc<Mutex<Journal>>,
     parent_scope: &journal::Scope,
@@ -2741,6 +2980,14 @@ fn run_one(
     interp.sinks = sinks.clone();
     interp.program_name = program_name.to_string();
     interp.budget = budget.clone();
+    // A mock is part of the test that set it up, and a `parallel for` inside
+    // that test is still inside it. Without this the fan-out reaches for a
+    // real model, which makes the one path most worth testing the one path
+    // that cannot be.
+    interp.mocked_analyze = mocked_analyze
+        .iter()
+        .map(|m| m.clone().into_value())
+        .collect();
     for (name, value) in seed {
         interp
             .globals
@@ -2900,8 +3147,23 @@ impl Interpreter {
                 tools: tools.to_vec(),
                 tool_history: history.clone(),
             };
-            let step = kora_models::step(model, &request)
-                .map_err(|e| RuntimeError::new(e.message, span))?;
+            // A provider that does not answer is an outcome, not a crash.
+            // The transport has already retried whatever was worth retrying,
+            // so reaching here means the failure outlasted the backoff -- and
+            // the program, not the runtime, decides what that is worth. The
+            // tokens are zero because every turn that did complete was
+            // charged as it happened, a few lines below.
+            let step = match kora_models::step(model, &request) {
+                Ok(step) => step,
+                Err(e) => {
+                    self.model_calls += 1;
+                    return Ok(AnalyzeOutcome::Failed {
+                        reason: e.message,
+                        tokens_in: 0,
+                        tokens_out: 0,
+                    });
+                }
+            };
             self.model_calls += 1;
 
             match step {
@@ -3954,7 +4216,7 @@ impl Interpreter {
         let Value::Variant { tag, payload } = mocked.unlabeled() else {
             return Err(RuntimeError::new(
                 format!(
-                    "a mock for analyze() must be Ok(...), Uncertain(...), or Exhausted(...), got {}",
+                    "a mock for analyze() must be Ok(...), Uncertain(...), Exhausted(...), or Failed(...), got {}",
                     mocked.type_name()
                 ),
                 span,
@@ -4013,12 +4275,12 @@ impl Interpreter {
                 }
                 Ok(())
             }
-            "Uncertain" | "Exhausted" => Ok(()),
+            "Uncertain" | "Exhausted" | "Failed" => Ok(()),
             other => Err(RuntimeError::new(
                 format!("`{other}` is not a valid analyze() outcome"),
                 span,
             )
-            .with_hint("use Ok(...), Uncertain(reason), or Exhausted(meter)")),
+            .with_hint("use Ok(...), Uncertain(reason), Exhausted(meter), or Failed(reason)")),
         }
     }
 }
@@ -4044,6 +4306,28 @@ impl Interpreter {
             .set_plain(&mut span, "kora.replayed", serde_json::json!(true));
         self.tracer
             .set_plain(&mut span, "kora.replay_source", serde_json::json!(source));
+        self.tracer
+            .set_plain(&mut span, "gen_ai.usage.input_tokens", serde_json::json!(0));
+        self.tracer.end(span, None);
+    }
+
+    /// A call the budget stopped before it was sent.
+    fn trace_refused_call(&mut self, type_name: &str, meter: &str) {
+        if !self.tracer.records_calls() {
+            return;
+        }
+        let mut span = self
+            .tracer
+            .start(&format!("analyze {type_name}"), self.parent_span.clone());
+        self.tracer.set_plain(
+            &mut span,
+            "gen_ai.operation.name",
+            serde_json::json!("analyze"),
+        );
+        self.tracer
+            .set_plain(&mut span, "kora.exhausted", serde_json::json!(true));
+        self.tracer
+            .set_plain(&mut span, "kora.exhausted_meter", serde_json::json!(meter));
         self.tracer
             .set_plain(&mut span, "gen_ai.usage.input_tokens", serde_json::json!(0));
         self.tracer.end(span, None);

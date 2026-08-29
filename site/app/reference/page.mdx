@@ -447,6 +447,8 @@ use mcp github as gh
 
 These bridges keep outside values separate from live Kora objects and keep credentials in `kora.toml`.
 
+A server is a separate process, so it gets a deadline. One that does not answer ends the `analyze` call as `Failed(reason)` naming the server and the tool, rather than ending the run. Tool calls are not retried: a timeout is precisely when whether the effect ran is unknown.
+
 ## Configuration
 
 The project configuration file is `kora.toml`:
@@ -465,6 +467,15 @@ jobs = 16
 git = "github.com/org/receipts"
 tag = "v0.3.1"
 grants = { net = true }
+
+[mcp]
+timeout_secs = 60
+max_retries = 2
+
+[mcp.github]
+command = "npx"
+args = ["-y", "@modelcontextprotocol/server-github"]
+timeout_secs = 120
 
 [telemetry]
 exporter = "file"

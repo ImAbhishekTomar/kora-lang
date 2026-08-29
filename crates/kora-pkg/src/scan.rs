@@ -76,6 +76,7 @@ fn walk(stmts: &[Stmt], include_tests: bool, out: &mut Imports) {
                     walk(&arm.body, include_tests, out);
                 }
             }
+            StmtKind::BindOrElse { else_body, .. } => walk(else_body, include_tests, out),
 
             // Statements with no body cannot hide an import.
             StmtKind::Assign { .. }

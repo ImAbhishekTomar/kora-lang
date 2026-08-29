@@ -22,6 +22,11 @@ pub struct Config {
     /// call on a local model runs far longer than a text one, so this is a
     /// setting rather than a constant.
     pub model_timeout_secs: Option<u64>,
+    /// `[models] max_retries` — how many times a model call is retried when
+    /// the provider does not answer. `0` disables retrying, which is a
+    /// legitimate choice for a local model on the same machine; it is not
+    /// the default, because a hosted provider under load is ordinary.
+    pub model_max_retries: Option<u32>,
     /// Which sinks may receive which labels, from `[sinks]`.
     pub sinks: SinkPolicy,
     /// `[http] allow_private` — permit loopback and private address ranges.
@@ -186,6 +191,12 @@ impl Config {
                     toml::Value::Integer(secs) if key == "timeout_secs" => {
                         config.model_timeout_secs = Some((*secs).clamp(1, 3600) as u64);
                     }
+                    // Unlike a timeout, zero is honoured here: "do not retry"
+                    // is a real answer, and a local model that is simply not
+                    // running should say so on the first attempt.
+                    toml::Value::Integer(times) if key == "max_retries" => {
+                        config.model_max_retries = Some((*times).clamp(0, 10) as u32);
+                    }
                     // `[models.openai]` / `[models.local]` sub-tables
                     toml::Value::Table(table) => {
                         if key == "openai" {
@@ -218,6 +229,9 @@ impl Config {
         let mut model = kora_models::parse_model_spec(spec)?;
         if let Some(secs) = self.model_timeout_secs {
             model.timeout_secs = secs;
+        }
+        if let Some(times) = self.model_max_retries {
+            model.max_retries = times;
         }
         match model.provider {
             kora_models::Provider::OpenAI => {

@@ -16,6 +16,7 @@ and the constructs Python has no equivalent for.
 - [Functions, agents, and tools](#functions-agents-and-tools)
 - [Model calls](#model-calls)
 - [Outcomes and `match`](#outcomes-and-match)
+- [Chaining outcomes with `else`](#chaining-outcomes-with-else)
 - [Parallelism](#parallelism)
 - [Budgets](#budgets)
 - [Classified data](#classified-data)
@@ -247,8 +248,8 @@ destination, and model output should not be able to redirect the call.
 
 ## Outcomes and `match`
 
-A model call returns one of three things. Failure is a value, never an
-exception:
+A model call returns one of four things. Failure is a value, never an
+exception — including the failure of the provider itself:
 
 ```python
 match result:
@@ -258,7 +259,15 @@ match result:
         print(f"the model declined: {reason}")
     case Exhausted(meter):
         print(f"budget ran out of {meter}")
+    case Failed(reason):
+        print(f"the provider did not answer: {reason}")
 ```
+
+`Uncertain` is the model saying no. `Failed` is nobody answering: a refused
+connection, a timeout, a rate limit, a 5xx — after the retries below have
+already been spent. They are separate because they are fixed in different
+places, and because a program usually treats them differently: an `Uncertain`
+is worth rephrasing, a `Failed` is worth waiting on.
 
 Patterns:
 
@@ -268,9 +277,106 @@ Patterns:
 | `case 3:` `case "high":` `case True:` | a literal |
 | `case name:` | anything, binding it |
 | `case _:` | anything |
+| `case Ok(v) if v.score > 5:` | the pattern, when the guard is also true |
+
+### Retries
+
+A model call retries before it gives up: refused connections, timeouts, 408,
+409, 429, and every 5xx. The rest of the 4xx range is the request being
+wrong, so retrying it only reaches the same answer twice.
+
+```toml
+[models]
+max_retries = 2     # the default: three attempts in total
+```
+
+The backoff doubles and is jittered, since a `parallel for` shares one rate
+limit across every branch and an unjittered backoff marches them all back in
+together. A provider's own `Retry-After` wins over the computed wait, capped
+so an provider asking for an hour does not hold a thread for one. Only the
+HTTP request is retried, not the tool loop around it: a call three turns into
+a tool loop does not start over because the fourth request was throttled.
+
+`max_retries = 0` turns retrying off. That is a reasonable setting for a local
+model on the same machine, where a refused connection means the server is not
+running and waiting will not start it.
 
 An unmatched value is an error, so adding a case to a type does not silently
 fall through. Stdlib functions use `Ok` / `Err` in the same shape.
+
+### Guards
+
+A `case` arm may carry an `if`. The pattern's binders are in scope, so the
+guard can read what was just destructured:
+
+```python
+match assess(document):
+    case Ok(a) if a.risk == "low":
+        publish(a)
+    case Ok(a):
+        send_for_review(a)
+    case Uncertain(why):
+        log(why)
+```
+
+Arms are tried in order, and an arm whose guard is false falls through to the
+next one. If every arm that matched structurally was refused by its guard, that
+is an error too, and it says so — "no arm matched" and "every matching arm was
+guarded off" have different fixes.
+
+**A guard cannot call a model.** Arms are tried in order, so a guard may run for
+an arm that never executes; a model call there would make the token cost of a
+`match` depend on how the arms happen to be ordered. `analyze` inside a guard is
+rejected when you run `kora check`, and also at runtime if it is reached through
+a helper the checker cannot see through. Call the model before the `match` and
+guard on its result.
+
+---
+
+## Chaining outcomes with `else`
+
+Every model call returns a three-way outcome, so handling each one with a full
+`match` costs a level of indentation per call. Four calls in a row and the code
+that matters is buried.
+
+A binding can take an `else` block instead. It binds the **payload** of a
+successful outcome, and runs the block for any other:
+
+```python
+draft: Post = analyze(topic, "write a first draft") else:
+    return "could not draft"
+
+edited: Post = analyze(draft.text, "tighten this") else:
+    return draft.text          # degrade, do not fail
+
+return edited.text
+```
+
+Compared with three nested `match` statements, the successful path stays at
+one indentation level and reads top to bottom.
+
+`else (name):` binds the reason the outcome was not successful — the string
+from `Uncertain(why)`, `Err(why)`, `Exhausted(meter)`, or `Failed(why)`:
+
+```python
+row: Receipt = analyze(text, "read this receipt") else (why):
+    return f"skipped: {why}"
+```
+
+Rules:
+
+- The right-hand side must be an outcome (`Ok`, `Err`, `Uncertain`,
+  `Exhausted`, `Failed`). A plain value is an error, not a silent success —
+  otherwise the failure path could never run.
+- **The `else` block must not fall through.** It has to end in `return`,
+  `break`, or `continue`, so the bound name is always defined below the
+  statement. This is checked, not assumed.
+- A label is preserved. Unwrapping a classified outcome gives a classified
+  payload; `else` is not a way around `declassify`.
+
+`else` deliberately treats every unsuccessful outcome alike. When the
+difference matters — and it often does, because `Exhausted` means the budget
+ran out and `Failed` means the provider never answered — write a real `match`.
 
 You can construct outcomes yourself — useful in tests:
 

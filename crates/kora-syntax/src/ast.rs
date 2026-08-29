@@ -146,11 +146,42 @@ pub enum StmtKind {
         subject: Expr,
         arms: Vec<MatchArm>,
     },
+    /// `x: T = <outcome> else:` — bind the payload of a successful outcome,
+    /// or run the else block.
+    ///
+    /// This exists because chained model calls otherwise nest one level per
+    /// call: every `analyze` returns `Ok` / `Uncertain` / `Exhausted`, and
+    /// handling each with a full `match` buries the happy path. Here the
+    /// happy path stays at the statement's own indentation and the failure
+    /// path is the exception.
+    ///
+    /// The else block must diverge (`return`, `break`, or `continue`), so
+    /// `x` is always bound below the statement. That is checked, not assumed.
+    BindOrElse {
+        /// Name bound to the *payload*, not the outcome.
+        name: String,
+        /// Declared payload type, which `analyze` also uses as its schema.
+        ty: Option<TypeExpr>,
+        value: Expr,
+        /// Declared with `classified`, so the bound payload carries the label.
+        classified: bool,
+        /// `else (why):` binds the reason the outcome was not successful.
+        reason: Option<String>,
+        else_body: Vec<Stmt>,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct MatchArm {
     pub pattern: Pattern,
+    /// `case Ok(j) if j.has_punchline:` — an extra condition, evaluated with
+    /// the pattern's binders already in scope but before the body runs.
+    ///
+    /// A guard is deliberately restricted to pure expressions: it may be
+    /// evaluated for arms that do not end up running, and a condition that
+    /// could spend budget or call a model would make the cost of a `match`
+    /// depend on how many arms were tried. See `guard_is_pure`.
+    pub guard: Option<Expr>,
     pub body: Vec<Stmt>,
     pub span: Span,
 }

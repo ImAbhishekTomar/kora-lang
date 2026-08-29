@@ -259,12 +259,18 @@ fn parse_dep(name: &str, spec: &toml::Value) -> Result<Dep, ManifestError> {
 /// repository at `C:\\mirrors\\receipts.git` loses its suffix and points at a
 /// directory that does not exist.
 pub(crate) fn is_local_path(url: &str) -> bool {
-    // Deliberately not `Path::is_absolute()` alone: that answers for the
-    // *host*, so `C:\\mirrors\\receipts.git` reads as a relative name on Linux
-    // and an absolute one on Windows. A manifest is committed and shared, so
-    // what it means must not change with the machine reading it — the same
-    // reason listings are sorted and lockfiles are content-addressed.
-    url.starts_with('.') || Path::new(url).is_absolute() || has_drive_letter(url)
+    // Deliberately not `Path::is_absolute()` at all: that answers for the
+    // *host*. `C:\\mirrors\\receipts.git` is absolute only on Windows, and
+    // `/mirrors/receipts.git` is absolute only on Unix -- so the same manifest
+    // named different things on different machines, and the one that lost was
+    // whichever developer was not on the author's operating system. A manifest
+    // is committed and shared, so what it means must not change with the
+    // machine reading it: the same reason listings are sorted and lockfiles
+    // are content-addressed.
+    //
+    // Every form is therefore recognised everywhere, by shape rather than by
+    // asking the host.
+    url.starts_with('.') || url.starts_with('/') || url.starts_with('\\') || has_drive_letter(url)
 }
 
 /// `C:\\...` or `C:/...`, the one absolute form Unix does not recognize.
@@ -395,6 +401,34 @@ retry = { path = "../retry" }
         assert!(is_local_path("./receipts"));
         assert!(!is_local_path("github.com/org/receipts"));
         assert!(!is_local_path("https://github.com/org/receipts.git"));
+    }
+
+    #[test]
+    fn a_local_path_means_the_same_on_every_host() {
+        // The regression this function exists to prevent, and which it had
+        // itself: `Path::is_absolute()` answers for the host, so a Unix path
+        // read on Windows -- or a Windows path read on Unix -- stopped being
+        // local, and the manifest named a different thing depending on who
+        // opened it. These hold on every platform or the assertion is wrong
+        // on the one running it.
+        for local in [
+            "/mirrors/receipts.git",
+            r"C:\mirrors\receipts.git",
+            "C:/mirrors/receipts.git",
+            r"\\build-server\mirrors\receipts.git",
+            "./receipts",
+            "../receipts",
+        ] {
+            assert!(is_local_path(local), "{local} should be local everywhere");
+        }
+        for remote in [
+            "github.com/org/receipts",
+            "https://github.com/org/receipts.git",
+            "git@github.com:org/receipts.git",
+            "git:github.com/org/x",
+        ] {
+            assert!(!is_local_path(remote), "{remote} is a remote everywhere");
+        }
     }
 
     #[test]

@@ -53,6 +53,19 @@ pub enum RecordedOutcome {
         tokens_in: u64,
         tokens_out: u64,
     },
+    /// The provider did not answer.
+    ///
+    /// Journaled, never recorded to a cassette. A durable run that took the
+    /// failure branch must take it again on resume, or the replay diverges
+    /// from the history it is replaying. A cassette is the opposite case: it
+    /// is a fixture for a test suite, and freezing one afternoon's outage
+    /// into it would make every later run fail for a reason that no longer
+    /// exists.
+    Failed {
+        reason: String,
+        tokens_in: u64,
+        tokens_out: u64,
+    },
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]

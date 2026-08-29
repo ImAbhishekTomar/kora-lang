@@ -202,7 +202,7 @@ const BUILTINS: &[&str] = &[
     "analyze",
 ];
 
-const OUTCOME_TAGS: &[&str] = &["Ok", "Err", "Uncertain", "Exhausted"];
+const OUTCOME_TAGS: &[&str] = &["Ok", "Err", "Uncertain", "Exhausted", "Failed"];
 
 /// Modules the standard library provides, and what each exports.
 const MODULES: &[(&str, &[&str])] = &[
@@ -666,8 +666,50 @@ impl Checker<'_> {
                         }
                         _ => {}
                     }
+                    // Declared above, so a guard may read what the pattern
+                    // bound -- that is the whole point of `case Ok(j) if j.x`.
+                    if let Some(guard) = &arm.guard {
+                        self.check_expr(guard);
+                        self.check_guard_is_pure(guard);
+                    }
                     self.nested(&arm.body);
                 }
+            }
+            StmtKind::BindOrElse {
+                name,
+                ty,
+                value,
+                reason,
+                else_body,
+                ..
+            } => {
+                self.check_expr(value);
+                if let Some(ty) = ty {
+                    self.check_type(ty, stmt.span);
+                }
+                // The reason is only meaningful inside the else block, but
+                // Kora scopes by function like Python, so it is declared the
+                // same way a `case Uncertain(why)` binder is.
+                if let Some(reason) = reason {
+                    self.declare(reason);
+                }
+                self.nested(else_body);
+                if !diverges(else_body) {
+                    self.analysis.diagnostics.push(
+                        Diagnostic::error(
+                            stmt.span,
+                            format!(
+                                "the `else` block of `{name} = ... else:` must not fall through"
+                            ),
+                        )
+                        .with_hint(format!(
+                            "end it with `return`, `break`, or `continue` -- otherwise `{name}` would be unbound below this statement"
+                        )),
+                    );
+                }
+                // Declared after the else block so the block cannot read the
+                // name it exists to avoid binding.
+                self.declare(name);
             }
             StmtKind::Declassify {
                 value,
@@ -729,6 +771,45 @@ impl Checker<'_> {
                 self.declare(alias);
             }
             StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue | StmtKind::Pass => {}
+        }
+    }
+
+    /// A guard runs speculatively: arms are tried in order, so a guard may be
+    /// evaluated for an arm that never runs. A guard that called a model would
+    /// therefore make the token cost of a `match` depend on arm order, which
+    /// is exactly the kind of invisible spending budgets exist to prevent.
+    ///
+    /// The general case is not decidable here -- any `def` may call `analyze`
+    /// somewhere below it -- so the runtime refuses model calls while a guard
+    /// is on the stack. This check exists to catch the obvious spelling early,
+    /// with a better message than the runtime can give.
+    fn check_guard_is_pure(&mut self, guard: &Expr) {
+        fn find_analyze(e: &Expr) -> Option<Span> {
+            match &e.kind {
+                ExprKind::Call { callee, args, .. } => {
+                    if matches!(&callee.kind, ExprKind::Name(n) if n == "analyze") {
+                        return Some(e.span);
+                    }
+                    find_analyze(callee).or_else(|| args.iter().find_map(find_analyze))
+                }
+                ExprKind::Binary { left, right, .. } => {
+                    find_analyze(left).or_else(|| find_analyze(right))
+                }
+                ExprKind::Unary { operand, .. } => find_analyze(operand),
+                ExprKind::Attr { object, .. } => find_analyze(object),
+                ExprKind::Index { object, index } => {
+                    find_analyze(object).or_else(|| find_analyze(index))
+                }
+                _ => None,
+            }
+        }
+        if let Some(span) = find_analyze(guard) {
+            self.analysis.diagnostics.push(
+                Diagnostic::error(span, "a `case` guard cannot call a model")
+                    .with_hint(
+                        "guards are tried against arms that may not run; call `analyze` before the `match` and guard on its result",
+                    ),
+            );
         }
     }
 
@@ -958,6 +1039,38 @@ pub fn module_names() -> Vec<&'static str> {
 
 pub fn builtin_names() -> &'static [&'static str] {
     BUILTINS
+}
+
+/// Whether a block always leaves the enclosing block, so control never
+/// reaches the statement after it.
+///
+/// Conservative on purpose: it says yes only when it can prove it. A block it
+/// cannot prove diverging is reported, and the fix is to write the `return`
+/// explicitly, which is clearer than the analysis being clever.
+fn diverges(body: &[Stmt]) -> bool {
+    let Some(last) = body.last() else {
+        return false;
+    };
+    match &last.kind {
+        StmtKind::Return(_) | StmtKind::Break | StmtKind::Continue => true,
+        StmtKind::If {
+            branches,
+            else_body,
+        } => {
+            // Without an `else` there is a path that falls through.
+            else_body.as_ref().is_some_and(|e| diverges(e))
+                && branches.iter().all(|(_, b)| diverges(b))
+        }
+        // Every arm must leave, and an unmatched value is itself an error, so
+        // a `match` whose arms all diverge cannot fall through.
+        StmtKind::Match { arms, .. } => {
+            !arms.is_empty() && arms.iter().all(|arm| diverges(&arm.body))
+        }
+        StmtKind::WithBudget { body, .. }
+        | StmtKind::WithMock { body, .. }
+        | StmtKind::Declassify { body, .. } => diverges(body),
+        _ => false,
+    }
 }
 
 #[cfg(test)]
@@ -1225,5 +1338,111 @@ def go(n: int) -> int:
 
         let invalid = "type E:\n    count: int @pattern(\"[0-9]+\")\n";
         assert!(messages(invalid)[0].contains("is not a `str`"));
+    }
+    // --- `case` guards and `else` bindings ---
+
+    #[test]
+    fn a_guard_may_read_the_patterns_binders() {
+        let src = r#"def main():
+    match Ok(3):
+        case Ok(v) if v > 1:
+            print(v)
+        case _:
+            print("no")
+"#;
+        assert_eq!(messages(src), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_guard_may_not_call_a_model() {
+        let src = r#"agent main():
+    match Ok(3):
+        case Ok(v) if analyze(v, "well?"):
+            print(v)
+        case _:
+            print("no")
+"#;
+        let msgs = messages(src);
+        assert!(
+            msgs.iter().any(|m| m.contains("guard cannot call a model")),
+            "{msgs:?}"
+        );
+    }
+
+    #[test]
+    fn an_else_block_must_not_fall_through() {
+        let src = r#"def main():
+    v = Ok(1) else:
+        print("oops")
+    print(v)
+"#;
+        let msgs = messages(src);
+        assert!(
+            msgs.iter().any(|m| m.contains("must not fall through")),
+            "{msgs:?}"
+        );
+    }
+
+    #[test]
+    fn an_else_block_ending_in_return_is_accepted() {
+        let src = r#"def main():
+    v = Ok(1) else:
+        return
+    print(v)
+"#;
+        assert_eq!(messages(src), Vec::<String>::new());
+    }
+
+    #[test]
+    fn an_else_block_diverging_through_a_branch_is_accepted() {
+        let src = r#"def main():
+    v = Ok(1) else (why):
+        if why == "x":
+            return
+        else:
+            return
+    print(v)
+"#;
+        assert_eq!(messages(src), Vec::<String>::new());
+    }
+
+    #[test]
+    fn an_if_without_an_else_does_not_count_as_diverging() {
+        let src = r#"def main():
+    v = Ok(1) else:
+        if True:
+            return
+    print(v)
+"#;
+        let msgs = messages(src);
+        assert!(
+            msgs.iter().any(|m| m.contains("must not fall through")),
+            "{msgs:?}"
+        );
+    }
+
+    #[test]
+    fn the_bound_name_is_visible_after_the_statement() {
+        let src = r#"def main():
+    parsed = Ok(1) else:
+        return
+    print(parsed)
+"#;
+        assert_eq!(messages(src), Vec::<String>::new());
+    }
+
+    #[test]
+    fn the_reason_is_only_named_when_asked_for() {
+        let src = r#"def main():
+    v = Ok(1) else:
+        print(why)
+        return
+    print(v)
+"#;
+        let msgs = messages(src);
+        assert!(
+            msgs.iter().any(|m| m.contains("why")),
+            "an unbound reason should still be reported: {msgs:?}"
+        );
     }
 }

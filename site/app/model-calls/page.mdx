@@ -47,6 +47,24 @@ match fs.image("dataset/0.png"):
 
 PNG, JPEG, GIF, and WebP. No base64 and no hand-built request body — an image is a value, so it also crosses a `parallel for` boundary like anything else.
 
+## When nothing answers
+
+A model that declines is `Uncertain`. Something that never answers at all is `Failed` — a refused connection, a timeout, a rate limit that outlasted the retries, or an MCP tool server that went quiet mid-call.
+
+```kora
+match analyze(issue, "triage this", tools=gh.tools):
+    case Ok(t):
+        print(t.summary)
+    case Uncertain(why):
+        print(f"the model declined: {why}")
+    case Failed(why):
+        print(f"nobody answered: {why}")
+```
+
+The two are kept apart because they are fixed in different places: one is a prompt problem, the other is an outage. Neither raises.
+
+Every MCP request carries a deadline, `[mcp] timeout_secs`, default 60 and settable per server for one that reaches a slow API. A tool call is never retried — generating twice costs tokens, but calling a tool twice may open two issues or charge a card twice, and a timeout is exactly the case where whether it ran is unknown.
+
 ## Try it with a cassette
 
 For a live run, configure an OpenAI key or a local Ollama model in `kora.toml`.

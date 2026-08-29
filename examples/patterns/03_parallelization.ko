@@ -1,0 +1,67 @@
+# Pattern: parallelization.
+#
+# Independent subtasks run at the same time, then one step combines them.
+#
+# LangGraph fans out with three edges from START and fans in with three edges
+# into an aggregator; the Functional API uses three futures and three
+# `.result()` calls. `parallel for` is both halves: real OS threads, no GIL,
+# no async colouring, and results in input order so the fan-in is an index
+# rather than a reducer.
+#
+# Two things the graph version has no equivalent for. The branches share one
+# token budget, so they stop collectively rather than each spending its own.
+# And a branch that loses the provider degrades on its own — the other two
+# results survive, which is what `Failed` bought.
+
+type Piece:
+    body: str
+
+agent write_one(spec: dict) -> str:
+    budget: max_tokens = 4000
+
+    p: Piece = analyze(spec["topic"], spec["instruction"]) else (why):
+        return f"(skipped: {why})"
+
+    return p.body
+
+def combine(topic: str, parts: list[str]) -> str:
+    out = f"Here is a story, a joke, and a poem about {topic}.\n"
+    labels = ["JOKE", "STORY", "POEM"]
+    for i in range(len(parts)):
+        out = out + f"\n{labels[i]}:\n{parts[i]}\n"
+    return out
+
+def main():
+    topic = "cats"
+    jobs = [
+        {"topic": topic, "instruction": "write a joke about this"},
+        {"topic": topic, "instruction": "write a story about this"},
+        {"topic": topic, "instruction": "write a poem about this"},
+    ]
+
+    # One budget, shared across every branch. Exhaustion stops them together.
+    with budget(max_tokens = 20000):
+        parts = parallel for j in jobs:
+            return write_one(j)
+
+    print(combine(topic, parts))
+    print(f"spent {tokens_spent()} tokens over {calls_spent()} calls")
+
+test "results come back in input order, so the fan-in is an index":
+    parts = ["a joke", "a story", "a poem"]
+    combined = combine("cats", parts)
+    assert "JOKE:\na joke" in combined, "the first slot is the first job"
+    assert "POEM:\na poem" in combined, "the third slot is the third job"
+
+test "one branch losing the provider does not discard the others":
+    # The regression this pattern used to have: a single failed branch took
+    # every finished branch down with it.
+    with mock analyze -> Failed("connection refused"):
+        results = parallel for j in [{"topic": "cats", "instruction": "joke"}]:
+            return write_one(j)
+        assert len(results) == 1, "the branch still produced a result"
+        assert results[0] == "(skipped: connection refused)", f"got: {results[0]}"
+
+test "a worker returns its own piece":
+    with mock analyze -> Ok(Piece("a cat walks into a bar")):
+        assert write_one({"topic": "cats", "instruction": "joke"}) == "a cat walks into a bar"

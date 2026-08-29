@@ -151,6 +151,7 @@ fn walk_stmt(stmt: &Stmt, file: &str, out: &mut Vec<DeclassifySite>) {
                 walk_stmts(&arm.body, file, out);
             }
         }
+        StmtKind::BindOrElse { else_body, .. } => walk_stmts(else_body, file, out),
         StmtKind::FuncDef(f) => walk_stmts(&f.body, file, out),
         StmtKind::Assign { .. }
         | StmtKind::AugAssign { .. }

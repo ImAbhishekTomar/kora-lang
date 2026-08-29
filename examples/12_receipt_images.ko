@@ -52,6 +52,8 @@ agent classify(path: str) -> Row:
                     return Row(path, "uncertain", "", 0.0, "", "", "other", why)
                 case Exhausted(meter):
                     return Row(path, "exhausted", "", 0.0, "", "", "other", meter)
+                case Failed(why):
+                    return Row(path, "failed", "", 0.0, "", "", "other", why)
         case Err(why):
             return Row(path, "unreadable", "", 0.0, "", "", "other", why)
 

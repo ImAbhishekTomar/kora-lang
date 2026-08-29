@@ -25,3 +25,8 @@
 # `vendor/` is deliberate and committed, unlike `.kora/`. Not ignored.
 .vercel
 .env*
+site.zip
+ruff.note
+
+# Python bytecode from scripts/
+__pycache__/

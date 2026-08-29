@@ -14,6 +14,15 @@ use crate::{AnalyzeRequest, FieldType, ModelConfig, ModelError, Provider, Step, 
 /// that fires on ordinary work teaches people to raise it blindly. Override
 /// with `[models] timeout_secs`.
 pub const DEFAULT_TIMEOUT_SECS: u64 = 600;
+/// Three attempts total. Enough to ride out a rate limit or a restarting
+/// server; few enough that a provider which is genuinely down is reported
+/// while somebody is still watching.
+pub const DEFAULT_MAX_RETRIES: u32 = 2;
+/// Wait before the first retry. Doubles each attempt.
+const RETRY_BASE_MS: u64 = 500;
+/// A `Retry-After` longer than this is not waited out: a provider asking for
+/// a minute is telling the program to come back later, not to block.
+const MAX_RETRY_AFTER_SECS: u64 = 20;
 const OPENAI_BASE: &str = "https://api.openai.com/v1";
 const OLLAMA_BASE: &str = "http://localhost:11434";
 
@@ -51,6 +60,7 @@ pub fn parse_model_spec(spec: &str) -> Result<ModelConfig, ModelError> {
         api_key: None,
         max_output_tokens: 4096,
         timeout_secs: DEFAULT_TIMEOUT_SECS,
+        max_retries: DEFAULT_MAX_RETRIES,
     })
 }
 
@@ -310,39 +320,121 @@ fn sanitize_schema_name(name: &str) -> String {
     }
 }
 
-/// The real network transport, carrying this config's timeout.
+/// The real network transport, carrying this config's timeout and retries.
+///
+/// Retrying here rather than around `step_with` keeps one HTTP request as the
+/// unit that is retried: a tool loop that has already run three turns does not
+/// start over because the fourth request was rate limited.
 pub(crate) fn transport_for(config: &ModelConfig) -> Box<Transport> {
     // Zero is how "no timeout" sneaks back in, so it is clamped rather than
     // honoured -- the same rule the `http` module applies.
     let timeout = std::time::Duration::from_secs(config.timeout_secs.max(1));
+    let attempts = config.max_retries.saturating_add(1);
     Box::new(move |url: &str, headers: &[(&str, String)], body: &Value| {
-        send(url, headers, body, timeout)
+        retry_loop(attempts, || send(url, headers, body, timeout))
     })
 }
 
+/// The retry policy, with the request it retries passed in.
+///
+/// Split from the socket so the policy can be tested without one: how many
+/// attempts a 429 is worth is the part that will be argued about, and it
+/// should not need a listening port to check.
+fn retry_loop<F>(attempts: u32, mut attempt_once: F) -> Result<String, ModelError>
+where
+    F: FnMut() -> Result<String, (ModelError, Option<u64>)>,
+{
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        let (error, retry_after) = match attempt_once() {
+            Ok(text) => return Ok(text),
+            Err(e) => e,
+        };
+        if !error.retryable || attempt >= attempts {
+            return Err(error);
+        }
+        std::thread::sleep(retry_delay(attempt, retry_after));
+    }
+}
+
+/// Exponential backoff, or what the provider asked for when it said.
+///
+/// The jitter matters more here than in a single-threaded client: a
+/// `parallel for` fans out across every core, so a shared rate limit hits
+/// every branch at once and an unjittered backoff marches them all back into
+/// the provider together.
+fn retry_delay(attempt: u32, retry_after: Option<u64>) -> std::time::Duration {
+    if let Some(secs) = retry_after {
+        return std::time::Duration::from_secs(secs.min(MAX_RETRY_AFTER_SECS));
+    }
+    let base = RETRY_BASE_MS.saturating_mul(1 << (attempt - 1).min(5));
+    std::time::Duration::from_millis(base + jitter_ms(base))
+}
+
+/// Up to a quarter of the wait, from the clock rather than a random source.
+///
+/// A real generator would be one more thing to seed, and nothing here needs
+/// to be unpredictable -- only for two threads to differ.
+fn jitter_ms(base: u64) -> u64 {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.subsec_nanos() as u64)
+        .unwrap_or(0);
+    nanos % (base / 4).max(1)
+}
+
+/// Whether waiting could plausibly change the answer, and for how long.
+///
+/// 408, 409, 429 and every 5xx are the provider saying "not now". Everything
+/// else in the 4xx range is the request itself being wrong, and a retry only
+/// wastes the caller's time twice.
+fn retryable_status(code: u16) -> bool {
+    matches!(code, 408 | 409 | 429) || (500..600).contains(&code)
+}
+
+fn retry_after_secs(response: &ureq::Response) -> Option<u64> {
+    response.header("retry-after")?.trim().parse::<u64>().ok()
+}
+
+/// One attempt. The `Option<u64>` alongside an error is the provider's own
+/// `Retry-After`, which is worth more than any backoff guessed at locally.
+#[allow(clippy::type_complexity)]
 fn send(
     url: &str,
     headers: &[(&str, String)],
     body: &Value,
     timeout: std::time::Duration,
-) -> Result<String, ModelError> {
+) -> Result<String, (ModelError, Option<u64>)> {
     let agent = ureq::AgentBuilder::new().timeout(timeout).build();
     let mut request = agent.post(url);
     for (name, value) in headers {
         request = request.set(name, value);
     }
     match request.send_json(body.clone()) {
-        Ok(response) => response
-            .into_string()
-            .map_err(|e| ModelError::new(format!("could not read response body from {url}: {e}"))),
+        Ok(response) => response.into_string().map_err(|e| {
+            (
+                ModelError::retryable(format!("could not read response body from {url}: {e}")),
+                None,
+            )
+        }),
         Err(ureq::Error::Status(code, response)) => {
+            let retry_after = retry_after_secs(&response);
             let body = response.into_string().unwrap_or_default();
-            Err(ModelError::new(format!(
-                "{url} returned HTTP {code}: {}",
-                truncate(&body, 300)
-            )))
+            let message = format!("{url} returned HTTP {code}: {}", truncate(&body, 300));
+            let error = if retryable_status(code) {
+                ModelError::retryable(message)
+            } else {
+                ModelError::new(message)
+            };
+            Err((error, retry_after))
         }
-        Err(e) => Err(ModelError::new(format!("request to {url} failed: {e}"))),
+        // Everything left is transport: a refused connection, a DNS failure,
+        // a timeout. None of those say anything about the request itself.
+        Err(e) => Err((
+            ModelError::retryable(format!("request to {url} failed: {e}")),
+            None,
+        )),
     }
 }
 
@@ -594,5 +686,97 @@ mod tests {
         assert_eq!(sanitize_schema_name("Insight"), "Insight");
         assert_eq!(sanitize_schema_name("my type!"), "my_type_");
         assert_eq!(sanitize_schema_name(""), "Result");
+    }
+}
+
+#[cfg(test)]
+mod retry_tests {
+    use super::*;
+
+    #[test]
+    fn a_bad_request_is_never_retried() {
+        // 400 and 401 are the request being wrong. Retrying one wastes the
+        // caller's time twice and reaches the same answer.
+        for code in [400, 401, 403, 404, 422] {
+            assert!(!retryable_status(code), "{code} should not be retried");
+        }
+    }
+
+    #[test]
+    fn a_rate_limit_or_a_server_error_is_retried() {
+        for code in [408, 409, 429, 500, 502, 503, 504] {
+            assert!(retryable_status(code), "{code} should be retried");
+        }
+    }
+
+    #[test]
+    fn the_backoff_grows_and_stays_bounded() {
+        let first = retry_delay(1, None);
+        let second = retry_delay(2, None);
+        assert!(
+            first.as_millis() >= RETRY_BASE_MS as u128,
+            "the first wait should be at least the base"
+        );
+        assert!(
+            second >= first,
+            "waits should grow: {second:?} came after {first:?}"
+        );
+        // Jitter is a fraction of the wait, not a multiple of it.
+        assert!(first.as_millis() < (RETRY_BASE_MS as u128) * 2);
+    }
+
+    #[test]
+    fn the_provider_is_believed_over_the_local_backoff() {
+        assert_eq!(retry_delay(1, Some(3)).as_secs(), 3);
+    }
+
+    #[test]
+    fn an_absurd_retry_after_is_capped_rather_than_waited_out() {
+        // A provider asking for an hour is telling the program to come back
+        // later, not to hold a thread open until then.
+        assert_eq!(
+            retry_delay(1, Some(3600)).as_secs(),
+            MAX_RETRY_AFTER_SECS,
+            "a long Retry-After should be capped"
+        );
+    }
+
+    #[test]
+    fn retries_stop_at_the_configured_count() {
+        // Counts attempts rather than sleeping: the policy is what is under
+        // test, not the clock.
+        let attempts = std::cell::Cell::new(0);
+        let result = retry_loop(3, || {
+            attempts.set(attempts.get() + 1);
+            Err((ModelError::retryable("nope"), Some(0)))
+        });
+        assert!(result.is_err());
+        assert_eq!(attempts.get(), 3, "three attempts, then give up");
+    }
+
+    #[test]
+    fn an_unretryable_failure_is_reported_on_the_first_attempt() {
+        let attempts = std::cell::Cell::new(0);
+        let result = retry_loop(3, || {
+            attempts.set(attempts.get() + 1);
+            Err((ModelError::new("bad api key"), None))
+        });
+        assert!(result.is_err());
+        assert_eq!(attempts.get(), 1, "a 401 does not improve with waiting");
+    }
+
+    #[test]
+    fn a_retry_that_succeeds_returns_the_answer() {
+        let attempts = std::cell::Cell::new(0);
+        let result = retry_loop(3, || {
+            attempts.set(attempts.get() + 1);
+            if attempts.get() < 2 {
+                Err((ModelError::retryable("try again"), Some(0)))
+            } else {
+                Ok("body".to_string())
+            }
+        });
+        assert_eq!(result.unwrap(), "body");
+        assert_eq!(attempts.get(), 2);
     }
 }

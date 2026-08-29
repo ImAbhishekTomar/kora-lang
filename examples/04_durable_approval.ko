@@ -42,5 +42,7 @@ def main():
             print(f"could not assess: {reason}")
         case Exhausted(meter):
             print(f"budget out of {meter}")
+        case Failed(why):
+            print(f"provider did not answer: {why}")
 
     print("done")

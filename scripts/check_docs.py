@@ -48,7 +48,6 @@ DOCS = [
     ("docs/stdlib.md", MARKDOWN),
     ("docs/cli.md", MARKDOWN),
     ("examples/README.md", MARKDOWN),
-    ("site/app/page.mdx", SITE),
     ("site/app/comparison/page.mdx", SITE),
     ("site/app/ecosystem/page.mdx", SITE),
     ("site/app/installation/page.mdx", SITE),
@@ -105,6 +104,9 @@ def check_code_blocks(kora: str) -> None:
     print("Kora code blocks")
     checked = skipped = 0
     for doc, kind in DOCS:
+        if not os.path.exists(os.path.join(ROOT, doc)):
+            # check_site_coverage names this properly; do not mask it here.
+            continue
         for line_no, block in code_blocks(read(doc), FENCE[kind]):
             if any(marker in block for marker in SKIP_MARKERS):
                 skipped += 1
@@ -198,11 +200,20 @@ def check_stdlib() -> None:
 
 
 def route_exists(route: str) -> bool:
-    """Does `/foo` correspond to a page the site actually serves?"""
+    """Does `/foo` correspond to a page the site actually serves?
+
+    A route is a directory holding a `page.*`, and Next.js does not care which
+    extension that is: the landing page is React, the reference pages are MDX,
+    and both are routes. Checking only for `.mdx` reported the landing page as
+    missing the moment it stopped being Markdown.
+    """
     slug = route.strip("/")
-    page = os.path.join(ROOT, SITE_APP, slug, "page.mdx") if slug else \
-        os.path.join(ROOT, SITE_APP, "page.mdx")
-    return os.path.exists(page)
+    directory = os.path.join(ROOT, SITE_APP, slug) if slug else \
+        os.path.join(ROOT, SITE_APP)
+    return any(
+        os.path.exists(os.path.join(directory, f"page{ext}"))
+        for ext in (".mdx", ".md", ".tsx", ".jsx", ".ts", ".js")
+    )
 
 
 def check_links() -> None:
@@ -210,6 +221,8 @@ def check_links() -> None:
     print("Internal links")
     count = 0
     for doc, kind in DOCS:
+        if not os.path.exists(os.path.join(ROOT, doc)):
+            continue
         text = read(doc)
         links = re.findall(r"\[([^\]]+)\]\(([^)]+)\)", text)
         # The site pages are MDX, so some links are JSX attributes rather
@@ -307,20 +320,35 @@ def check_examples(kora: str) -> None:
     library_files = sorted(
         os.path.join("lib", f) for f in os.listdir(library) if f.endswith(".ko")
     ) if os.path.isdir(library) else []
+    # The pattern set is a second tour with its own index, so it is checked
+    # and indexed by the same rules rather than being trusted to stay right.
+    patterns = os.path.join(directory, "patterns")
+    pattern_files = sorted(
+        os.path.join("patterns", f)
+        for f in os.listdir(patterns)
+        if f.endswith(".ko")
+    ) if os.path.isdir(patterns) else []
+    every = files + library_files + pattern_files
     result = subprocess.run(
-        [kora, "check"]
-        + [os.path.join(directory, f) for f in files + library_files],
+        [kora, "check"] + [os.path.join(directory, f) for f in every],
         capture_output=True, text=True)
     if result.returncode != 0:
         fail("an example does not check:\n" + result.stderr.strip())
     else:
-        print(f"  {len(files) + len(library_files)} example files check")
+        print(f"  {len(every)} example files check")
 
     # Every example should be listed in the index, or nobody will find it.
     index = read("examples/README.md")
     for name in files:
         if name not in index:
             fail(f"examples/{name} is not listed in examples/README.md")
+
+    if pattern_files:
+        pattern_index = read("examples/patterns/README.md")
+        for name in pattern_files:
+            base = os.path.basename(name)
+            if base not in pattern_index:
+                fail(f"examples/{name} is not listed in examples/patterns/README.md")
 
 
 def main() -> int:

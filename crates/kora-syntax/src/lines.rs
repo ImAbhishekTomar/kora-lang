@@ -52,6 +52,7 @@ fn walk(stmts: &[Stmt], out: &mut BTreeSet<u32>) {
                     walk(&arm.body, out);
                 }
             }
+            StmtKind::BindOrElse { else_body, .. } => walk(else_body, out),
             StmtKind::FuncDef(f) => walk(&f.body, out),
             StmtKind::Assign { .. }
             | StmtKind::AugAssign { .. }

@@ -206,14 +206,26 @@ tool helper(a: str) -> str:
 def main():
     classified secret = "hunter2"
     declassify secret as s for local_model:
-        r: R = analyze(s, "do something", tools=[helper])
+        r: R = analyze(s, "do something", tools=[helper]) else (why):
+            print(f"reached the provider: {why}")
+            return
+        print("model answered")
 "#;
-    // Fails on the model call rather than on a sink check, since there is no
-    // model to reach in a test.
-    let err = run_err(src);
+    // There is no model to reach in a test, so the call comes back `Failed`
+    // -- which is the point: reaching the provider at all means the sink
+    // check let a declared tool through instead of taking it for a server.
+    let program = parse(src).unwrap_or_else(|e| panic!("parse error: {e}\n{src}"));
+    let mut i = interp();
+    i.run(&program)
+        .unwrap_or_else(|e| panic!("a declared tool should not fail the run: {}", e.message));
+    let out = i.output.join("\n");
     assert!(
-        !err.contains("MCP server"),
-        "a declared tool should not look like a server: {err}"
+        out.contains("reached the provider"),
+        "expected the call to reach the provider, got: {out}"
+    );
+    assert!(
+        !out.contains("MCP server"),
+        "a declared tool should not look like a server: {out}"
     );
 }
 

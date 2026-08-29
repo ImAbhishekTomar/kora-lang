@@ -106,13 +106,22 @@ jobs:
       - name: Build
         run: cargo build --locked
       - name: Check every example
-        run: ./target/debug/kora check examples/*.ko examples/lib/*.ko examples/lib/greet/src/*.ko
+        run: ./target/debug/kora check examples/*.ko examples/lib/*.ko examples/lib/greet/src/*.ko examples/patterns/*.ko
       - name: Run the Kora test suite
         run: |
           set -euo pipefail
           ./target/debug/kora test examples/07_tests.ko
           ./target/debug/kora test examples/10_modules.ko
           ./target/debug/kora test examples/13_packages.ko
+      # The pattern set carries its own tests and needs no model, no API key,
+      # and no cassette -- so every failure path in it is checked on every
+      # push, which is the half of a pattern nobody usually tests.
+      - name: Run the pattern set
+        run: |
+          set -euo pipefail
+          for f in examples/patterns/*.ko; do
+            ./target/debug/kora test "$f"
+          done
 
   # Every example that does not need a live model or the network. These are
   # cassette-backed, so they are deterministic and free -- and they catch the

@@ -25,6 +25,8 @@ agent triage(raw: str) -> str:
             return f"needs a human: {reason}"
         case Exhausted(meter):
             return f"budget out of {meter}"
+        case Failed(why):
+            return f"provider did not answer: {why}"
 
 test "priority maps severity levels":
     assert priority("high") == 1
@@ -45,6 +47,14 @@ test "an exhausted budget is handled":
     with mock analyze -> Exhausted("tokens"):
         result = triage("anything")
         assert result == "budget out of tokens"
+
+test "a provider outage is a value, not a crash":
+    # The failure that used to take the whole run down. It comes back as
+    # `Failed` only after the call has already retried with backoff, so
+    # reaching this branch means the provider stayed unreachable.
+    with mock analyze -> Failed("connection refused"):
+        result = triage("anything")
+        assert result == "provider did not answer: connection refused"
 
 test "a mock of the wrong shape is rejected":
     # Untyped mocking frameworks cannot catch this: they have no idea what

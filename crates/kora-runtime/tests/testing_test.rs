@@ -50,6 +50,8 @@ agent triage(raw: str) -> str:
             return f"uncertain: {r}"
         case Exhausted(m):
             return f"exhausted: {m}"
+        case Failed(w):
+            return f"failed: {w}"
 "#;
 
 // --- collection and assertions ---
@@ -154,6 +156,10 @@ test "uncertain":
 test "exhausted":
     with mock analyze -> Exhausted("tokens"):
         assert triage("x") == "exhausted: tokens"
+
+test "failed":
+    with mock analyze -> Failed("connection refused"):
+        assert triage("x") == "failed: connection refused"
 "#
     ));
     assert!(results.iter().all(|(_, f)| f.is_none()), "{results:?}");
