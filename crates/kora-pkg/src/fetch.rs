@@ -14,6 +14,8 @@
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
+use sha2::{Digest, Sha256};
+
 use crate::lock::Locked;
 use crate::manifest::GitRef;
 
@@ -72,7 +74,7 @@ pub fn all(requests: &[Request], store: &Path, jobs: usize) -> Vec<Fetched> {
 }
 
 fn one(request: &Request, store: &Path) -> Fetched {
-    let temp = store.join(format!(".partial-{}", request.url.replace('/', "~")));
+    let temp = store.join(temporary_checkout_name(request));
     let _ = std::fs::remove_dir_all(&temp);
     std::fs::create_dir_all(store)
         .map_err(|e| format!("cannot create {}: {e}", store.display()))?;
@@ -80,7 +82,7 @@ fn one(request: &Request, store: &Path) -> Fetched {
     // A local path is a repository too: an internal mirror, or a checkout
     // beside the project. It grants nothing a path dependency does not
     // already, since both name a directory the program's own manifest chose.
-    let url = if request.url.starts_with('/') || request.url.starts_with('.') {
+    let url = if Path::new(&request.url).is_absolute() || request.url.starts_with('.') {
         request.url.clone()
     } else {
         format!("https://{}", request.url)
@@ -156,6 +158,20 @@ fn one(request: &Request, store: &Path) -> Fetched {
     Ok(Locked { hash, ..locked })
 }
 
+/// A filesystem-safe, deterministic staging name for one requested revision.
+///
+/// A local repository may be an absolute path. Using that path directly made
+/// the staging name contain `:` and `\\` on Windows, which Git then rejects.
+/// Hashing both the source and requested reference keeps separate revisions
+/// separate without letting host-specific path punctuation reach the filename.
+fn temporary_checkout_name(request: &Request) -> String {
+    let mut digest = Sha256::new();
+    digest.update(request.url.as_bytes());
+    digest.update([0]);
+    digest.update(request.reference.describe().as_bytes());
+    format!(".partial-{:x}", digest.finalize())
+}
+
 fn run_git(args: &[String], cwd: Option<&PathBuf>) -> Result<String, String> {
     let mut command = std::process::Command::new("git");
     command.args(args);
@@ -220,5 +236,16 @@ mod tests {
     fn no_requests_is_not_an_error() {
         let store = std::env::temp_dir().join("kora-fetch-none");
         assert!(all(&[], &store, 4).is_empty());
+    }
+
+    #[test]
+    fn a_staging_name_is_safe_for_an_absolute_windows_path() {
+        let request = Request {
+            url: r"C:\\work\\packages\\greet".to_string(),
+            reference: GitRef::Tag("v1.0.0".to_string()),
+        };
+        let name = temporary_checkout_name(&request);
+        assert!(name.starts_with(".partial-"));
+        assert!(!name.contains([':', '\\', '/']));
     }
 }

@@ -1,3 +1,15 @@
 allowBuilds:
   '@abhishektomar/kora-cli': true
   esbuild: false
+
+overrides:
+  '@tootallnate/once': 2.0.1
+  ajv: 8.18.0
+  js-yaml: 4.3.1
+  minimatch: 10.2.6
+  'path-to-regexp@>=4.0.0 <6.3.0': 6.3.0
+  'path-to-regexp@>=8.0.0 <8.4.0': 8.4.0
+  postcss: 8.5.26
+  smol-toml: 1.6.1
+  tar: 7.5.22
+  undici: 7.29.0
