@@ -82,7 +82,7 @@ fn one(request: &Request, store: &Path) -> Fetched {
     // A local path is a repository too: an internal mirror, or a checkout
     // beside the project. It grants nothing a path dependency does not
     // already, since both name a directory the program's own manifest chose.
-    let url = if Path::new(&request.url).is_absolute() || request.url.starts_with('.') {
+    let url = if crate::manifest::is_local_path(&request.url) {
         request.url.clone()
     } else {
         format!("https://{}", request.url)
