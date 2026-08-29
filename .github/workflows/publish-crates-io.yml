@@ -1,0 +1,47 @@
+name: Publish crates.io
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish workspace crates in dependency order
+    runs-on: ubuntu-latest
+    env:
+      CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v7
+      - name: Install Rust toolchain
+        run: rustup update stable && rustup default stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Publish
+        if: env.CARGO_REGISTRY_TOKEN != ''
+        run: |
+          set -euo pipefail
+          publish_or_skip() {
+            local crate="$1"
+            echo "== $crate =="
+            if output=$(cargo publish -p "$crate" --locked 2>&1); then
+              echo "$output"
+            else
+              echo "$output"
+              if echo "$output" | grep -qi "already exists\|already uploaded"; then
+                echo "$crate already published at this version, continuing"
+              else
+                echo "$crate publish failed" >&2
+                exit 1
+              fi
+            fi
+            sleep 15
+          }
+          for crate in kora-syntax kora-models kora-mcp kora-python kora-types kora-pkg kora-runtime kora-lsp kora-dap kora-cli; do
+            publish_or_skip "$crate"
+          done
+
+      - name: Skip notice
+        if: env.CARGO_REGISTRY_TOKEN == ''
+        run: echo "::notice::CARGO_REGISTRY_TOKEN not set, skipped crates.io publish"
