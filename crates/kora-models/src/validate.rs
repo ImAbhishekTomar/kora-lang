@@ -131,6 +131,30 @@ fn coerce(field: &SchemaField, value: Value) -> Result<Value, ModelError> {
             }
             other => bad(&json_kind(other)),
         },
+        FieldType::Object(nested) => match value {
+            Value::Object(map) => Ok(Value::Object(
+                validate_fields(map, nested)
+                    .map_err(|e| ModelError::new(format!("field `{name}`: {}", e.message)))?,
+            )),
+            other => bad(&json_kind(&other)),
+        },
+        FieldType::ListOfObject(nested) => match value {
+            Value::Array(items) => {
+                let mut out = Vec::with_capacity(items.len());
+                for item in items {
+                    match item {
+                        Value::Object(map) => {
+                            out.push(Value::Object(validate_fields(map, nested).map_err(
+                                |e| ModelError::new(format!("field `{name}`: {}", e.message)),
+                            )?));
+                        }
+                        other => return bad(&format!("a list containing {}", json_kind(&other))),
+                    }
+                }
+                Ok(Value::Array(out))
+            }
+            other => bad(&json_kind(&other)),
+        },
     }
 }
 

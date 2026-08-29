@@ -1,0 +1,66 @@
+---
+title: Kora 0.2.0
+description: Release notes, compatibility information, and migration guidance for Kora 0.2.0.
+---
+
+# Kora `0.2.0`
+
+Published 30 August 2026. [View the release history and downloads](https://github.com/ImAbhishekTomar/kora-lang/releases).
+
+`0.2.0` expands Kora's agent and workflow capabilities and makes provider
+failures explicit outcomes that programs can handle.
+
+## Changes
+
+- Model calls can return `Failed(reason)` when a provider times out, refuses a
+  connection, is rate-limited, or returns a server error.
+- `match` arms support guards, and the `else` binding keeps successful paths
+  concise while requiring failure handling to diverge.
+- Mocks cross `parallel for` boundaries, so fan-out workflows can be tested
+  without reaching a real model.
+- The language server resolves package imports for completion and
+  go-to-definition.
+- The examples and public documentation now cover agent and workflow patterns.
+
+## Breaking changes
+
+`analyze` results now include `Failed(reason)`. Existing exhaustive matches
+over model calls must add a `Failed` arm, or use the `else` binding when
+`Uncertain`, `Exhausted`, and `Failed` should be handled together.
+
+## Migration from `0.1.0`
+
+Add a provider-failure arm to every exhaustive model-call match:
+
+```kora
+match analyze(data, "classify"):
+    case Ok(result):
+        use_result(result)
+    case Uncertain(reason):
+        handle_uncertain(reason)
+    case Exhausted(meter):
+        handle_exhausted(meter)
+    case Failed(reason):
+        handle_provider_failure(reason)
+```
+
+When those outcomes share one recovery path, use the concise form:
+
+```kora
+result: Result = analyze(data, "classify") else:
+    handle_failure()
+```
+
+Upgrade and verify an existing project:
+
+```bash
+npm install -g @abhishektomar/kora-cli@0.2.0
+kora --version
+kora check main.ko
+kora test main.ko
+```
+
+## Compatibility
+
+Kora remains pre-alpha. This release intentionally uses the minor version for
+breaking changes while the project is below `1.0.0`.

@@ -16,7 +16,7 @@ members = [
 [workspace.package]
 # Bumped by release-please from the commit history; see
 # .github/workflows/release-please.yml. The annotation is what marks the line.
-version = "0.1.0" # x-release-please-version
+version = "0.2.0" # x-release-please-version
 edition = "2021"
 # Driven by dependencies (icu, via url via ureq), not by this code.
 # The CI job pins the same version, so the two cannot drift.
@@ -28,16 +28,16 @@ repository = "https://github.com/ImAbhishekTomar/kora-lang"
 # `version` here must track workspace.package.version: crates.io requires a
 # version on every dependency, path or not. The release workflow checks it, and
 # release-please keeps them in step through the annotations below.
-kora-syntax = { path = "crates/kora-syntax", version = "0.1.0" } # x-release-please-version
-kora-types = { path = "crates/kora-types", version = "0.1.0" } # x-release-please-version
-kora-runtime = { path = "crates/kora-runtime", version = "0.1.0" } # x-release-please-version
-kora-models = { path = "crates/kora-models", version = "0.1.0" } # x-release-please-version
-kora-pkg = { path = "crates/kora-pkg", version = "0.1.0" } # x-release-please-version
-kora-lsp = { path = "crates/kora-lsp", version = "0.1.0" } # x-release-please-version
-kora-dap = { path = "crates/kora-dap", version = "0.1.0" } # x-release-please-version
-kora-mcp = { path = "crates/kora-mcp", version = "0.1.0" } # x-release-please-version
-kora-python = { path = "crates/kora-python", version = "0.1.0" } # x-release-please-version
-serde = { version = "1", features = ["derive"] }
+kora-syntax = { path = "crates/kora-syntax", version = "0.2.0" } # x-release-please-version
+kora-types = { path = "crates/kora-types", version = "0.2.0" } # x-release-please-version
+kora-runtime = { path = "crates/kora-runtime", version = "0.2.0" } # x-release-please-version
+kora-models = { path = "crates/kora-models", version = "0.2.0" } # x-release-please-version
+kora-pkg = { path = "crates/kora-pkg", version = "0.2.0" } # x-release-please-version
+kora-lsp = { path = "crates/kora-lsp", version = "0.2.0" } # x-release-please-version
+kora-dap = { path = "crates/kora-dap", version = "0.2.0" } # x-release-please-version
+kora-mcp = { path = "crates/kora-mcp", version = "0.2.0" } # x-release-please-version
+kora-python = { path = "crates/kora-python", version = "0.2.0" } # x-release-please-version
+serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 ureq = { version = "2", features = ["json"] }
 toml = "0.8"

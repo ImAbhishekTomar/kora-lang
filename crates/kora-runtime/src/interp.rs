@@ -1,7 +1,7 @@
 //! Tree-walking interpreter (execution Stage 1 per DECISIONS.md).
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
@@ -2359,7 +2359,7 @@ impl Interpreter {
         let journal_site = format!("{site}#model");
         if let Some(outcome) = self.journal_model_call(&journal_site, span)? {
             self.trace_replayed_call(&type_name, "journal");
-            return self.outcome_to_value(outcome, &type_name, &schema, span);
+            return self.outcome_to_value(outcome, &type_name, span);
         }
 
         // Replay next: a cassette hit costs nothing and keeps CI deterministic.
@@ -2371,7 +2371,7 @@ impl Interpreter {
         });
         if let Some(outcome) = recorded {
             self.trace_replayed_call(&type_name, "cassette");
-            return self.outcome_to_value(outcome_from_record(outcome), &type_name, &schema, span);
+            return self.outcome_to_value(outcome_from_record(outcome), &type_name, span);
         }
         let mode = self
             .cassette
@@ -2418,7 +2418,7 @@ impl Interpreter {
             }
         }
 
-        self.outcome_to_value(outcome, &type_name, &schema, span)
+        self.outcome_to_value(outcome, &type_name, span)
     }
 
     /// Resolve `model="name"` against `[models]` in kora.toml.
@@ -2468,52 +2468,35 @@ impl Interpreter {
 
     /// Build the model schema from a Kora `type` declaration.
     fn schema_for(&self, type_name: &str, span: Span) -> Result<Schema, RuntimeError> {
+        let mut seen = HashSet::new();
+        self.schema_for_inner(type_name, span, &mut seen)
+    }
+
+    /// `seen` holds the qualified names of types on the current path from the
+    /// root result type down to this call, so a type that (directly or
+    /// through another type) contains itself is a clear error instead of a
+    /// stack overflow.
+    fn schema_for_inner(
+        &self,
+        type_name: &str,
+        span: Span,
+        seen: &mut HashSet<String>,
+    ) -> Result<Schema, RuntimeError> {
         let written = crate::value::short_type_name(type_name);
         let fields = self.types.get(type_name).ok_or_else(|| {
             RuntimeError::new(format!("`{written}` is not a declared type"), span)
                 .with_hint("declare it first, e.g. `type Insight:` with typed fields below")
         })?;
+        if !seen.insert(type_name.to_string()) {
+            return Err(RuntimeError::new(
+                format!("type `{written}` cannot be requested from analyze() because it refers to itself"),
+                span,
+            )
+            .with_hint("analyze() builds the whole result shape upfront, so a type nested inside itself has no fixed size to ask for"));
+        }
         let mut out = Vec::new();
-        for field in fields {
-            let ft = match &field.ty {
-                TypeExpr::Name(n) => match n.as_str() {
-                    "str" => FieldType::Str,
-                    "int" => FieldType::Int,
-                    "float" => FieldType::Float,
-                    "bool" => FieldType::Bool,
-                    other => {
-                        return Err(RuntimeError::new(
-                            format!(
-                                "field `{}` has type `{other}`, which analyze() cannot request yet",
-                                field.name
-                            ),
-                            field.span,
-                        )
-                        .with_hint(
-                            "analyze result fields must be str, int, float, bool, or list[str]",
-                        ));
-                    }
-                },
-                TypeExpr::Generic(n, args) if n == "list" => match args.first() {
-                    Some(TypeExpr::Name(inner)) if inner == "str" => FieldType::ListOfStr,
-                    _ => {
-                        return Err(RuntimeError::new(
-                            format!("field `{}` must be `list[str]`", field.name),
-                            field.span,
-                        ));
-                    }
-                },
-                other => {
-                    return Err(RuntimeError::new(
-                        format!(
-                            "field `{}` has type `{}`, which analyze() cannot request yet",
-                            field.name,
-                            other.display()
-                        ),
-                        field.span,
-                    ));
-                }
-            };
+        for field in fields.clone() {
+            let ft = self.analyze_field_type(&field, seen)?;
             out.push(SchemaField {
                 name: field.name.clone(),
                 field_type: ft,
@@ -2521,10 +2504,79 @@ impl Interpreter {
                 pattern: field.metadata.pattern.clone(),
             });
         }
+        seen.remove(type_name);
         Ok(Schema {
             type_name: written.to_string(),
             fields: out,
         })
+    }
+
+    /// A field's type as it should be requested from a model: a scalar, a
+    /// list of strings, another declared type nested inline, or a list of
+    /// that type.
+    fn analyze_field_type(
+        &self,
+        field: &FieldDef,
+        seen: &mut HashSet<String>,
+    ) -> Result<FieldType, RuntimeError> {
+        let unsupported_hint = "analyze result fields must be str, int, float, bool, \
+                                 list[str], another declared type, or list[<declared type>]";
+        match &field.ty {
+            TypeExpr::Name(n) => match n.as_str() {
+                "str" => Ok(FieldType::Str),
+                "int" => Ok(FieldType::Int),
+                "float" => Ok(FieldType::Float),
+                "bool" => Ok(FieldType::Bool),
+                other => match self.lookup_type(other) {
+                    Some((qualified, _)) => {
+                        let nested = self.schema_for_inner(&qualified, field.span, seen)?;
+                        Ok(FieldType::Object(Rc::new(nested)))
+                    }
+                    None => Err(RuntimeError::new(
+                        format!(
+                            "field `{}` has type `{other}`, which analyze() cannot request yet",
+                            field.name
+                        ),
+                        field.span,
+                    )
+                    .with_hint(unsupported_hint)),
+                },
+            },
+            TypeExpr::Generic(n, args) if n == "list" => match args.first() {
+                Some(TypeExpr::Name(inner)) if inner == "str" => Ok(FieldType::ListOfStr),
+                Some(TypeExpr::Name(inner)) => match self.lookup_type(inner) {
+                    Some((qualified, _)) => {
+                        let nested = self.schema_for_inner(&qualified, field.span, seen)?;
+                        Ok(FieldType::ListOfObject(Rc::new(nested)))
+                    }
+                    None => Err(RuntimeError::new(
+                        format!(
+                            "field `{}` must be `list[str]` or `list[<declared type>]`",
+                            field.name
+                        ),
+                        field.span,
+                    )
+                    .with_hint(unsupported_hint)),
+                },
+                _ => Err(RuntimeError::new(
+                    format!(
+                        "field `{}` must be `list[str]` or `list[<declared type>]`",
+                        field.name
+                    ),
+                    field.span,
+                )
+                .with_hint(unsupported_hint)),
+            },
+            other => Err(RuntimeError::new(
+                format!(
+                    "field `{}` has type `{}`, which analyze() cannot request yet",
+                    field.name,
+                    other.display()
+                ),
+                field.span,
+            )
+            .with_hint(unsupported_hint)),
+        }
     }
 
     /// Wrap a provider outcome as `Ok(Object)` or `Uncertain(reason)`.
@@ -2532,7 +2584,6 @@ impl Interpreter {
         &mut self,
         outcome: AnalyzeOutcome,
         type_name: &str,
-        schema: &Schema,
         span: Span,
     ) -> Result<Value, RuntimeError> {
         match outcome {
@@ -2544,15 +2595,21 @@ impl Interpreter {
                 self.tokens_in += tokens_in;
                 self.tokens_out += tokens_out;
                 self.budget.charge_call(tokens_in, tokens_out);
+                // Reconstructed from the original `TypeExpr`s, not the
+                // model-facing `Schema`, so a nested declared-type field
+                // becomes a `Value::Object` under its qualified name -- the
+                // same identity a directly-constructed value would carry --
+                // rather than the display name `Schema` uses for prompts.
+                let declared_fields = self.types.get(type_name).cloned().unwrap_or_default();
                 let mut fields = HashMap::new();
-                for field in &schema.fields {
+                for field in &declared_fields {
                     let raw = fields_json.get(&field.name).ok_or_else(|| {
                         RuntimeError::new(
                             format!("model result is missing field `{}`", field.name),
                             span,
                         )
                     })?;
-                    fields.insert(field.name.clone(), json_to_value(raw));
+                    fields.insert(field.name.clone(), self.json_to_value_typed(raw, &field.ty));
                 }
                 Ok(Value::Variant {
                     tag: Rc::new("Ok".to_string()),
@@ -2789,6 +2846,51 @@ fn json_to_value(json: &serde_json::Value) -> Value {
 }
 
 impl Interpreter {
+    /// JSON -> Kora value, honoring a declared result type: a `type`-shaped
+    /// field becomes a `Value::Object` under its *qualified* name (so
+    /// `.attr` access, `match`, and package-scoped type identity all work
+    /// the same as a directly-constructed value), rather than the untyped
+    /// `Value::Dict` that plain `json_to_value` would otherwise produce.
+    ///
+    /// Driven by the original `TypeExpr`, not `kora_models::FieldType` --
+    /// `Schema::type_name` is a display name meant for prompts, and does not
+    /// carry the package qualifier `Value::Object` needs.
+    fn json_to_value_typed(&self, json: &serde_json::Value, ty: &TypeExpr) -> Value {
+        use serde_json::Value as J;
+        match ty {
+            TypeExpr::Name(n) if matches!(n.as_str(), "str" | "int" | "float" | "bool") => {
+                json_to_value(json)
+            }
+            TypeExpr::Name(n) => match self.lookup_type(n) {
+                Some((qualified, fields)) => {
+                    let J::Object(map) = json else {
+                        return json_to_value(json);
+                    };
+                    let mut out = HashMap::new();
+                    for field in &fields {
+                        let raw = map.get(&field.name).unwrap_or(&J::Null);
+                        out.insert(field.name.clone(), self.json_to_value_typed(raw, &field.ty));
+                    }
+                    Value::Object {
+                        type_name: Rc::new(qualified),
+                        fields: Rc::new(RefCell::new(out)),
+                    }
+                }
+                None => json_to_value(json),
+            },
+            TypeExpr::Generic(n, args) if n == "list" => match (json, args.first()) {
+                (J::Array(items), Some(inner_ty)) => Value::List(Rc::new(RefCell::new(
+                    items
+                        .iter()
+                        .map(|item| self.json_to_value_typed(item, inner_ty))
+                        .collect(),
+                ))),
+                _ => json_to_value(json),
+            },
+            _ => json_to_value(json),
+        }
+    }
+
     /// Run a `parallel for` body across worker threads.
     ///
     /// Each worker is its own agent: a fresh interpreter with a private heap,
