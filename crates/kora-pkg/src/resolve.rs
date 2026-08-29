@@ -84,6 +84,19 @@ impl Resolution {
             .collect()
     }
 
+    /// The package a dependency name refers to, seen from inside `from`.
+    ///
+    /// Names resolve against the manifest of the package that wrote them,
+    /// never a global table, so two packages may bind the same bare name to
+    /// different sources.
+    pub fn dep_of(&self, from: PackageId, name: &str) -> Option<&ResolvedPackage> {
+        let parent = self.packages.get(from.0)?;
+        let dep = parent.manifest.deps.get(name)?;
+        let DepSpec::Path { path } = &dep.spec;
+        let root = canonical(&parent.root.join(path));
+        self.packages.iter().find(|p| p.root == root)
+    }
+
     /// What a shipped program needs. Test-only packages are excluded.
     pub fn shipped(&self) -> Vec<&ResolvedPackage> {
         let mut ids: Vec<&PackageId> = self.runtime.iter().collect();

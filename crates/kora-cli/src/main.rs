@@ -253,11 +253,13 @@ fn test_file(path: &str) -> ExitCode {
 
     let program_path = Path::new(path);
     let config = Config::discover(program_path);
+    let packages = std::sync::Arc::new(kora_pkg::resolve(program_path));
 
     // Collect the tests by running the file's top level once.
     let mut collector = Interpreter::new();
     collector.collecting_tests = true;
     collector.program_name = path.to_string();
+    collector.packages = packages.clone();
     collector.config = config.clone();
     collector.sinks = config.sinks.clone();
     if let Err(e) = collector.run_top_level(&program) {
@@ -277,6 +279,7 @@ fn test_file(path: &str) -> ExitCode {
     for (name, body) in &tests {
         let mut interp = Interpreter::new();
         interp.program_name = path.to_string();
+        interp.packages = packages.clone();
         interp.config = config.clone();
         interp.sinks = config.sinks.clone();
         interp.allow_private_hosts = config.http_allow_private;
@@ -336,7 +339,8 @@ fn audit_file(path: &str) -> ExitCode {
     // Every file the program imports is part of the program, so the audit
     // covers them too: an inventory that stopped at the entry file would not
     // be the complete list it claims to be.
-    let sites = kora_runtime::audit::audit_program(&program, path);
+    let packages = kora_pkg::resolve(Path::new(path));
+    let sites = kora_runtime::audit::audit_program(&program, path, &packages);
     print!("{}", kora_runtime::audit::render(&sites));
     ExitCode::SUCCESS
 }
@@ -511,6 +515,7 @@ fn run_file(
     let mut interp = Interpreter::new();
     interp.direct_stdout = true;
     interp.program_name = path.to_string();
+    interp.packages = std::sync::Arc::new(kora_pkg::resolve(program_path));
     interp.config = Config::discover(program_path);
     interp.sinks = interp.config.sinks.clone();
     interp.allow_private_hosts = interp.config.http_allow_private;

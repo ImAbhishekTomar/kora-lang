@@ -302,6 +302,7 @@ version = "0.0.2"
 dependencies = [
  "kora-dap",
  "kora-lsp",
+ "kora-pkg",
  "kora-runtime",
  "kora-syntax",
  "kora-types",
@@ -369,6 +370,7 @@ version = "0.0.2"
 dependencies = [
  "kora-mcp",
  "kora-models",
+ "kora-pkg",
  "kora-python",
  "kora-syntax",
  "kora-types",

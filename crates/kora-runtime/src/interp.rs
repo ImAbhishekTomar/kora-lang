@@ -207,6 +207,10 @@ pub struct Interpreter {
     pub tracer: Arc<Tracer>,
     /// The span a new child should attach to.
     parent_span: Option<String>,
+    /// The resolved package graph, from `[dependencies]` plus the `use pkg`
+    /// statements the program actually writes. Shared and read-only, so a
+    /// `parallel for` worker resolves imports exactly as its parent does.
+    pub packages: Arc<kora_pkg::Resolution>,
     /// Connected MCP servers, by configured name. Shared so parallel branches
     /// reuse one connection rather than spawning a process per agent.
     pub mcp: Arc<Mutex<HashMap<String, kora_mcp::Server>>>,
@@ -265,6 +269,7 @@ impl Interpreter {
                 "<input>".to_string(),
                 PathBuf::from("<input>"),
                 PathBuf::from("."),
+                kora_pkg::ROOT,
             )],
             current_module: modules::ROOT,
             loading: Vec::new(),
@@ -272,6 +277,7 @@ impl Interpreter {
             output: Vec::new(),
             direct_stdout: false,
             config: Config::default(),
+            packages: Arc::new(kora_pkg::Resolution::default()),
             cassette: None,
             program_name: "<input>".to_string(),
             tokens_in: 0,
@@ -538,13 +544,15 @@ impl Interpreter {
                 self.globals.insert(alias.clone(), value);
                 Ok(Flow::Normal)
             }
-            StmtKind::UsePkg { package, .. } => {
-                // Loading arrives with the resolver; parsing it first keeps
-                // the syntax and the semantics in separate commits.
-                Err(RuntimeError::new(
-                    format!("package `{package}` cannot be loaded yet"),
-                    stmt.span,
-                ))
+            StmtKind::UsePkg { package, alias } => {
+                let id = self.load_package(package, stmt.span)?;
+                let value = Value::UserModule {
+                    id,
+                    alias: Rc::new(alias.clone()),
+                };
+                scope.insert(alias.clone(), value.clone());
+                self.globals.insert(alias.clone(), value);
+                Ok(Flow::Normal)
             }
             StmtKind::UseMcp { server, alias } => {
                 self.connect_mcp(server, stmt.span)?;
@@ -2545,6 +2553,8 @@ impl Interpreter {
         // Workers share one cassette handle: replay works inside parallel
         // bodies, and recordings from every worker land in the same file.
         let cassette = self.cassette.clone();
+        // Read-only, so a worker resolves `use pkg` exactly as its parent.
+        let packages = self.packages.clone();
 
         let portable_items: Vec<Portable> = items.iter().map(Portable::from_value).collect();
         let next = std::sync::atomic::AtomicUsize::new(0);
@@ -2569,6 +2579,7 @@ impl Interpreter {
                         &module_seed,
                         current_module,
                         &types,
+                        &packages,
                         &config,
                         &sinks,
                         &program_name,
@@ -2641,6 +2652,7 @@ fn run_one(
     module_seed: &[ModuleSnapshot],
     current_module: ModuleId,
     types: &HashMap<String, Vec<FieldDef>>,
+    packages: &Arc<kora_pkg::Resolution>,
     config: &Config,
     sinks: &SinkPolicy,
     program_name: &str,
@@ -2656,6 +2668,7 @@ fn run_one(
     let mut interp = Interpreter::new();
     interp.restore_modules(module_seed, current_module);
     interp.types = types.clone();
+    interp.packages = packages.clone();
     interp.config = config.clone();
     interp.allow_private_hosts = config.http_allow_private;
     interp.http_timeout_secs = config.http_timeout_secs;
@@ -3176,6 +3189,7 @@ struct ModuleSnapshot {
     path: String,
     key: PathBuf,
     dir: PathBuf,
+    package: kora_pkg::PackageId,
     names: Vec<(String, Portable)>,
 }
 
@@ -3310,6 +3324,7 @@ impl Interpreter {
                     path: space.path.clone(),
                     key: space.key.clone(),
                     dir: space.dir.clone(),
+                    package: space.package,
                     names: live
                         .iter()
                         .map(|(k, v)| (k.clone(), Portable::from_value(v)))
@@ -3325,7 +3340,8 @@ impl Interpreter {
         self.modules = snapshot
             .iter()
             .map(|m| {
-                let mut space = ModuleSpace::new(m.path.clone(), m.key.clone(), m.dir.clone());
+                let mut space =
+                    ModuleSpace::new(m.path.clone(), m.key.clone(), m.dir.clone(), m.package);
                 space.names = m
                     .names
                     .iter()
@@ -3430,12 +3446,74 @@ impl Interpreter {
     fn load_module(&mut self, written: &str, span: Span) -> Result<ModuleId, RuntimeError> {
         self.sync_root();
         let base = self.current_dir();
+        // A file belongs to the package that imported it, so a `use pkg`
+        // written inside it resolves against that package's manifest.
+        let package = self.modules[self.current_module].package;
         let resolved = modules::resolve(written, &base).map_err(|e| {
             RuntimeError::new(e.message(), span)
                 .with_hint(e.hint())
                 .in_file(&self.current_file())
         })?;
 
+        self.load_resolved(resolved, written, package, span)
+    }
+
+    /// Load a package's entry file, resolving its name against the manifest
+    /// of the package that wrote the import.
+    ///
+    /// Every file of the loaded package carries that package's id, so its own
+    /// `use pkg` statements resolve against its own `[dependencies]` rather
+    /// than the importer's.
+    fn load_package(&mut self, name: &str, span: Span) -> Result<ModuleId, RuntimeError> {
+        self.sync_root();
+        let from = self.modules[self.current_module].package;
+
+        let Some(target) = self.packages.dep_of(from, name) else {
+            let declared = self
+                .packages
+                .packages
+                .get(from.0)
+                .map(|p| {
+                    let mut names: Vec<&str> = p.manifest.deps.keys().map(String::as_str).collect();
+                    names.sort();
+                    names
+                })
+                .unwrap_or_default();
+            let hint = if declared.is_empty() {
+                format!("add `{name} = {{ path = \"...\" }}` under `[dependencies]` in kora.toml")
+            } else {
+                format!("kora.toml declares: {}", declared.join(", "))
+            };
+            return Err(
+                RuntimeError::new(format!("no package named `{name}`"), span)
+                    .with_hint(hint)
+                    .in_file(&self.current_file()),
+            );
+        };
+
+        let package = target.id;
+        let entry = target.entry.clone();
+        let display = entry.display().to_string();
+        let dir = entry
+            .parent()
+            .map(std::path::Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let resolved = modules::Resolved {
+            path: entry.clone(),
+            key: entry,
+            dir,
+        };
+        self.load_resolved(resolved, &display, package, span)
+    }
+
+    /// Run a resolved file's top level once, under the given package.
+    fn load_resolved(
+        &mut self,
+        resolved: modules::Resolved,
+        written: &str,
+        package: kora_pkg::PackageId,
+        span: Span,
+    ) -> Result<ModuleId, RuntimeError> {
         if let Some(id) = self.modules.iter().position(|m| m.key == resolved.key) {
             // Already loaded, or being loaded: a file mid-import means the
             // graph has a cycle, and its names are not there yet.
@@ -3475,6 +3553,7 @@ impl Interpreter {
             display.clone(),
             resolved.key,
             resolved.dir,
+            package,
         ));
 
         let outer = self.enter_module(id);
