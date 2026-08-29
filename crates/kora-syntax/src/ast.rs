@@ -82,6 +82,15 @@ pub enum StmtKind {
         module: String,
         alias: String,
     },
+    /// `use pkg receipts as r` — bring a dependency into scope.
+    ///
+    /// The name is resolved against the `[dependencies]` table of the
+    /// package that wrote it, never a global one, so two packages may
+    /// bind the same bare name to different sources.
+    UsePkg {
+        package: String,
+        alias: String,
+    },
     /// `use mcp github as gh` — connect to a configured MCP server.
     ///
     /// The program names *which* server; how to launch it (command, args,

@@ -418,6 +418,26 @@ impl Parser {
             });
         }
 
+        // `use pkg <name> as <alias>` names a dependency. The name is a
+        // Kora identifier, so unlike a path it has a natural binding and
+        // `as` stays optional.
+        if matches!(self.peek_kind(), TokenKind::Ident(word) if word == "pkg") {
+            self.advance();
+            let package = self.expect_ident("a package name after `use pkg`")?;
+            let alias = match self.peek_kind() {
+                TokenKind::Ident(word) if word == "as" => {
+                    self.advance();
+                    self.expect_ident("a name after `as`")?
+                }
+                _ => package.clone(),
+            };
+            self.expect_newline("use")?;
+            return Ok(Stmt {
+                kind: StmtKind::UsePkg { package, alias },
+                span,
+            });
+        }
+
         // `use mcp <server> as <alias>` names a server configured in
         // kora.toml rather than a stdlib module.
         if matches!(self.peek_kind(), TokenKind::Ident(word) if word == "mcp") {
@@ -1629,6 +1649,42 @@ mod tests {
     fn a_bare_module_name_is_still_a_stdlib_import() {
         let p = ok("use json as j\n");
         assert!(matches!(p.items[0].kind, StmtKind::Use { .. }));
+    }
+
+    #[test]
+    fn package_import_binds_its_own_name_without_as() {
+        let p = ok("use pkg receipts\n");
+        let StmtKind::UsePkg { package, alias } = &p.items[0].kind else {
+            panic!("expected a package import, got {:?}", p.items[0].kind);
+        };
+        assert_eq!(package, "receipts");
+        assert_eq!(alias, "receipts");
+    }
+
+    #[test]
+    fn package_import_takes_an_alias() {
+        let p = ok("use pkg receipts as r\n");
+        let StmtKind::UsePkg { package, alias } = &p.items[0].kind else {
+            panic!("expected a package import");
+        };
+        assert_eq!(package, "receipts");
+        assert_eq!(alias, "r");
+    }
+
+    #[test]
+    fn package_import_parses_inside_a_function_body() {
+        // `use` is an ordinary statement, so a package name can appear
+        // anywhere. The resolver relies on finding every one of them.
+        let p = ok("def f():\n    use pkg receipts as r\n    return 1\n");
+        assert_eq!(p.items.len(), 1);
+    }
+
+    #[test]
+    fn pkg_is_not_a_reserved_word() {
+        // `pkg` is matched in the `use` position only, so it stays usable
+        // as an ordinary name everywhere else.
+        let p = ok("pkg = 1\n");
+        assert_eq!(p.items.len(), 1);
     }
 
     #[test]

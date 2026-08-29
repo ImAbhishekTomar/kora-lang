@@ -538,6 +538,14 @@ impl Interpreter {
                 self.globals.insert(alias.clone(), value);
                 Ok(Flow::Normal)
             }
+            StmtKind::UsePkg { package, .. } => {
+                // Loading arrives with the resolver; parsing it first keeps
+                // the syntax and the semantics in separate commits.
+                Err(RuntimeError::new(
+                    format!("package `{package}` cannot be loaded yet"),
+                    stmt.span,
+                ))
+            }
             StmtKind::UseMcp { server, alias } => {
                 self.connect_mcp(server, stmt.span)?;
                 let value = Value::McpServer {
