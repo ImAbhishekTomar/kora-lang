@@ -167,6 +167,100 @@ pub struct ToolExchange {
     pub result_json: String,
 }
 
+/// The deterministic selection made for one turn of an agent tool loop.
+///
+/// This is deliberately a plan, not a summary. Kora drops only complete,
+/// oldest exchanges when a lexical context fence is in force. Asking a model
+/// to summarize its own history would be another effect with its own budget,
+/// labels, and replay contract.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextPlan {
+    pub max_input_tokens: u64,
+    pub reserve_output_tokens: u64,
+    pub estimated_input_tokens: u64,
+    pub retained_exchanges: usize,
+    pub dropped_exchanges: usize,
+}
+
+/// Estimate a request's input size in stable, provider-neutral token units.
+///
+/// Providers tokenize differently, especially for local models, so this is a
+/// conservative admission estimate rather than billable usage. Actual usage
+/// remains the value reported by the provider and charged to `Budget`.
+pub fn estimate_input_tokens(request: &AnalyzeRequest) -> u64 {
+    let mut bytes = schema::system_prompt(&request.schema).len()
+        + schema::user_prompt(&request.prompt, &request.data_json).len();
+    // Tool definitions are part of the request even before one is called.
+    for tool in &request.tools {
+        bytes += tool.name.len() + tool.description.len() + 24;
+        for (name, ty) in &tool.params {
+            bytes += name.len() + ty.display_name().len() + 8;
+        }
+    }
+    // Images have provider-specific visual-token accounting. Counting their
+    // bytes conservatively keeps a context fence honest without pretending
+    // every provider shares one tokenizer.
+    for image in &request.images {
+        bytes += image.mime.len() + image.bytes.len();
+    }
+    for exchange in &request.tool_history {
+        bytes +=
+            exchange.name.len() + exchange.arguments_json.len() + exchange.result_json.len() + 48;
+    }
+    // Four UTF-8 bytes per token is intentionally conservative for ordinary
+    // English/JSON. Fixed overhead accounts for message framing.
+    ((bytes as u64).saturating_add(3) / 4)
+        .saturating_add(16 + request.tool_history.len() as u64 * 8)
+}
+
+/// Retain the newest whole tool exchanges that fit a lexical context fence.
+///
+/// The initial instructions, data, schema, tools, and images are never
+/// truncated. If those alone do not fit, the caller gets an error instead of
+/// a subtly different request. A tool invocation and its result are likewise
+/// retained or omitted together so the model never sees an orphaned result.
+pub fn prune_tool_history(
+    request: &AnalyzeRequest,
+    max_input_tokens: u64,
+    reserve_output_tokens: u64,
+) -> Result<(Vec<ToolExchange>, ContextPlan), String> {
+    let available = max_input_tokens
+        .checked_sub(reserve_output_tokens)
+        .ok_or_else(|| {
+            "context reserve_output_tokens cannot exceed max_input_tokens".to_string()
+        })?;
+    let mut base = request.clone();
+    base.tool_history.clear();
+    if estimate_input_tokens(&base) > available {
+        return Err(format!(
+            "request context needs about {} tokens before tool history, but this context allows {available}",
+            estimate_input_tokens(&base)
+        ));
+    }
+
+    let mut retained = Vec::new();
+    for exchange in request.tool_history.iter().rev() {
+        retained.insert(0, exchange.clone());
+        let mut candidate = base.clone();
+        candidate.tool_history = retained.clone();
+        if estimate_input_tokens(&candidate) > available {
+            retained.remove(0);
+            break;
+        }
+    }
+    let mut selected = base;
+    selected.tool_history = retained.clone();
+    let estimated_input_tokens = estimate_input_tokens(&selected);
+    let plan = ContextPlan {
+        max_input_tokens,
+        reserve_output_tokens,
+        estimated_input_tokens,
+        retained_exchanges: retained.len(),
+        dropped_exchanges: request.tool_history.len().saturating_sub(retained.len()),
+    };
+    Ok((retained, plan))
+}
+
 /// What the model wants next.
 #[derive(Debug, Clone)]
 pub enum Step {
@@ -280,4 +374,57 @@ pub fn analyze_streaming(
     on_text: &mut dyn FnMut(&str) -> Result<Flow, ModelError>,
 ) -> Result<AnalyzeOutcome, ModelError> {
     stream::analyze_streaming_with(config, req, &*stream::stream_transport_for(config), on_text)
+}
+
+#[cfg(test)]
+mod context_tests {
+    use super::*;
+
+    fn request() -> AnalyzeRequest {
+        AnalyzeRequest {
+            prompt: "answer plainly".into(),
+            data_json: "{\"ticket\":\"x\"}".into(),
+            images: Vec::new(),
+            schema: Schema::for_text(),
+            tools: Vec::new(),
+            tool_history: Vec::new(),
+        }
+    }
+
+    fn exchange(name: &str, size: usize) -> ToolExchange {
+        ToolExchange {
+            name: name.into(),
+            arguments_json: "{\"id\":1}".into(),
+            result_json: "x".repeat(size),
+        }
+    }
+
+    #[test]
+    fn pruning_keeps_newest_complete_exchanges() {
+        let mut req = request();
+        req.tool_history = vec![exchange("old", 400), exchange("new", 80)];
+        let mut newest_only = request();
+        newest_only.tool_history = vec![req.tool_history[1].clone()];
+        let limit = estimate_input_tokens(&newest_only) + 1;
+
+        let (history, plan) = prune_tool_history(&req, limit, 0).unwrap();
+        assert_eq!(history.len(), 1);
+        assert_eq!(history[0].name, "new");
+        assert_eq!(plan.retained_exchanges, 1);
+        assert_eq!(plan.dropped_exchanges, 1);
+    }
+
+    #[test]
+    fn pruning_never_truncates_the_base_request() {
+        let req = request();
+        let required = estimate_input_tokens(&req);
+        let err = prune_tool_history(&req, required - 1, 0).unwrap_err();
+        assert!(err.contains("before tool history"), "{err}");
+    }
+
+    #[test]
+    fn reserve_cannot_exceed_the_context_limit() {
+        let err = prune_tool_history(&request(), 10, 11).unwrap_err();
+        assert!(err.contains("reserve_output_tokens"), "{err}");
+    }
 }

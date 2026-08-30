@@ -256,6 +256,18 @@ t: Ticket = analyze(raw, "classify this ticket", tools=[priority_for]) on tool_c
 
 `args` is a mutable `dict`; editing it in place rewrites what actually reaches the tool. `return`ing a string from the block skips the tool and hands that string back to the model as the call's result instead.
 
+### `with context(...)`
+
+A lexical request-admission policy for `analyze`, separate from `budget`.
+
+```kora
+with context(max_input_tokens = 12_000, reserve_output_tokens = 2_000):
+    result: Report = analyze(case_file, "review the evidence", tools=[lookup])
+```
+
+It retains newest complete tool exchanges that fit and returns `Failed(reason)`
+when base prompt and data exceed the available context. Kora never clips them.
+
 ### `redact(value)`
 
 Masks classified fields before data leaves a safe scope.

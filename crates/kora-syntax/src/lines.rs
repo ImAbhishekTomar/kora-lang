@@ -44,6 +44,7 @@ fn walk(stmts: &[Stmt], out: &mut BTreeSet<u32>) {
             | StmtKind::For { body, .. }
             | StmtKind::ParallelFor { body, .. }
             | StmtKind::WithBudget { body, .. }
+            | StmtKind::WithContext { body, .. }
             | StmtKind::WithMock { body, .. }
             | StmtKind::Declassify { body, .. }
             | StmtKind::Test { body, .. } => walk(body, out),

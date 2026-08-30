@@ -69,7 +69,8 @@ fn walk(stmts: &[Stmt], include_tests: bool, out: &mut Imports) {
             | StmtKind::ParallelFor { body, .. }
             | StmtKind::WithMock { body, .. }
             | StmtKind::Declassify { body, .. }
-            | StmtKind::WithBudget { body, .. } => walk(body, include_tests, out),
+            | StmtKind::WithBudget { body, .. }
+            | StmtKind::WithContext { body, .. } => walk(body, include_tests, out),
             StmtKind::FuncDef(def) => walk(&def.body, include_tests, out),
             StmtKind::Match { arms, .. } => {
                 for arm in arms {

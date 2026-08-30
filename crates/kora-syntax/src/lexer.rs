@@ -368,6 +368,7 @@ impl<'a> Lexer<'a> {
             "mock" => TokenKind::Mock,
             "assert" => TokenKind::Assert,
             "budget" => TokenKind::Budget,
+            "context" => TokenKind::Context,
             "parallel" => TokenKind::Parallel,
             "True" => TokenKind::True,
             "False" => TokenKind::False,

@@ -166,6 +166,43 @@ fn budget_needs_at_least_one_limit() {
     assert!(err.message.contains("at least one limit"));
 }
 
+// --- context fences ---
+
+#[test]
+fn context_fence_refuses_a_request_that_cannot_fit_without_calling_a_model() {
+    let src = r#"type Answer:
+    summary: str
+
+def main():
+    with context(max_input_tokens = 1):
+        result: Answer = analyze("customer needs a refund", "summarize")
+        match result:
+            case Failed(why):
+                print(why)
+"#;
+    let program = parse(src).unwrap();
+    let mut interp = Interpreter::new();
+    interp.config =
+        kora_runtime::config::Config::parse("[models]\ndefault = \"local:not-running\"\n").unwrap();
+    interp.run(&program).unwrap();
+    assert!(
+        interp.output[0].contains("before tool history"),
+        "{:?}",
+        interp.output
+    );
+}
+
+#[test]
+fn context_fence_is_lexical_and_can_nest() {
+    let src = r#"def main():
+    with context(max_input_tokens = 100):
+        with context(reserve_output_tokens = 80):
+            value = 1
+    print(value)
+"#;
+    assert_eq!(run(src), vec!["1"]);
+}
+
 // --- agents and tools ---
 
 #[test]

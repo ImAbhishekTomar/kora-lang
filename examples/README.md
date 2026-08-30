@@ -24,6 +24,7 @@ no API key and no model installed.
 | [13_packages.ko](13_packages.ko) | naming a dependency, and letting the source decide what is used | `kora run` |
 | [14_streaming.ko](14_streaming.ko) | a streamed `str` answer, and why it still has an outcome | `kora run --replay` |
 | [15_workflow_ergonomics.ko](15_workflow_ergonomics.ko) | a compact streamed prompt chain with explicit step results | `kora test` |
+| [16_context_policy.ko](16_context_policy.ko) | bounded tool-loop context, separate from the spend budget | `kora run` |
 
 ## The pattern set
 

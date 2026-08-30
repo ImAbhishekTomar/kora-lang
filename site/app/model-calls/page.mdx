@@ -84,6 +84,14 @@ The two are kept apart because they are fixed in different places: one is a prom
 
 Every MCP request carries a deadline, `[mcp] timeout_secs`, default 60 and settable per server for one that reaches a slow API. A tool call is never retried — generating twice costs tokens, but calling a tool twice may open two issues or charge a card twice, and a timeout is exactly the case where whether it ran is unknown.
 
+## Context policies
+
+Use `with context(max_input_tokens = N, reserve_output_tokens = N):` around an
+`analyze` call to bound its estimated input independently of spend budgets.
+Kora retains only newest complete tool exchanges that fit, and returns
+`Failed(reason)` rather than clipping prompt or data. Tool output is explicitly
+untrusted reference data, not a source of higher-priority instructions.
+
 ## Try it with a cassette
 
 For a live run, configure an OpenAI key or a local Ollama model in `kora.toml`.

@@ -45,13 +45,20 @@ design changes and should be deliberate.
    never loosen), shared across `parallel for`. Exhaustion is a value
    (`Exhausted`), not an exception; partial work survives. Money is an
    optional display layer via `[budget.pricing]` in config — never enforcement.
+5. **Context is a separate, lexical policy.** `with context(...)` governs the
+   request material sent to an `analyze` call; it is not a second way to spend
+   or reserve the run's budget. The policy estimates input deterministically,
+   reserves room for the requested output, and retains only the newest *whole*
+   tool exchanges that fit. It never silently truncates a prompt, data value,
+   or exchange, and never calls a model to summarize. If the base prompt and
+   data cannot fit, `analyze` returns `Failed(reason)`.
 
 ## Language surface
 
 - Python-like: indentation blocks, `def`, `if/elif/else`, `for x in xs`,
   f-strings, list/dict literals, comprehensions. Zero learning curve is a goal.
 - Static types, checked. Type declarations on the left: `e: Expense = ...`.
-- New words (whole list): `analyze`, `tool`, `agent`, `budget`, `parallel for`,
+- New words (whole list): `analyze`, `tool`, `agent`, `budget`, `context`, `parallel for`,
   `classified` / `declassify`, `ask_human`, `test`, `mock`. `use` covers
   stdlib modules, Python, MCP servers, and other `.ko` files. Guards and the
   `else` binding reuse `if` and `else` rather than adding a word.
@@ -284,6 +291,19 @@ design changes and should be deliberate.
   plain inside the block — it records what x was approved for, so a secret
   released to a model still cannot be written to a file three lines later.
 - Telemetry export is a labeled sink: classified values cannot reach spans.
+
+### Untrusted context and prompt injection
+
+`unverified` is an integrity label, not a claim that text is safe for a model
+to read. Models must often inspect untrusted web pages, files, and tool output;
+no prompt delimiter creates a hard instruction/data boundary in a provider.
+Kora therefore does not claim to prevent prompt injection.
+
+Tool results remain untrusted and enter the next model turn in an attributed
+envelope. The lexical context policy limits how much history remains. Named
+sinks, typed arguments, budgets, and human approval control what a confused or
+manipulated model can do. Delimiters improve model reliability; they are not a
+security boundary.
 
 ## Testing & observability
 

@@ -179,6 +179,16 @@ fixed:
 - [x] **Token-by-token model streaming.** `answer: str = analyze(...) stream`
       is the concise terminal-output form; `on token(t):` remains available
       for custom handlers. Both hand over the answer as the model writes it, and the call
+- [x] **Lexical context policy.** `with context(max_input_tokens = N,
+      reserve_output_tokens = N):` deterministically bounds model request
+      context without spending from the lexical `budget`. It retains newest
+      whole tool exchanges and fails rather than clipping base prompt or data.
+- [ ] **Prompt-injection resilience.** Tool output is attributed as untrusted
+      data before a later model turn. Delimiters reduce confusion but are not
+      a security boundary; add explicit tool-call policies, bounded result
+      projections, provenance, and adversarial MCP/retrieval tests.
+- [x] **Token-by-token model streaming.** `answer: str = analyze(...) on
+      token(t):` hands over the answer as the model writes it, and the call
       still returns an outcome to match on — a loop over the pieces would end
       identically on success and on outage, which is the one failure this
       language exists to remove. Only a `str` result streams: a declared type
@@ -290,6 +300,19 @@ extending streaming with tools or `parallel for`.
 - [ ] **Define OS durability guarantees.** Decide whether journals promise
       process-crash durability, machine-crash durability, and concurrent-resume
       safety; add fsync and per-run locking where required.
+### Context engineering delivery order
+
+- [x] Bound short-term tool-loop context with a lexical policy, whole-exchange
+      retention, conservative deterministic estimation, and untrusted-result
+      attribution.
+- [ ] Add explicit tool-call policies, bounded result projections, provenance,
+      and adversarial prompt-injection tests.
+- [ ] Add durable structured notes, then compaction with labels, provenance,
+      and replay semantics.
+- [ ] Add just-in-time retrieval references and bounded excerpts before
+      embeddings or a vector store.
+- [ ] Add typed handoff contracts that transfer a compact brief and references,
+      not raw agent history.
 
 ## Queue
 

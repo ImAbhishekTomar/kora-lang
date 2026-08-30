@@ -1,0 +1,38 @@
+# A context fence is distinct from a spend budget. It controls the request
+# admitted to one model turn, and old tool exchanges are retained only when
+# they fit as a whole.
+
+type Finding:
+    summary: str
+
+tool lookup(ticket: str) -> str:
+    "Return the one fact needed to resolve a support ticket."
+    return f"Known fact for {ticket}: refunds need an order number."
+
+agent investigate(ticket: str) -> str:
+    budget: max_tokens = 4_000, max_steps = 4
+
+    with context(max_input_tokens = 12_000, reserve_output_tokens = 1_000):
+        result: Finding = analyze(
+            ticket,
+            "Investigate the ticket. Use lookup only when a fact is needed.",
+            tools=[lookup],
+        )
+
+    match result:
+        case Ok(finding):
+            return finding.summary
+        case Failed(why):
+            return f"context or provider failure: {why}"
+        case Uncertain(why):
+            return f"needs a person: {why}"
+        case Exhausted(meter):
+            return f"budget exhausted: {meter}"
+
+def main():
+    print(investigate("Customer asks for a refund but omitted the order number."))
+
+test "a context policy is lexical and does not alter ordinary control flow":
+    with context(max_input_tokens = 100, reserve_output_tokens = 20):
+        value = 2 + 2
+    assert value == 4

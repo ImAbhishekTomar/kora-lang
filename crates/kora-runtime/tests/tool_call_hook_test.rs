@@ -12,16 +12,17 @@ use std::net::TcpListener;
 ///
 /// The first request gets back a `tool_calls` turn asking for `tool_name`
 /// with `arguments`. The second request is the model seeing the result of
-/// that call in its history (`messages(...)` renders it as `"Result of
-/// {name}: {result}"`) -- this reads that result back out of the request and
-/// echoes it into the final answer's `body` field, so what the test asserts
-/// on is proof of what the tool (or the handler's veto) actually produced,
-/// not a canned response that would pass either way.
+/// that call in its history -- `messages(...)` renders it as an attributed
+/// `UNTRUSTED_TOOL_RESULT:` envelope naming the tool it came from -- and this
+/// reads that result back out of the request and echoes it into the final
+/// answer's `body` field, so what the test asserts on is proof of what the
+/// tool (or the handler's veto) actually produced, not a canned response
+/// that would pass either way.
 fn spawn_echoing_provider(tool_name: &str, arguments: serde_json::Value) -> String {
     let listener = TcpListener::bind("127.0.0.1:0").expect("a free port");
     let port = listener.local_addr().unwrap().port();
     let tool_name = tool_name.to_string();
-    let marker = format!("Result of {tool_name}: ");
+    const ENVELOPE: &str = "UNTRUSTED_TOOL_RESULT:\n";
 
     std::thread::spawn(move || {
         for stream in listener.incoming() {
@@ -46,15 +47,24 @@ fn spawn_echoing_provider(tool_name: &str, arguments: serde_json::Value) -> Stri
                 serde_json::from_slice(&body).unwrap_or(serde_json::Value::Null);
 
             // The recorded result is itself JSON text (a tool's return value
-            // is serialized before it goes in history), so the marker's
-            // suffix is decoded once more to get the plain string back.
+            // is serialized before it goes in history), so the envelope's
+            // field is decoded once more to get the plain string back. The
+            // envelope is matched on its `tool` field rather than on position,
+            // so a history carrying more than one tool still reads correctly.
             let messages = request["messages"].as_array().cloned().unwrap_or_default();
             let result = messages.iter().rev().find_map(|m| {
-                m["content"]
+                let envelope: serde_json::Value = m["content"]
                     .as_str()
-                    .and_then(|c| c.strip_prefix(&marker))
-                    .and_then(|raw| serde_json::from_str::<serde_json::Value>(raw).ok())
-                    .and_then(|v| v.as_str().map(str::to_string))
+                    .and_then(|c| c.strip_prefix(ENVELOPE))
+                    .and_then(|raw| serde_json::from_str(raw).ok())?;
+                if envelope["tool"].as_str()? != tool_name {
+                    return None;
+                }
+                let raw = envelope["untrusted_result"].as_str()?;
+                serde_json::from_str::<serde_json::Value>(raw)
+                    .ok()?
+                    .as_str()
+                    .map(str::to_string)
             });
 
             let payload = match result {
