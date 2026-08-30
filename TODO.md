@@ -224,12 +224,12 @@ remain; **Build** means it is not implemented yet.
 | P1 | Guardrails | **Partial** | Labels, declassification, unverified data direction, schema validation, budgets | Complete `unverified` enforcement, policy composition, prompt/output controls, and configurable safety policies |
 | P1 | Tracing/metrics | **Partial** | OpenTelemetry spans and local trace output | Add a metrics pipeline, stream/token/tool counters, stable event IDs, and export backpressure |
 | P1 | Context management | **Partial** | Prompt construction and tool history within one model call | Add token-aware context windows, truncation, summarization, retention policy, and typed context objects |
-| P1 | Sessions/memory | **Build** | No persistent user-facing session or memory abstraction | Build durable session IDs, scoped memory, retrieval/update rules, privacy labels, eviction, and replay semantics |
+| P1 | Sessions/memory | **Build** (designed, see below) | No persistent user-facing session or memory abstraction | Build durable session IDs, scoped memory, retrieval/update rules, privacy labels, eviction, and replay semantics |
 | P1 | MCP | **Have** | Server discovery, typed tools, timeouts, failure values, capability checks | Add richer MCP schemas, cancellation, reconnect policy, server health, and protocol-version negotiation |
 | P2 | Multi-agent/handoffs | **Partial** | Agents and parallel workers exist as isolated execution units | Build first-class messages, handoff contracts, ownership transfer, supervision, and failure semantics |
 | P2 | Sandboxed execution | **Partial** | Package grants, process boundaries, Python sidecar, and no native shared libraries | Build OS-level sandboxing and WASM components with capability enforcement |
 | P2 | Model routing/fallback | **Partial** | Named model roles and per-call model selection | Build policy-based routing, health-aware fallback, cost/latency rules, and deterministic replay of route decisions |
-| P2 | RAG/embeddings | **Build** | No embeddings, chunking, retrieval, or vector index | Build embedding effects, document ingestion, chunk identity, retrieval APIs, labels, and cassette/journal behavior |
+| P2 | RAG/embeddings | **Build** (designed, see below) | No embeddings, chunking, retrieval, or vector index | Build embedding effects, document ingestion, chunk identity, retrieval APIs, labels, and cassette/journal behavior |
 | P2 | Scheduler/cron | **Build** | No language-level scheduled execution | Build a scheduler primitive, durable triggers, retries, overlap policy, time zones, and operational inspection |
 | P2 | Distributed agents | **Build** | Execution is local to one process and host | Build remote workers, transport/authentication, placement, shared journal semantics, and network partitions |
 | P3 | GPU/local inference | **Partial** | Local Ollama provider works; in-process inference is parked | Measure and, if justified, build sandboxed in-process inference or a stronger local runtime integration |
@@ -244,7 +244,8 @@ remain; **Build** means it is not implemented yet.
       checkpoints, fsync/run locking, and fault-injection tests.
 - [ ] **P1 agent product layer:** add sessions/memory and context management
       before multi-agent handoffs; otherwise agents have no durable state to
-      hand over safely.
+      hand over safely. See "Context engineering, phase 2" immediately below
+      for the sequencing inside this layer itself.
 - [ ] **P2 execution layer:** add policy-based routing, sandboxed WASM, and
       first-class handoffs before distributed workers.
 - [ ] **P2 data layer:** add embeddings and retrieval with labels and replay
@@ -252,6 +253,55 @@ remain; **Build** means it is not implemented yet.
 - [ ] **P3 integrations:** evaluate GPU inference, vector stores, and browser
       runtime only after the local execution and durability contracts are
       stable.
+
+### Context engineering, phase 2 (designed, not built)
+
+Full design for each item — syntax, runtime semantics, rejected alternatives,
+and what is explicitly out of scope — is in
+[DECISIONS.md](DECISIONS.md#context-engineering-phase-2). It builds on the
+typed context fence (`with context(max_input_tokens=N,
+reserve_output_tokens=N):`) landing separately. Recommended build order,
+argued rather than assumed:
+
+- [ ] **Notes** (`use notes`) before **sessions** (`use session <name> as
+      <alias>`). This reverses how the two are usually named, but not the
+      dependency: a session is a note store addressed by an explicit key
+      instead of an implicit one (the current run's own id). Building the
+      single-key form first proves the underlying mechanic — a storage tier
+      distinct from the journal, label propagation on read and write, and a
+      journaled `Effect::Memory` entry so replay does not diverge when the
+      backing store keeps moving — before also taking on the harder
+      questions sessions add: capability grants per store, key collisions
+      across callers, and eviction across many keys instead of one.
+- [ ] **Sub-agent handoff with a distilled return** next, ahead of retrieval.
+      Most of it is already true by construction — every `analyze()` call
+      already builds an explicit prompt with no ambient conversation state to
+      leak, so a delegated agent's context is already clean. The only real
+      gap is an opt-in isolated heap for an agent called through
+      `tools=[...]` (`agent specialist(...) -> Digest: isolated`), which is a
+      small, contained addition to code that already exists
+      (`crates/kora-runtime/src/interp.rs`'s `tool_list` and
+      `run_parallel`), not a new subsystem — cheap leverage, so it goes
+      before the more expensive work.
+- [ ] **Tool-result curation** (`on tool_result(name, args, result):`) third.
+      It is a second hook symmetric with the existing `on tool_call`, in the
+      same file and the same tool loop — contained scope, and it directly
+      serves the context-rot problem this whole roadmap answers: a curated
+      result is exactly what the context fence should be pruning from,
+      rather than an uncurated one.
+- [ ] **Full sessions** (the explicit-key generalization of notes, with
+      config-declared stores, grants, and eviction) fourth, once the notes
+      primitive it builds on has shipped and been exercised.
+- [ ] **Just-in-time retrieval / RAG primitives** last, despite being the
+      article's headline idea. Its most natural first consumer inside Kora is
+      recalling from a session or notes store — "what has this agent already
+      learned" is itself a retrieval query — so building it before sessions
+      exist leaves it with no concrete caller to validate against. It is also
+      the largest new surface of the five (a new model-transport effect,
+      chunking, a config-declared vector index, and a provenance rule for
+      `unverified` chunks), which argues for landing it once the smaller
+      primitives it composes with — the context fence and a memory store to
+      search from — are both in place.
 
 ## Audit follow-up
 
