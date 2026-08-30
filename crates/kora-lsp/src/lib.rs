@@ -449,6 +449,7 @@ const KEYWORDS: &[&str] = &[
     "case",
     "parallel for",
     "budget",
+    "context",
     "classified",
     "declassify",
     "use",
@@ -458,6 +459,7 @@ const KEYWORDS: &[&str] = &[
     "with budget",
     "on token",
     "on tool_call",
+    "with context",
 ];
 
 fn cast<P: serde::de::DeserializeOwned>(request: &Request) -> Option<P> {

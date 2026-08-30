@@ -74,6 +74,20 @@ pub enum Effect {
     },
     /// A tool the model asked for, and what it returned.
     Tool { name: String, result_json: String },
+    /// A `with context(...)` pruning decision made before one tool-loop
+    /// turn: which whole exchanges were retained.
+    ///
+    /// The estimate itself is a pure function of already-journaled tool
+    /// results and the lexical thresholds in the program text, so replaying
+    /// it would in principle recompute the same answer. It is journaled
+    /// anyway, for the same reason a `Model` outcome is: the contract is
+    /// that every effect on the request material is replayed from the
+    /// journal, not recomputed, so a future change to the estimate (a real
+    /// tokenizer, say) cannot silently change what an old run resumes to.
+    Context {
+        retained: Vec<RecordedExchange>,
+        dropped: usize,
+    },
     /// A question put to a person, and their answer once given.
     Human { question: String, answer: String },
     /// A line already shown to the user.
@@ -83,6 +97,19 @@ pub enum Effect {
     /// journal cannot know whether the line before a crash was printed, so
     /// the only way to get exactly-once output is to record it.
     Output { text: String },
+}
+
+/// A journaled copy of one tool call and its result, kept by a
+/// `with context(...)` pruning decision.
+///
+/// A plain struct rather than `kora_models::ToolExchange` directly: the
+/// journal is a serialization boundary, and giving it its own type keeps
+/// that boundary from reaching back into `kora-models`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecordedExchange {
+    pub name: String,
+    pub arguments_json: String,
+    pub result_json: String,
 }
 
 /// A question waiting on a person.
@@ -402,6 +429,46 @@ mod tests {
             j.next(&root, "a.ko:2").unwrap(),
             Lookup::Fresh { seq: 1, .. }
         ));
+    }
+
+    #[test]
+    fn a_context_pruning_decision_replays_the_same_retained_history() {
+        let path = scratch("context");
+        let mut j = Journal::open(Run::new("r1".into(), "a.ko".into()), path.clone());
+        let root = Scope::root();
+
+        let kept = RecordedExchange {
+            name: "lookup".into(),
+            arguments_json: "{\"id\":\"new\"}".into(),
+            result_json: "unverified: kept unchanged".into(),
+        };
+        let Lookup::Fresh { scope, seq } = j.next(&root, "a.ko:1#context").unwrap() else {
+            panic!("expected fresh")
+        };
+        j.record(
+            scope,
+            seq,
+            "a.ko:1#context",
+            Effect::Context {
+                retained: vec![kept.clone()],
+                dropped: 2,
+            },
+        )
+        .unwrap();
+
+        // Resume: the same exchanges come back, not a fresh estimate.
+        let reopened = load_run(&path).unwrap();
+        let mut j2 = Journal::open(reopened, path.clone());
+        match j2.next(&root, "a.ko:1#context").unwrap() {
+            Lookup::Replayed(Effect::Context { retained, dropped }) => {
+                assert_eq!(retained.len(), 1);
+                assert_eq!(retained[0].result_json, kept.result_json);
+                assert_eq!(dropped, 2);
+            }
+            other => panic!("expected a replayed context decision, got {other:?}"),
+        }
+
+        std::fs::remove_dir_all(path.parent().unwrap()).ok();
     }
 
     #[test]

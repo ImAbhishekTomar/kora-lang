@@ -3701,11 +3701,14 @@ impl Interpreter {
                 tool_history: history.clone(),
             };
             if let Some(max_input_tokens) = self.context.max_input_tokens {
-                match kora_models::prune_tool_history(
+                let context_site = format!("{}:{}#context", self.program_name, span.line);
+                match self.journal_prune_tool_history(
                     &request,
                     max_input_tokens,
                     self.context.reserve_output_tokens,
-                ) {
+                    &context_site,
+                    span,
+                )? {
                     Ok((history, plan)) => {
                         request.tool_history = history;
                         self.trace_context_plan(&plan);
@@ -4259,6 +4262,98 @@ impl Interpreter {
             Lookup::Fresh { scope, seq } => {
                 self.pending_slot = Some((scope, seq));
                 Ok(None)
+            }
+        }
+    }
+
+    /// Route a `with context(...)` pruning decision through the journal.
+    ///
+    /// The estimate is a pure function of the tool history and the lexical
+    /// thresholds, so a plain run just calls `prune_tool_history` directly.
+    /// A durable run instead replays the exact exchanges it kept the first
+    /// time, so a resumed run's request material never depends on when the
+    /// estimator runs rather than what it was given (DECISIONS.md).
+    fn journal_prune_tool_history(
+        &mut self,
+        request: &AnalyzeRequest,
+        max_input_tokens: u64,
+        reserve_output_tokens: u64,
+        site: &str,
+        span: Span,
+    ) -> Result<Result<(Vec<ToolExchange>, kora_models::ContextPlan), String>, RuntimeError> {
+        let mut journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
+        if !journal.is_durable() {
+            drop(journal);
+            return Ok(kora_models::prune_tool_history(
+                request,
+                max_input_tokens,
+                reserve_output_tokens,
+            ));
+        }
+        let lookup = journal
+            .next(&self.scope, site)
+            .map_err(|e| RuntimeError::new(e.to_string(), span))?;
+        drop(journal);
+        match lookup {
+            Lookup::Replayed(Effect::Context { retained, dropped }) => {
+                let retained: Vec<ToolExchange> = retained
+                    .into_iter()
+                    .map(|r| ToolExchange {
+                        name: r.name,
+                        arguments_json: r.arguments_json,
+                        result_json: r.result_json,
+                    })
+                    .collect();
+                let mut selected = request.clone();
+                selected.tool_history = retained.clone();
+                let plan = kora_models::ContextPlan {
+                    max_input_tokens,
+                    reserve_output_tokens,
+                    estimated_input_tokens: kora_models::estimate_input_tokens(&selected),
+                    retained_exchanges: retained.len(),
+                    dropped_exchanges: dropped,
+                };
+                Ok(Ok((retained, plan)))
+            }
+            Lookup::Replayed(other) => Err(RuntimeError::new(
+                format!(
+                    "journal step is {other:?}, but the program reached a context pruning decision"
+                ),
+                span,
+            )),
+            Lookup::Fresh { scope, seq } => {
+                match kora_models::prune_tool_history(
+                    request,
+                    max_input_tokens,
+                    reserve_output_tokens,
+                ) {
+                    Ok((retained, plan)) => {
+                        let mut journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
+                        journal
+                            .record(
+                                scope,
+                                seq,
+                                site,
+                                Effect::Context {
+                                    retained: retained
+                                        .iter()
+                                        .map(|e| journal::RecordedExchange {
+                                            name: e.name.clone(),
+                                            arguments_json: e.arguments_json.clone(),
+                                            result_json: e.result_json.clone(),
+                                        })
+                                        .collect(),
+                                    dropped: plan.dropped_exchanges,
+                                },
+                            )
+                            .map_err(|e| RuntimeError::new(e.to_string(), span))?;
+                        Ok(Ok((retained, plan)))
+                    }
+                    // Nothing fit, so nothing was decided: the slot is left
+                    // unrecorded and a resumed run recomputes the same
+                    // refusal from the same journaled tool history.
+                    Err(reason) => Ok(Err(reason)),
+                }
             }
         }
     }
