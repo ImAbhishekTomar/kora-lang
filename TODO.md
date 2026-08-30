@@ -198,6 +198,95 @@ fixed:
 - [ ] `network` — no dedicated stdlib module beyond `http`.
 - [ ] CLI beautification — no dedicated polish pass tracked yet.
 
+## Capability roadmap
+
+Status legend: **Have** means the capability is implemented and exercised;
+**Partial** means the core exists but important semantics or production pieces
+remain; **Build** means it is not implemented yet.
+
+| Priority | Capability | Status | Current coverage | What remains to build or improve |
+|---|---|---|---|---|
+| P0 | Agent primitive | **Have** | `agent` functions, isolated heaps, budgets, tools, and durable runs | Add explicit agent lifecycle, cancellation, handoff, and supervision semantics |
+| P0 | Model abstraction | **Have** | Provider abstraction for OpenAI and Ollama, named models, schema requests | Add provider capability negotiation, richer provider errors, and fallback policy |
+| P0 | Typed tools | **Have** | Typed Kora tools and typed MCP tool schemas | Add richer parameter types, result schemas, validation, and tool cancellation |
+| P0 | Structured output | **Have** | Declared Kora types become validated model JSON schemas | Add schema evolution/versioning and better provider compatibility diagnostics |
+| P0 | Async/concurrency | **Partial** | Real OS-thread `parallel for` with isolated worker heaps | Add explicit cancellation, backpressure, bounded queues, fair scheduling, and a clear async/event model |
+| P0 | Streaming | **Partial** | `str` streaming with `on token`, replay chunks, and `write` | Fix budget accounting, crash-safe durable streaming, retry state, live transport tests, tool streaming, and parallel streaming |
+| P0 | Timeouts + cancellation | **Partial** | Model, HTTP, and MCP timeouts; handler can stop reading | Add language-level cancellation tokens, cancellation propagation across workers/tools, and cleanup guarantees |
+| P0 | Retry/backoff | **Have** | Jittered model retries and HTTP retries; MCP handshake retries | Add shared retry policy, observability for attempts, and cancellation-aware backoff |
+| P1 | Durable execution | **Partial** | Replay journal for model calls, tools, human input, output, time, and Python | Define stream transactions, fsync guarantees, run locking, corruption recovery, and retention/compaction |
+| P1 | Checkpoint/resume | **Partial** | Replay-based resume and `ask_human` suspension | Add explicit checkpoints, resumable in-flight effects, versioned state migration, and crash-injection tests |
+| P1 | Human approval | **Have** | `ask_human`, durable suspension, classified-data checks | Add approval identity, expiry, denial/revocation, and audit metadata |
+| P1 | Guardrails | **Partial** | Labels, declassification, unverified data direction, schema validation, budgets | Complete `unverified` enforcement, policy composition, prompt/output controls, and configurable safety policies |
+| P1 | Tracing/metrics | **Partial** | OpenTelemetry spans and local trace output | Add a metrics pipeline, stream/token/tool counters, stable event IDs, and export backpressure |
+| P1 | Context management | **Partial** | Prompt construction and tool history within one model call | Add token-aware context windows, truncation, summarization, retention policy, and typed context objects |
+| P1 | Sessions/memory | **Build** | No persistent user-facing session or memory abstraction | Build durable session IDs, scoped memory, retrieval/update rules, privacy labels, eviction, and replay semantics |
+| P1 | MCP | **Have** | Server discovery, typed tools, timeouts, failure values, capability checks | Add richer MCP schemas, cancellation, reconnect policy, server health, and protocol-version negotiation |
+| P2 | Multi-agent/handoffs | **Partial** | Agents and parallel workers exist as isolated execution units | Build first-class messages, handoff contracts, ownership transfer, supervision, and failure semantics |
+| P2 | Sandboxed execution | **Partial** | Package grants, process boundaries, Python sidecar, and no native shared libraries | Build OS-level sandboxing and WASM components with capability enforcement |
+| P2 | Model routing/fallback | **Partial** | Named model roles and per-call model selection | Build policy-based routing, health-aware fallback, cost/latency rules, and deterministic replay of route decisions |
+| P2 | RAG/embeddings | **Build** | No embeddings, chunking, retrieval, or vector index | Build embedding effects, document ingestion, chunk identity, retrieval APIs, labels, and cassette/journal behavior |
+| P2 | Scheduler/cron | **Build** | No language-level scheduled execution | Build a scheduler primitive, durable triggers, retries, overlap policy, time zones, and operational inspection |
+| P2 | Distributed agents | **Build** | Execution is local to one process and host | Build remote workers, transport/authentication, placement, shared journal semantics, and network partitions |
+| P3 | GPU/local inference | **Partial** | Local Ollama provider works; in-process inference is parked | Measure and, if justified, build sandboxed in-process inference or a stronger local runtime integration |
+| P3 | Native vector store | **Build** | No native vector-store module | Build a capability-scoped vector index with persistence, filtering, migrations, and embedding compatibility |
+| P3 | Browser/computer-use runtime | **Build** | No browser or computer-use runtime | Build a separate sandboxed runtime with screenshots, actions, permissions, replay, and human takeover |
+
+### Suggested capability build order
+
+- [ ] **P0 correctness gate:** finish streaming accounting, cancellation
+      semantics, and live transport tests before expanding the streaming API.
+- [ ] **P1 reliability layer:** complete durable stream transactions,
+      checkpoints, fsync/run locking, and fault-injection tests.
+- [ ] **P1 agent product layer:** add sessions/memory and context management
+      before multi-agent handoffs; otherwise agents have no durable state to
+      hand over safely.
+- [ ] **P2 execution layer:** add policy-based routing, sandboxed WASM, and
+      first-class handoffs before distributed workers.
+- [ ] **P2 data layer:** add embeddings and retrieval with labels and replay
+      semantics before calling the language RAG-ready.
+- [ ] **P3 integrations:** evaluate GPU inference, vector stores, and browser
+      runtime only after the local execution and durability contracts are
+      stable.
+
+## Audit follow-up
+
+Findings from [COMPILER_AUDIT.md](COMPILER_AUDIT.md) and
+[COMPILER_AUDIT.html](COMPILER_AUDIT.html). Prioritize the first two before
+extending streaming with tools or `parallel for`.
+
+- [ ] **Fix streaming budget accounting.** Charge `max_calls` and known token
+      usage through the shared `Budget`; update `tokens_spent()` and
+      `calls_spent()`; include failed streams and parallel workers.
+- [ ] **Define crash semantics for durable streaming.** Refuse durable
+      streaming until it is atomic, or journal stream start, chunks, terminal
+      outcome, and a resumable provider identity. Add a kill-and-resume test
+      proving no duplicate request or output.
+- [ ] **Correct streaming retry state.** Mark a stream observed only after a
+      meaningful answer fragment or an explicitly defined refusal boundary;
+      do not let `[DONE]`, usage frames, or keep-alives suppress retries.
+- [ ] **Add live transport end-to-end tests.** Use a deterministic local HTTP
+      fixture through the real `ureq` path for SSE, Ollama JSON lines, retries,
+      timeouts, provider errors, usage frames, and handler failures.
+- [ ] **Complete public streaming documentation.** Update
+      `site/app/language/page.mdx` and the public reference with `on token`,
+      `write`, failure behavior, durability limits, and current restrictions.
+- [ ] **Strengthen cassette identity.** Replace FNV-1a with a cryptographic
+      hash or verify the full key material; version the key algorithm if old
+      cassettes need migration.
+- [ ] **Separate provider framing from language semantics.** Introduce
+      provider-specific stream adapters that normalize SSE and JSON-lines into
+      one internal delta protocol.
+- [ ] **Specify effect state transitions.** Document prepared, sent, observed,
+      and terminal states with retry, budget, journal, cancellation, telemetry,
+      and resume rules.
+- [ ] **Introduce a typed effect-aware IR.** Lower checked AST into an IR with
+      explicit effect nodes and stable operation IDs before building streaming
+      tools or a bytecode VM.
+- [ ] **Define OS durability guarantees.** Decide whether journals promise
+      process-crash durability, machine-crash durability, and concurrent-resume
+      safety; add fsync and per-run locking where required.
+
 ## Queue
 
 Neither is a hole in what exists; both extend it, and each waits on

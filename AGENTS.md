@@ -2,6 +2,8 @@
 
 Notes for anyone — human or agent — changing this repository.
 
+> Spawn multiple subagents/subgraph where it is possible to break task in a multiple small task.
+
 ## Feature Development Principle
 
 When building a new feature, always identify the problems that existing languages face—especially those they cannot solve because of legacy dependencies, backward-compatibility requirements, or ecosystem constraints.
@@ -65,6 +67,13 @@ reaches CI.
 So: when you add or change a construct, walk the whole list below and either
 update the item or say out loud why it needs nothing.
 
+## Examples are part of the feature
+
+**When implementing any code change or new feature, create or update runnable
+examples in the `/examples` folder.** Examples are not optional—they are how
+users learn the feature and how the feature gets tested in CI. Every example
+must be listed in `examples/README.md`.
+
 ## Kora Lang Project Management
 
 A GitHub Project named **`Kora Lang`** has been created for this repository.
@@ -96,18 +105,15 @@ random.
 - Composes effects that already exist → **package**, full stop, even if it
   would be more convenient to bolt onto the runtime.
 
-**Before writing code for any requested feature, state the classification
-and the one-line reason, unprompted.** This applies at every permission
-level, including full-approval/auto-accept modes — a fast "yes" from the
-harness is not a fast "yes" from the user on *what* is being built. One
-line is enough:
+**Give the best suggestion/research/explore-for-new-feature with confidence.** State the classification
+clearly without hesitation. Include warnings if needed, but do not ask for
+permission—make the call decisively. State it unprompted, one line:
 
 > This is a package (composes `analyze` + `parallel for`, no new effect).
 > This needs a compiler change (new schema shape for `analyze` results).
 
-If genuinely ambiguous, say so and pick the smaller-blast-radius reading
-(package over compiler) rather than asking, unless the ambiguity changes
-what gets built enough to need a decision from the user.
+If genuinely ambiguous, state that and pick the smaller-blast-radius reading
+(package over compiler). Warnings are fine; indecision is not.
 
 ## Two answers that are already decided
 
