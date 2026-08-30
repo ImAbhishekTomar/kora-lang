@@ -106,6 +106,32 @@ fn walk_imports(
     }
 }
 
+/// Render the declassified expression the way it was written, so the report
+/// names something the reader can find in the source.
+///
+/// Only the shapes a declassify target actually takes are covered — a name,
+/// a field of one, an element of one, the result of a call. Anything more
+/// elaborate is left to the caller's fallback rather than reconstructed
+/// approximately, because a report that quietly prints a *different*
+/// expression from the one in the file is worse than one that prints the
+/// binding and stays honest about it.
+fn describe(expr: &Expr) -> Option<String> {
+    match &expr.kind {
+        ExprKind::Name(name) => Some(name.clone()),
+        ExprKind::Attr { object, name } => Some(format!("{}.{name}", describe(object)?)),
+        ExprKind::Index { object, index } => {
+            Some(format!("{}[{}]", describe(object)?, describe(index)?))
+        }
+        ExprKind::Call { callee, args, .. } => {
+            let rendered: Option<Vec<String>> = args.iter().map(describe).collect();
+            Some(format!("{}({})", describe(callee)?, rendered?.join(", ")))
+        }
+        ExprKind::Str(s) => Some(format!("{s:?}")),
+        ExprKind::Int(n) => Some(n.to_string()),
+        _ => None,
+    }
+}
+
 fn walk_stmts(stmts: &[Stmt], file: &str, out: &mut Vec<DeclassifySite>) {
     for stmt in stmts {
         walk_stmt(stmt, file, out);
@@ -115,15 +141,19 @@ fn walk_stmts(stmts: &[Stmt], file: &str, out: &mut Vec<DeclassifySite>) {
 fn walk_stmt(stmt: &Stmt, file: &str, out: &mut Vec<DeclassifySite>) {
     match &stmt.kind {
         StmtKind::Declassify {
+            value,
             binding,
             sink,
             body,
-            ..
         } => {
             out.push(DeclassifySite {
                 file: file.to_string(),
                 line: stmt.span.line,
-                expression: binding.clone(),
+                // The value, not the binding: `declassify user.ssn as s`
+                // exposes the SSN, and an inventory that recorded `s` would
+                // name a local alias that means nothing to the person
+                // reading the report.
+                expression: describe(value).unwrap_or_else(|| binding.clone()),
                 sink: sink.clone(),
             });
             // Nested declassifications count too.
@@ -298,5 +328,257 @@ agent worker() -> int:
         assert!(report.contains("test.ko:1  declassify a for x"));
         assert!(report.contains("test.ko:3  declassify b for y"));
         assert!(report.contains("2 declassification sites"));
+    }
+
+    #[test]
+    fn report_singular_site() {
+        let src = "declassify a for sink:\n    print(a)\n";
+        let report = render(&sites_of(src));
+        assert!(report.contains("1 declassification site\n"));
+    }
+
+    #[test]
+    fn report_plural_sites() {
+        let src = "declassify a for x:\n    pass\ndeclassify b for y:\n    pass\n";
+        let report = render(&sites_of(src));
+        assert!(report.contains("2 declassification sites\n"));
+    }
+
+    #[test]
+    fn finds_sites_in_while_loop() {
+        let src = "while True:\n    declassify x for sink:\n        print(x)\n";
+        assert_eq!(sites_of(src).len(), 1);
+    }
+
+    #[test]
+    fn finds_sites_in_with_mock() {
+        let src = r#"with mock analyze -> Ok("stub"):
+    declassify secret for sink:
+        print(secret)
+"#;
+        assert_eq!(sites_of(src).len(), 1);
+    }
+
+    #[test]
+    fn finds_sites_in_test_block() {
+        let src = r#"test "something":
+    declassify data for sink:
+        print(data)
+"#;
+        assert_eq!(sites_of(src).len(), 1);
+    }
+
+    #[test]
+    fn finds_sites_in_bind_or_else() {
+        let src = r#"result: str = "test" else:
+    declassify y for sink:
+        print(y)
+"#;
+        assert_eq!(sites_of(src).len(), 1);
+    }
+
+    #[test]
+    fn finds_sites_in_on_token_handler() {
+        let src = r#"x: str = "test" on token(t):
+    declassify t for sink:
+        print(t)
+"#;
+        assert_eq!(sites_of(src).len(), 1);
+    }
+
+    #[test]
+    fn finds_sites_in_on_tool_call_handler() {
+        let src = r#"x: str = "test" on tool_call(name, args):
+    declassify args for sink:
+        print(args)
+"#;
+        assert_eq!(sites_of(src).len(), 1);
+    }
+
+    #[test]
+    fn ignores_non_declassify_statements() {
+        let src = "x = 1\ny = 2\nif True:\n    z = 3\n";
+        assert!(sites_of(src).is_empty());
+    }
+
+    #[test]
+    fn finds_multiple_nested_levels() {
+        let src = r#"def outer():
+    if True:
+        for x in [1]:
+            declassify x for level4:
+                pass
+"#;
+        let sites = sites_of(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].sink, "level4");
+    }
+
+    #[test]
+    fn all_sites_sorted_by_line() {
+        let src = "declassify a for z:\n    pass\ndeclassify b for a:\n    pass\ndeclassify c for m:\n    pass\n";
+        let sites = sites_of(src);
+        assert_eq!(sites[0].line, 1);
+        assert_eq!(sites[1].line, 3);
+        assert_eq!(sites[2].line, 5);
+    }
+
+    #[test]
+    fn different_sinks_same_line_not_possible_but_handled() {
+        let src = "declassify x for sink1:\n    print(x)\n";
+        let sites = sites_of(src);
+        assert_eq!(sites[0].sink, "sink1");
+    }
+
+    #[test]
+    fn declassify_with_complex_expression() {
+        let src = "declassify x as data for sink:\n    print(data)\n";
+        let sites = sites_of(src);
+        assert_eq!(sites.len(), 1);
+        // The value, not the name it was rebound to inside the block.
+        assert_eq!(sites[0].expression, "x");
+    }
+
+    #[test]
+    fn an_aliased_field_is_reported_by_its_source_not_its_alias() {
+        // The report exists so a reviewer can find what leaked. `s` appears
+        // nowhere outside the block, so naming it would send them looking
+        // for something that does not exist.
+        let src = "declassify user.profile.ssn as s for local_model:\n    print(s)\n";
+        let sites = sites_of(src);
+        assert_eq!(sites[0].expression, "user.profile.ssn");
+    }
+
+    #[test]
+    fn an_aliased_index_is_reported_by_its_source() {
+        let src = "declassify records[0] as r for local_model:\n    print(r)\n";
+        assert_eq!(sites_of(src)[0].expression, "records[0]");
+    }
+
+    #[test]
+    fn an_aliased_call_is_reported_by_its_source() {
+        let src = "declassify fetch(user) as v for local_model:\n    print(v)\n";
+        assert_eq!(sites_of(src)[0].expression, "fetch(user)");
+    }
+
+    #[test]
+    fn an_unrenderable_expression_falls_back_to_the_binding() {
+        // Better an honest binding name than a report that prints an
+        // expression subtly different from the one in the file.
+        let src = "declassify a + b as combined for local_model:\n    print(combined)\n";
+        assert_eq!(sites_of(src)[0].expression, "combined");
+    }
+
+    #[test]
+    fn render_empty_list_message() {
+        let report = render(&[]);
+        assert!(report.contains("no declassification sites"));
+        assert!(report.contains("no classified data reaches any sink"));
+    }
+
+    #[test]
+    fn render_many_sites() {
+        let mut sites = vec![];
+        for i in 1..=10 {
+            sites.push(DeclassifySite {
+                file: format!("file{}.ko", i),
+                line: i as u32,
+                expression: format!("var{}", i),
+                sink: format!("sink{}", i),
+            });
+        }
+        let report = render(&sites);
+        assert!(report.contains("10 declassification sites"));
+        assert!(report.contains("file1.ko:1"));
+        assert!(report.contains("file10.ko:10"));
+    }
+
+    #[test]
+    fn audit_preserves_file_name_in_sites() {
+        let program = parse("declassify x for sink:\n    pass\n").expect("parse");
+        let sites = audit(&program, "myfile.ko");
+        assert_eq!(sites[0].file, "myfile.ko");
+    }
+
+    #[test]
+    fn audit_uses_correct_line_numbers() {
+        let src = "x = 1\ny = 2\ndeclassify z for sink:\n    pass\n";
+        let sites = sites_of(src);
+        assert_eq!(sites[0].line, 3);
+    }
+
+    #[test]
+    fn else_body_in_if_statement_searched() {
+        let src = r#"if True:
+    pass
+else:
+    declassify x for sink:
+        print(x)
+"#;
+        let sites = sites_of(src);
+        assert_eq!(sites.len(), 1);
+    }
+
+    #[test]
+    fn multiple_branches_in_if() {
+        let src = r#"if a:
+    declassify x for a:
+        pass
+elif b:
+    declassify y for b:
+        pass
+else:
+    declassify z for c:
+        pass
+"#;
+        let sites = sites_of(src);
+        assert_eq!(sites.len(), 3);
+    }
+
+    #[test]
+    fn function_def_body_searched() {
+        let src = "def f():\n    declassify x for sink:\n        pass\n";
+        let sites = sites_of(src);
+        assert_eq!(sites.len(), 1);
+    }
+
+    #[test]
+    fn agent_def_body_searched() {
+        let src = "agent a():\n    declassify x for sink:\n        pass\n";
+        let sites = sites_of(src);
+        assert_eq!(sites.len(), 1);
+    }
+
+    #[test]
+    fn match_statement_all_arms_searched() {
+        let src = r#"match x:
+    case 1:
+        declassify a for a:
+            pass
+    case 2:
+        declassify b for b:
+            pass
+    case _:
+        declassify c for c:
+            pass
+"#;
+        let sites = sites_of(src);
+        assert_eq!(sites.len(), 3);
+    }
+
+    #[test]
+    fn deeply_nested_structure() {
+        let src = r#"if a:
+    if b:
+        for x in y:
+            while z:
+                match w:
+                    case 1:
+                        declassify data for deep:
+                            pass
+"#;
+        let sites = sites_of(src);
+        assert_eq!(sites.len(), 1);
+        assert_eq!(sites[0].sink, "deep");
     }
 }

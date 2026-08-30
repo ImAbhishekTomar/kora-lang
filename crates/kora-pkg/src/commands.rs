@@ -339,4 +339,225 @@ mod tests {
         let diff = compare("t", &before.0, &after.0, "v1", "v2");
         assert!(!diff.needs_a_look());
     }
+
+    #[test]
+    fn diff_formats_version_strings() {
+        let before = Tree::new(
+            "fmt-before",
+            &[("src/lib.ko", "def a() -> int:\n    return 1\n")],
+        );
+        let after = Tree::new(
+            "fmt-after",
+            &[("src/lib.ko", "def a() -> int:\n    return 2\n")],
+        );
+        let diff = compare("my_pkg", &before.0, &after.0, "1.0.0", "1.0.1");
+        assert_eq!(diff.name, "my_pkg");
+        assert_eq!(diff.from, "1.0.0");
+        assert_eq!(diff.to, "1.0.1");
+    }
+
+    #[test]
+    fn diff_detects_multiple_new_requirements() {
+        let before = Tree::new(
+            "multi-before",
+            &[(
+                "kora.toml",
+                "[package]\nname = \"t\"\n\n[package.requires]\nfs = true\n",
+            )],
+        );
+        let after = Tree::new(
+            "multi-after",
+            &[(
+                "kora.toml",
+                "[package]\nname = \"t\"\n\n[package.requires]\nfs = true\nnet = true\nanalyze = true\nsinks = [\"stripe\", \"payment\"]\n",
+            )],
+        );
+        let diff = compare("t", &before.0, &after.0, "v1", "v2");
+        assert!(diff.new_requirements.len() >= 3);
+        assert!(diff.needs_a_look());
+    }
+
+    #[test]
+    fn diff_handles_missing_manifest_gracefully() {
+        let before = Tree::new(
+            "missing-before",
+            &[("src/lib.ko", "def a() -> int:\n    return 1\n")],
+        );
+        let after = Tree::new(
+            "missing-after",
+            &[("src/lib.ko", "def a() -> int:\n    return 2\n")],
+        );
+        let diff = compare("t", &before.0, &after.0, "v1", "v2");
+        // Should handle gracefully with default Manifest
+        assert_eq!(diff.new_requirements.len(), 0);
+    }
+
+    #[test]
+    fn declassify_sites_handles_no_files() {
+        let tree = Tree::new("empty", &[("dummy.txt", "not kora")]);
+        assert_eq!(declassify_sites(&tree.0), 0);
+    }
+
+    #[test]
+    fn declassify_sites_handles_parse_errors() {
+        let tree = Tree::new(
+            "invalid",
+            &[("src/lib.ko", "this is definitely not valid kora code !! @@")],
+        );
+        // Should handle parse errors and return 0
+        assert_eq!(declassify_sites(&tree.0), 0);
+    }
+
+    #[test]
+    fn declassify_sites_in_nested_structures() {
+        let tree = Tree::new(
+            "nested",
+            &[(
+                "src/lib.ko",
+                "def outer():\n    def inner():\n        declassify x as y for sink:\n            pass\n    return 1\n",
+            )],
+        );
+        assert_eq!(declassify_sites(&tree.0), 1);
+    }
+
+    #[test]
+    fn diff_empty_before_has_new_requirements() {
+        let before = Tree::new(
+            "empty-before",
+            &[("kora.toml", "[package]\nname = \"t\"\n")],
+        );
+        let after = Tree::new(
+            "empty-after",
+            &[(
+                "kora.toml",
+                "[package]\nname = \"t\"\n\n[package.requires]\nnet = true\n",
+            )],
+        );
+        let diff = compare("t", &before.0, &after.0, "v1", "v2");
+        assert!(diff.needs_a_look());
+    }
+
+    #[test]
+    fn diff_both_have_same_requirements() {
+        let before = Tree::new(
+            "same-before",
+            &[(
+                "kora.toml",
+                "[package]\nname = \"t\"\n\n[package.requires]\nfs = true\nnet = true\n",
+            )],
+        );
+        let after = Tree::new(
+            "same-after",
+            &[(
+                "kora.toml",
+                "[package]\nname = \"t\"\n\n[package.requires]\nfs = true\nnet = true\n",
+            )],
+        );
+        let diff = compare("t", &before.0, &after.0, "v1", "v2");
+        assert!(!diff.needs_a_look());
+    }
+
+    #[test]
+    fn diff_detects_removed_declassify() {
+        let before = Tree::new(
+            "decl-before",
+            &[(
+                "src/lib.ko",
+                "def a(s: str) -> str:\n    declassify s as x for m:\n        return x\n    return \"\"\n",
+            )],
+        );
+        let after = Tree::new(
+            "decl-after",
+            &[("src/lib.ko", "def a(s: str) -> str:\n    return \"\"\n")],
+        );
+        let diff = compare("t", &before.0, &after.0, "v1", "v2");
+        assert_eq!(diff.declassify_before, 1);
+        assert_eq!(diff.declassify_after, 0);
+        assert!(!diff.needs_a_look()); // Removed declassify doesn't need a look
+    }
+
+    #[test]
+    fn copy_tree_creates_directory_structure() {
+        let src = std::env::temp_dir().join("copy-src");
+        let dst = std::env::temp_dir().join("copy-dst");
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::write(src.join("file.txt"), "content").unwrap();
+        std::fs::create_dir_all(src.join("sub")).unwrap();
+        std::fs::write(src.join("sub").join("nested.txt"), "nested").unwrap();
+
+        copy_tree(&src, &dst).unwrap();
+
+        assert!(dst.exists());
+        assert!(dst.join("file.txt").exists());
+        assert!(dst.join("sub").join("nested.txt").exists());
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+    }
+
+    #[test]
+    fn copy_tree_skips_git_directory() {
+        let src = std::env::temp_dir().join("copy-git-src");
+        let dst = std::env::temp_dir().join("copy-git-dst");
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(src.join(".git")).unwrap();
+        std::fs::write(src.join(".git").join("config"), "git").unwrap();
+        std::fs::write(src.join("file.txt"), "keep").unwrap();
+
+        copy_tree(&src, &dst).unwrap();
+
+        assert!(dst.join("file.txt").exists());
+        assert!(!dst.join(".git").exists());
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+    }
+
+    #[test]
+    fn copy_tree_skips_kora_cache() {
+        let src = std::env::temp_dir().join("copy-kora-src");
+        let dst = std::env::temp_dir().join("copy-kora-dst");
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+
+        std::fs::create_dir_all(&src).unwrap();
+        std::fs::create_dir_all(src.join(".kora")).unwrap();
+        std::fs::write(src.join(".kora").join("cache"), "cache").unwrap();
+        std::fs::write(src.join("file.txt"), "keep").unwrap();
+
+        copy_tree(&src, &dst).unwrap();
+
+        assert!(dst.join("file.txt").exists());
+        assert!(!dst.join(".kora").exists());
+
+        let _ = std::fs::remove_dir_all(&src);
+        let _ = std::fs::remove_dir_all(&dst);
+    }
+
+    #[test]
+    fn diff_version_combination_tracking() {
+        let before = Tree::new(
+            "ver-before",
+            &[(
+                "kora.toml",
+                "[package]\nname = \"lib\"\n\n[package.requires]\n",
+            )],
+        );
+        let after = Tree::new(
+            "ver-after",
+            &[(
+                "kora.toml",
+                "[package]\nname = \"lib\"\n\n[package.requires]\nfs = true\n",
+            )],
+        );
+        let diff = compare("lib", &before.0, &after.0, "0.1.0", "0.2.0");
+        assert_eq!(diff.from, "0.1.0");
+        assert_eq!(diff.to, "0.2.0");
+    }
 }
