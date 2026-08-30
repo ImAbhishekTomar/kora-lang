@@ -1,10 +1,10 @@
 //! End-to-end tests for token-by-token `analyze()` streaming.
 //!
-//! Real network calls are out of scope for CI, so these run the interpreter
-//! against `with mock analyze`, which exercises the full path — parsing,
-//! `on token` scoping, the outcome match, budget accounting — everything
-//! except the socket. A live provider is exercised by hand; see
-//! `examples/patterns/README.md`.
+//! These run the interpreter against `with mock analyze`, which covers
+//! parsing, `on token` scoping, and the outcome match. A mock stands in for
+//! the whole call and returns before the budget is consulted or a socket is
+//! opened, so it proves nothing about accounting or the transport — those
+//! live in `stream_transport_test.rs`, against a real loopback provider.
 
 use kora_runtime::Interpreter;
 use kora_syntax::parse;
