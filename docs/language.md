@@ -1001,6 +1001,22 @@ Mocks are checked against the declared result type, so one that drifts from
 reality fails instead of passing. Model calls replay from the cassette, so a
 suite costs nothing. Under `kora run`, `test` blocks are inert.
 
+A flow that calls `analyze` for more than one type mocks each with its own
+nested block:
+
+```python
+test "a draft that grades funny on the first try":
+    with mock analyze -> Ok(Draft("why did the cat sit on the keyboard?")):
+        with mock analyze -> Ok(Verdict("funny", "")):
+            assert optimize("cats") == "why did the cat sit on the keyboard?"
+```
+
+Each call site finds the mock whose type it declares, searching outward past
+any nested mock that does not match — the `Draft` call sees past the
+`Verdict` mock to the one around it, and vice versa. Only when nothing on the
+stack matches does the call fail, same as a single mock of the wrong type
+always has.
+
 ---
 
 ## Built-in functions

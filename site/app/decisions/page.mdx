@@ -149,6 +149,16 @@ design changes and should be deliberate.
   was the one thing not seeded — so a test that fanned out silently reached for
   a real model. The fan-out is the path most worth testing; leaving it the one
   path that could not be tested was a hole, not a design.
+- **A mismatched mock falls through to the mock beneath it, rather than
+  failing the call.** `with mock` already nests like any other block, and
+  `Ok(SomeType(...))` already names its type through the constructor it
+  calls — the missing piece was never syntax, it was that only the innermost
+  mock was ever consulted, and a type mismatch there ended the search instead
+  of continuing it. A flow that calls `analyze` for two different types now
+  mocks each with its own nested block; the search tries the stack innermost
+  first and only fails once nothing on it matches, reporting the innermost
+  mismatch's own error, since that is the one a test author is looking at.
+  No new syntax, because none was needed.
 - Fixes over Python: no GIL, no async coloring, mandatory-at-boundary types,
   no bare except, one packaging story, no mutable-default-arg footgun.
 

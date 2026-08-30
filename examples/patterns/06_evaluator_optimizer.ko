@@ -78,9 +78,13 @@ test "a provider outage ends the loop instead of spinning on it":
     with mock analyze -> Failed("connection refused"):
         assert optimize("cats") == ""
 
-# The happy path of this loop cannot be tested with a mock today: `mock`
-# takes one value, checked against each call site it reaches, and this loop
-# calls `analyze` for a `Draft` and then for a `Verdict`. An `Ok(Draft(...))`
-# mock reaches the grader and is rejected there rather than falling through.
-# The failure paths above are testable because a failure mock carries no type.
-# Per-type mocks would close this; see README.md.
+test "the happy path: a draft that grades funny on the first try":
+    # One mock per type this loop calls `analyze` for, nested rather than
+    # simultaneous -- each call site finds the mock whose type it declares,
+    # searching outward past the ones that do not match. A mocked call
+    # spends no budget, so a mock scripting "not funny" forever would spin
+    # the loop past any real stopping point -- this only stays safe to test
+    # because "funny" returns on the first round.
+    with mock analyze -> Ok(Draft("why did the cat sit on the keyboard?")):
+        with mock analyze -> Ok(Verdict("funny", "")):
+            assert optimize("cats") == "why did the cat sit on the keyboard?"

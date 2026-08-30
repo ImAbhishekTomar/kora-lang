@@ -2370,9 +2370,12 @@ impl Interpreter {
 
         // A mock stands in for the whole call. It is checked against the
         // declared type, so a mock of the wrong shape fails the test instead
-        // of passing it — which is the failure mode of untyped mocking.
-        if let Some(mocked) = self.mocked_analyze.last().cloned() {
-            self.check_mock(&mocked, &type_name, span)?;
+        // of passing it — which is the failure mode of untyped mocking. A
+        // flow that calls `analyze` for two different types nests one mock
+        // per type; the innermost mock that actually matches this call
+        // site's type wins, not simply whichever mock is nearest.
+        if !self.mocked_analyze.is_empty() {
+            let mocked = self.pick_mock(&type_name, span)?;
             // A mocked stream still runs the handler, once, over the whole
             // mocked answer -- as one piece rather than none, since a test
             // has no way to script the pieces a real provider would choose.
@@ -4744,6 +4747,27 @@ impl Interpreter {
 }
 
 impl Interpreter {
+    /// Choose which active mock stands in for a call declaring `type_name`.
+    ///
+    /// `with mock` nests like any other block, so a flow that calls
+    /// `analyze` for two different types mocks each with its own nested
+    /// block. The stack is searched innermost first -- the same order a
+    /// single active mock was already found in -- but a mismatch no longer
+    /// ends the search: it tries the mock beneath it, the way an unmatched
+    /// name falls through to an enclosing scope. Only when nothing on the
+    /// stack matches does this fail, and it fails with the innermost mock's
+    /// complaint, since that is the one the test most likely meant to reach.
+    fn pick_mock(&self, type_name: &str, span: Span) -> Result<Value, RuntimeError> {
+        let mut innermost_err = None;
+        for mocked in self.mocked_analyze.iter().rev() {
+            match self.check_mock(mocked, type_name, span) {
+                Ok(()) => return Ok(mocked.clone()),
+                Err(e) => innermost_err.get_or_insert(e),
+            };
+        }
+        Err(innermost_err.expect("caller checked mocked_analyze is non-empty"))
+    }
+
     /// Verify a mocked `analyze` result matches what the call site declared.
     ///
     /// Mocking frameworks elsewhere cannot do this: they have no idea what

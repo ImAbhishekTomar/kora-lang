@@ -69,15 +69,15 @@ wrapper function that cannot carry one.
 `Exhausted`, and `Failed` with typed mocks — the paths that normally go
 untested because provoking them means making a real model misbehave.
 
+**A flow calling `analyze` for two different types can mock both.** Nest one
+`with mock` per type, and each call site finds the one whose type it
+declares — see `06_evaluator_optimizer.ko`, whose happy path (draft, then
+grade) used to be the one thing in this loop no mock could reach.
+
 ## What is not good yet
 
 Reading these should show the rough edges as well as the good parts.
 
-- **A mock is one value.** `mock analyze -> Ok(...)` is checked against every
-  call site it reaches, so a flow calling `analyze` for two different types
-  can only have its failure paths tested — see the note in
-  `06_evaluator_optimizer.ko`. Failure mocks carry no type, so those work
-  everywhere.
 - **Streaming is text only.** `analyze(...) on token(t):` renders an answer as
   it arrives, but only for a `str` result — a declared type arrives as JSON,
   so its pieces are syntax rather than prose. Nothing here streams a typed

@@ -210,6 +210,71 @@ test "inner mock wins, outer is restored":
     assert_eq!(results[0].1, None, "{:?}", results[0].1);
 }
 
+/// A flow that calls `analyze` for two different types in sequence, the
+/// exact shape `06_evaluator_optimizer.ko` could not test before per-type
+/// mock lookup: one mock reaching the call site it matches, not simply the
+/// nearest one.
+const DRAFT_THEN_VERDICT: &str = r#"type Draft:
+    text: str
+
+type Verdict:
+    grade: str
+
+agent write_and_grade(topic: str) -> str:
+    d: Draft = analyze(topic, "write") else (why):
+        return f"draft failed: {why}"
+    v: Verdict = analyze(d.text, "grade") else (why):
+        return f"grade failed: {why}"
+    return f"{d.text}: {v.grade}"
+"#;
+
+#[test]
+fn nested_mocks_of_different_types_each_reach_their_own_call_site() {
+    let results = run_suite(&format!(
+        r#"{DRAFT_THEN_VERDICT}
+test "each call site finds its own type":
+    with mock analyze -> Ok(Draft("a joke")):
+        with mock analyze -> Ok(Verdict("funny")):
+            assert write_and_grade("cats") == "a joke: funny"
+"#
+    ));
+    assert_eq!(results[0].1, None, "{:?}", results[0].1);
+}
+
+#[test]
+fn a_mock_falls_through_an_inner_mismatch_to_a_matching_outer_mock() {
+    // Nested the other way from the test above: the *outer* mock is now the
+    // one that answers the *second* call (`Verdict`). The `Draft` call still
+    // has to skip past the innermost `Verdict` mock and reach it.
+    let results = run_suite(&format!(
+        r#"{DRAFT_THEN_VERDICT}
+test "wrong-type inner mock does not block an outer match":
+    with mock analyze -> Ok(Verdict("funny")):
+        with mock analyze -> Ok(Draft("a joke")):
+            assert write_and_grade("cats") == "a joke: funny"
+"#
+    ));
+    assert_eq!(results[0].1, None, "{:?}", results[0].1);
+}
+
+#[test]
+fn no_matching_mock_anywhere_on_the_stack_still_fails() {
+    // Both active mocks are `Verdict`; neither matches the `Draft` call, so
+    // the search must exhaust the whole stack and report a real mismatch,
+    // not silently pick one.
+    let results = run_suite(&format!(
+        r#"{DRAFT_THEN_VERDICT}
+test "nothing on the stack matches":
+    with mock analyze -> Ok(Verdict("meh")):
+        with mock analyze -> Ok(Verdict("funny")):
+            write_and_grade("cats")
+"#
+    ));
+    let failure = results[0].1.as_deref().unwrap_or_default();
+    assert!(failure.contains("`Verdict`"), "got: {failure}");
+    assert!(failure.contains("`Draft`"), "got: {failure}");
+}
+
 #[test]
 fn only_analyze_can_be_mocked_today() {
     let results = run_suite(
