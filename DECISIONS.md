@@ -393,7 +393,7 @@ long-lived thing outside the process) than to a bare stdlib module.
 
 **The design.**
 
-```python
+```text
 use session support as mem
 
 mem.write(ticket.id, "notes", updated_notes)
@@ -473,7 +473,7 @@ reaches a prompt.
 
 **The design.** Four small pieces, no vector database of Kora's own yet:
 
-```python
+```text
 use vector_index docs as idx
 
 e: Embedding = embed(paragraph)                    # model-transport effect
@@ -497,8 +497,8 @@ effect — deterministic string splitting needs no journal entry, the same way
 already carried by whatever text they are given.
 
 `use vector_index <name> as <alias>` is declared in `kora.toml`
-(`[vector_index.docs]`, naming a backend) the same way `use mcp <server> as
-<alias>` is — a vector store is a long-lived external thing, and package
+(`[vector_index.docs]`, naming a backend) the same way `use mcp <server> as <alias>`
+is — a vector store is a long-lived external thing, and package
 grants apply to it the same way (`grants = { vector_index = ["docs"] }`).
 
 A `Chunk` returned by `idx.search` is `unverified` by default — the same rule
@@ -640,7 +640,7 @@ should never reach the model's context unredacted all need to be inspected
 
 **The design.** A second, symmetric hook:
 
-```python
+```text
 t: Ticket = analyze(raw, "triage this", tools=[search_kb]) on tool_result(name, args, result):
     if name == "search_kb" and len(result.body) > 2000:
         return truncate(result.body, 2000)
