@@ -203,6 +203,25 @@ tool priority_for(severity: str) -> int:
 
 Tool parameters must be typed — a model cannot be told what to pass otherwise.
 
+An **agent may also be passed as a tool** — `tools=[triage]` — for a
+supervisor delegating to specialists, each with its own budget:
+
+```python
+agent billing(question: str) -> str:
+    budget: max_tokens = 4000
+    ...
+
+agent supervisor(question: str) -> str:
+    a: Answer = analyze(question, "route this and answer it", tools=[billing, triage])
+    ...
+```
+
+Calling an agent this way is exactly the call `billing(question)` would be —
+same function, same heap, its own `budget:` line honored the same way. There
+is no separate isolated heap for it here, unlike a `parallel for` worker:
+isolation exists to make concurrent threads safe, and a tool call is one more
+synchronous step in the same loop, not a second thread.
+
 `main()` runs automatically if defined.
 
 ---

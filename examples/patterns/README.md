@@ -60,6 +60,11 @@ string to skip the tool and hand that back as its result instead. LangGraph
 needs a custom `ToolNode` for this; here it hangs off the same call, the way
 `on token(t):` does for a streamed answer.
 
+**An agent is a valid tool.** `tools=[specialist]` accepts an `agent` the same
+as a `tool` — a supervisor delegating to specialists calls them directly,
+each with its own `budget:` line, rather than spelling every specialist as a
+wrapper function that cannot carry one.
+
 **The failure paths are tested.** Every file here forces `Uncertain`,
 `Exhausted`, and `Failed` with typed mocks — the paths that normally go
 untested because provoking them means making a real model misbehave.
@@ -73,10 +78,6 @@ Reading these should show the rough edges as well as the good parts.
   can only have its failure paths tested — see the note in
   `06_evaluator_optimizer.ko`. Failure mocks carry no type, so those work
   everywhere.
-- **An agent is not a tool.** `tools=[some_agent]` is refused, so the
-  supervisor pattern — one agent delegating to specialists — has to be spelled
-  as a `tool` that wraps the call, and the wrapper cannot carry its own
-  budget.
 - **Streaming is text only.** `analyze(...) on token(t):` renders an answer as
   it arrives, but only for a `str` result — a declared type arrives as JSON,
   so its pieces are syntax rather than prose. Nothing here streams a typed

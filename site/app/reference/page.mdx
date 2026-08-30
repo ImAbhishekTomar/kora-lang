@@ -293,6 +293,16 @@ tool lookup_customer(email: str) -> Customer:
     return db.query("select * from customers where email = ?", email)
 ```
 
+An `agent` may be passed as a tool too, for a supervisor delegating to specialists — each keeps its own `budget:` line:
+
+```kora
+agent billing(question: str) -> str:
+    budget: max_tokens = 4000
+    return analyze(question, "answer this billing question")
+
+a: Answer = analyze(question, "route this and answer it", tools=[billing])
+```
+
 ### `parallel for`
 
 Fans work out and collects the results.

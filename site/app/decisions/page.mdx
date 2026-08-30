@@ -193,6 +193,18 @@ design changes and should be deliberate.
 - No user-facing memory syntax at all. No Rust-style ownership for users.
 - Message passing: copy-only for v1; immutable shared buffers for big
   read-only data later if needed.
+- **The isolated heap is `parallel for`'s, not every agent call's.** A
+  worker gets a fresh `Interpreter` and a `Portable` snapshot of its inputs
+  because it runs on a real thread alongside every other worker, and sharing
+  live `Rc<RefCell<_>>` values across threads is the actual hazard isolation
+  exists to remove. Calling an agent any other way — directly, or as
+  `tools=[specialist]` inside another `analyze()` — runs in the caller's own
+  heap through the same `call_function` a plain function call uses, because
+  nothing about it is concurrent: it is one more synchronous step in the
+  same loop. Giving a tool-called agent a separate heap would make
+  `tools=[specialist]` behave differently from calling `specialist(...)` by
+  name for no reason the call site has — the thread is the boundary that
+  matters, not the keyword.
 
 ## Models
 

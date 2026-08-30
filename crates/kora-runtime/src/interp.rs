@@ -3319,7 +3319,19 @@ impl Interpreter {
         let mut out = Vec::new();
         for item in items {
             match item {
-                Value::Func { def, home } if def.kind == FuncKind::Tool => {
+                // An `agent` is callable here for the same reason it is
+                // callable anywhere else: a call is a call. It runs through
+                // the same `call_function` a direct `some_agent(x)` would,
+                // in the caller's own heap -- not the isolated one a
+                // `parallel for` worker gets, because nothing here is
+                // concurrent. Isolation exists to make several *threads*
+                // safe; a tool call is one more synchronous step in the same
+                // loop, and giving it a separate heap would make calling an
+                // agent through `tools=[...]` behave differently from
+                // calling it by name, for no reason this call site has.
+                Value::Func { def, home }
+                    if def.kind == FuncKind::Tool || def.kind == FuncKind::Agent =>
+                {
                     out.push(ToolHandle::Kora { def, home })
                 }
                 Value::McpTool { server, name } => out.push(ToolHandle::Mcp {
@@ -3332,8 +3344,8 @@ impl Interpreter {
                         arg.span,
                     )
                     .with_hint(format!(
-                        "declare it with `tool {}(...)` so the model may call it",
-                        def.name
+                        "declare it with `tool {}(...)` or `agent {}(...)` so the model may call it",
+                        def.name, def.name
                     )))
                 }
                 other => {
