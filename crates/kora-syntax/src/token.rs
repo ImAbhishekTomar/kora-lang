@@ -77,6 +77,7 @@ pub enum TokenKind {
     Percent,
     DoubleStar,
     DoubleSlash,
+    Pipe,  // |, pattern alternation
     Eq,    // =
     EqEq,  // ==
     NotEq, // !=
@@ -155,6 +156,7 @@ impl fmt::Display for TokenKind {
             Percent => write!(f, "%"),
             DoubleStar => write!(f, "**"),
             DoubleSlash => write!(f, "//"),
+            Pipe => write!(f, "|"),
             Eq => write!(f, "="),
             EqEq => write!(f, "=="),
             NotEq => write!(f, "!="),

@@ -6,11 +6,11 @@ description: What is working now, and what is coming next.
 # Roadmap
 
 Kora is being built in small, runnable steps. This page separates the features
-available in release `0.0.2` from the work that remains.
+implemented in the current codebase from the work that remains.
 
 ## Working now
 
-Release `0.0.2` includes:
+The current codebase includes:
 
 - Python-like syntax, static types, modules, imports, and source diagnostics.
 - `kora run`, `check`, `test`, `audit`, `trace`, and durable run commands.
@@ -18,7 +18,9 @@ Release `0.0.2` includes:
   and per-call model selection.
 - Record and replay cassettes for deterministic tests without model costs.
 - Agents, parallel work, lexical budgets, human pauses, and resumable runs.
+- Concise workflow composition: `stream` for a prose answer, `else (why, kind)` for flat outcome handling with a recorded status, and `case A(x) | B(x)` for shared branches.
 - Classified data, scoped `declassify`, sink policies, and audit output.
+- Safe terminal output: `print` and `write` redact classified leaves using a project-configurable marker.
 - Native `json`, `csv`, `fs`, `http`, `sql`, `time`, `re`, and `env` modules,
   with `fs.image` and `fs.glob` for working over a folder of files.
 - Python sidecar and MCP tool integrations through project configuration,
@@ -31,28 +33,27 @@ Release `0.0.2` includes:
 
 ## Coming next
 
-### Stabilize the language surface
+### Stabilize streaming and workflows
 
-The core execution model is now present. The next step is to stabilize syntax,
-diagnostics, configuration, and compatibility before calling the language
-production-ready.
+Streaming prose works for a single `str` call. The remaining work is streaming
+alongside tools and `parallel for`, exact in-flight token enforcement, and a
+general event-stream API.
 
-### Broader distribution
+### Fill the deliberate standard-library gaps
 
-The CLI is available through Homebrew, npm, release archives, and source. The
-next distribution tasks are crates.io publication and Open VSX publication for
-VS Code-compatible editors.
+`xml`, `yaml`, and a dedicated `network` module remain unbuilt. The existing
+`http` module stays the network boundary until a narrower, safer API is ready.
 
-### Better editor workflows
+### Complete the package ecosystem when there is demand
 
-The VS Code extension works today. Future releases can add richer refactoring,
-debugging views, project-aware configuration, and more complete code actions.
+A hosted checksum log begins when third parties routinely fetch Kora packages.
+WASM components begin when a package cannot be expressed in Kora, MCP, or the
+Python sidecar. Native shared libraries remain deliberately unsupported.
 
-### More integrations
+### Improve distribution and editor workflows
 
-The Python and MCP bridges work as isolated integrations. More providers,
-authentication helpers, and standard-library capabilities can be added without
-changing the language's safety model.
+The next product work includes crates.io and Open VSX distribution, CLI polish,
+and richer project-aware editor and debugging workflows.
 
 ## A note on status
 

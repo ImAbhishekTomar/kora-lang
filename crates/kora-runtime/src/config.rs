@@ -11,7 +11,7 @@ use kora_models::{ModelConfig, ModelError};
 
 use crate::label::SinkPolicy;
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone)]
 pub struct Config {
     /// Named model aliases, e.g. "default" -> "local:llama3.1:8b".
     pub models: HashMap<String, String>,
@@ -29,6 +29,10 @@ pub struct Config {
     pub model_max_retries: Option<u32>,
     /// Which sinks may receive which labels, from `[sinks]`.
     pub sinks: SinkPolicy,
+    /// `[output] classified_placeholder` — what a terminal or captured output
+    /// line shows in place of classified data. Output is intentionally a
+    /// redacting boundary, not a declassification sink.
+    pub classified_placeholder: String,
     /// `[http] allow_private` — permit loopback and private address ranges.
     pub http_allow_private: bool,
     /// `[http] timeout_secs` — applied to every request; there is no "off".
@@ -42,6 +46,26 @@ pub struct Config {
     /// `[install] jobs` — how many dependency fetches run at once. Zero
     /// means the default, which suits IO rather than core count.
     pub install_jobs: usize,
+}
+
+impl Default for Config {
+    fn default() -> Self {
+        Self {
+            models: HashMap::new(),
+            openai_max_output_tokens: None,
+            local_endpoint: None,
+            model_timeout_secs: None,
+            model_max_retries: None,
+            sinks: SinkPolicy::default(),
+            classified_placeholder: "__CLASSIFIED__".to_string(),
+            http_allow_private: false,
+            http_timeout_secs: 30,
+            telemetry: crate::telemetry::Config::default(),
+            mcp_servers: HashMap::new(),
+            python: kora_python::Config::default(),
+            install_jobs: 0,
+        }
+    }
 }
 
 impl Config {
@@ -74,8 +98,17 @@ impl Config {
         let mut config = Config {
             sinks: SinkPolicy::from_toml(&root),
             http_timeout_secs: 30,
+            classified_placeholder: "__CLASSIFIED__".to_string(),
             ..Default::default()
         };
+        if let Some(section) = root.get("output").and_then(|v| v.as_table()) {
+            if let Some(placeholder) = section
+                .get("classified_placeholder")
+                .and_then(|v| v.as_str())
+            {
+                config.classified_placeholder = placeholder.to_string();
+            }
+        }
         if let Some(section) = root.get("install").and_then(|v| v.as_table()) {
             if let Some(jobs) = section.get("jobs").and_then(|v| v.as_integer()) {
                 config.install_jobs = jobs.max(0) as usize;
@@ -371,5 +404,15 @@ program_max_tokens = 2_000_000
         let c = Config::parse("[models]\nsmart = \"openai:gpt-4o\"\n").unwrap();
         let err = c.default_model().unwrap_err();
         assert!(err.message.contains("no default model"), "{}", err.message);
+    }
+
+    #[test]
+    fn classified_output_placeholder_defaults_and_can_be_configured() {
+        assert_eq!(
+            Config::parse("").unwrap().classified_placeholder,
+            "__CLASSIFIED__"
+        );
+        let config = Config::parse("[output]\nclassified_placeholder = \"[secret]\"\n").unwrap();
+        assert_eq!(config.classified_placeholder, "[secret]");
     }
 }

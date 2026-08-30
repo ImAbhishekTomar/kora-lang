@@ -34,6 +34,16 @@ fn run(src: &str) -> Vec<String> {
     i.output
 }
 
+fn run_with_config(src: &str, config_text: &str) -> Vec<String> {
+    let program = parse(src).unwrap_or_else(|e| panic!("parse error: {e}\n{src}"));
+    let mut i = interp();
+    let config = Config::parse(config_text).unwrap();
+    i.config = config;
+    i.run(&program)
+        .unwrap_or_else(|e| panic!("runtime error: {}\n{src}", e.message));
+    i.output
+}
+
 fn run_err(src: &str) -> String {
     let program = parse(src).unwrap_or_else(|e| panic!("parse error: {e}\n{src}"));
     let mut i = interp();
@@ -172,7 +182,7 @@ fn classified_in_the_prompt_is_rejected() {
 // --- declassification ---
 
 #[test]
-fn declassify_to_an_allowed_sink_succeeds() {
+fn declassified_values_are_still_redacted_in_terminal_output() {
     let out = run(&with_types(
         r#"def main():
     classified s = "secret"
@@ -180,7 +190,7 @@ fn declassify_to_an_allowed_sink_succeeds() {
         print(s)
 "#,
     ));
-    assert_eq!(out, vec!["secret"]);
+    assert_eq!(out, vec!["__CLASSIFIED__"]);
 }
 
 #[test]
@@ -234,7 +244,7 @@ fn shadowed_name_is_restored_after_the_block() {
     print(s)
 "#,
     ));
-    assert_eq!(out, vec!["hidden", "public"]);
+    assert_eq!(out, vec!["__CLASSIFIED__", "public"]);
 }
 
 #[test]
@@ -264,7 +274,7 @@ fn redact_masks_classified_fields_but_keeps_shape() {
 "#,
     ));
     assert_eq!(out[0], "Ada", "public fields survive intact");
-    assert_eq!(out[1], "<STR_1>", "classified fields are masked");
+    assert_eq!(out[1], "__CLASSIFIED__", "classified fields are masked");
 }
 
 #[test]
@@ -277,6 +287,44 @@ fn redacted_values_need_no_declassification() {
 "#,
     ));
     assert_eq!(out, vec!["<STR_1>"]);
+}
+
+#[test]
+fn terminal_output_redacts_classified_values_and_keeps_public_structure() {
+    let out = run(&with_types(
+        r#"def main():
+    classified secret = "hunter2"
+    e = Employee("Ada", "123-45-6789")
+    print(secret)
+    print(f"secret: {secret}")
+    print(e.name)
+    print(e.ssn)
+    write(secret)
+    print("")
+"#,
+    ));
+    assert_eq!(
+        out,
+        vec![
+            "__CLASSIFIED__",
+            "__CLASSIFIED__",
+            "Ada",
+            "__CLASSIFIED__",
+            "__CLASSIFIED__",
+        ]
+    );
+}
+
+#[test]
+fn terminal_output_uses_the_project_placeholder() {
+    let out = run_with_config(
+        r#"def main():
+    classified secret = "hunter2"
+    print(secret)
+"#,
+        "[output]\nclassified_placeholder = \"[private]\"\n",
+    );
+    assert_eq!(out, vec!["[private]"]);
 }
 
 // --- audit ---
@@ -353,8 +401,9 @@ def main():
 }
 
 #[test]
-fn a_release_still_permits_the_sink_it_names() {
-    // The fix must not break the legitimate path.
+fn a_release_for_a_model_does_not_make_terminal_output_plain() {
+    // A release names one sink. It is not a general-purpose permission to
+    // reveal a secret through an unrelated output boundary.
     let out = run(&with_types(
         r#"def main():
     classified s = "hunter2"
@@ -362,7 +411,7 @@ fn a_release_still_permits_the_sink_it_names() {
         print(plain)
 "#,
     ));
-    assert_eq!(out, vec!["hunter2"], "printing inside the block is fine");
+    assert_eq!(out, vec!["__CLASSIFIED__"]);
 }
 
 #[test]

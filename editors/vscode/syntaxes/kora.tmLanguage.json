@@ -97,7 +97,7 @@
       "name": "keyword.control.kora"
     },
     "kora-keywords": {
-      "match": "\\b(analyze|agent|tool|budget|parallel|classified|declassify|ask_human|test|mock|assert|use)\\b",
+      "match": "\\b(analyze|agent|tool|budget|parallel|classified|declassify|ask_human|test|mock|assert|use|stream)\\b",
       "name": "keyword.other.agent.kora"
     },
     "types": {
@@ -125,7 +125,7 @@
       "name": "storage.type.annotation.kora"
     },
     "operators": {
-      "match": "(\\*\\*|//|==|!=|<=|>=|->|\\+=|-=|\\*=|/=|[+\\-*/%<>=])",
+      "match": "(\\*\\*|//|==|!=|<=|>=|->|\\+=|-=|\\*=|/=|[+\\-*/%<>=|])",
       "name": "keyword.operator.kora"
     },
     "file-import": {

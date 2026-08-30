@@ -668,15 +668,7 @@ impl Checker<'_> {
             StmtKind::Match { subject, arms } => {
                 self.check_expr(subject);
                 for arm in arms {
-                    match &arm.pattern {
-                        Pattern::Bind(name) => self.declare(name),
-                        Pattern::Ctor(_, binders) => {
-                            for b in binders {
-                                self.declare(b);
-                            }
-                        }
-                        _ => {}
-                    }
+                    self.declare_pattern_binders(&arm.pattern);
                     // Declared above, so a guard may read what the pattern
                     // bound -- that is the whole point of `case Ok(j) if j.x`.
                     if let Some(guard) = &arm.guard {
@@ -691,6 +683,7 @@ impl Checker<'_> {
                 ty,
                 value,
                 reason,
+                status,
                 else_body,
                 ..
             } => {
@@ -703,6 +696,9 @@ impl Checker<'_> {
                 // same way a `case Uncertain(why)` binder is.
                 if let Some(reason) = reason {
                     self.declare(reason);
+                }
+                if let Some(status) = status {
+                    self.declare(status);
                 }
                 self.nested(else_body);
                 if !diverges(else_body) {
@@ -782,6 +778,28 @@ impl Checker<'_> {
                 self.declare(alias);
             }
             StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue | StmtKind::Pass => {}
+        }
+    }
+
+    fn declare_pattern_binders(&mut self, pattern: &Pattern) {
+        match pattern {
+            Pattern::Bind(name) => self.declare(name),
+            Pattern::Ctor(_, binders) => {
+                for binder in binders {
+                    self.declare(binder);
+                }
+            }
+            // The parser proves all alternatives bind the same names, so one
+            // branch is sufficient for name resolution.
+            Pattern::Or(alternatives) => {
+                if let Some(first) = alternatives.first() {
+                    self.declare_pattern_binders(first);
+                }
+            }
+            Pattern::Wildcard
+            | Pattern::LiteralInt(_)
+            | Pattern::LiteralStr(_)
+            | Pattern::LiteralBool(_) => {}
         }
     }
 

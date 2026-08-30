@@ -403,23 +403,30 @@ impl Interpreter {
                 value,
                 classified,
                 on_token,
+                stream,
             } => {
                 // `x: T = analyze(...)` is the one place the declared type is
                 // available, and analyze needs it to build the model schema.
                 let v = match (ty, analyze_args(value)) {
-                    (Some(t), Some((args, kwargs))) => {
-                        self.eval_analyze(t, args, kwargs, on_token.as_ref(), value.span, scope)?
-                    }
+                    (Some(t), Some((args, kwargs))) => self.eval_analyze(
+                        t,
+                        args,
+                        kwargs,
+                        on_token.as_ref(),
+                        *stream,
+                        value.span,
+                        scope,
+                    )?,
                     // The handler is only meaningful on a call that streams,
                     // and only `analyze` streams. Caught here rather than
                     // ignored, because a block that silently never runs is
                     // worse than one that never parsed.
-                    (_, None) if on_token.is_some() => {
+                    (_, None) if on_token.is_some() || *stream => {
                         return Err(RuntimeError::new(
-                            "`on token` can only watch an `analyze()` call",
+                            "streaming can only watch an `analyze()` call",
                             value.span,
                         )
-                        .with_hint("write `answer: str = analyze(data, \"...\") on token(t):`"))
+                        .with_hint("write `answer: str = analyze(data, \"...\") stream`"))
                     }
                     _ => {
                         let v = self.eval(value, scope)?;
@@ -834,13 +841,22 @@ impl Interpreter {
                 value,
                 classified,
                 reason,
+                status,
+                stream,
                 else_body,
             } => {
                 // Same special case as an annotated assignment: `analyze` is
                 // handed the declared type so it can build the model schema.
                 let outcome = match (ty, analyze_args(value)) {
                     (Some(t), Some((args, kwargs))) => {
-                        self.eval_analyze(t, args, kwargs, None, value.span, scope)?
+                        self.eval_analyze(t, args, kwargs, None, *stream, value.span, scope)?
+                    }
+                    (_, None) if *stream => {
+                        return Err(RuntimeError::new(
+                            "streaming can only watch an `analyze()` call",
+                            value.span,
+                        )
+                        .with_hint("write `answer: str = analyze(data, \"...\") stream else:`"))
                     }
                     _ => self.eval(value, scope)?,
                 };
@@ -857,9 +873,12 @@ impl Interpreter {
                         scope.insert(name.clone(), payload);
                         Ok(Flow::Normal)
                     }
-                    Err(why) => {
+                    Err((why, outcome_status)) => {
                         if let Some(reason) = reason {
                             scope.insert(reason.clone(), why);
+                        }
+                        if let Some(status) = status {
+                            scope.insert(status.clone(), Value::Str(Rc::new(outcome_status)));
                         }
                         match self.exec_block(else_body, scope)? {
                             // The checker proves the block diverges, so this
@@ -1814,12 +1833,41 @@ impl Interpreter {
         if name == "ask_human" {
             return self.ask_human(args, span);
         }
+        if matches!(name, "print" | "write") {
+            // Output is not a declassification sink. A terminal, captured
+            // test result, debugger console, or redirected stdout is too
+            // easy to copy elsewhere, so it receives a visible marker rather
+            // than the secret. Unlike redact(), this is a last line of
+            // defense: it preserves public structure but never returns a
+            // value a program could use as though it were the original.
+            let text = args
+                .iter()
+                .map(|value| self.output_value(value).to_string())
+                .collect::<Vec<_>>()
+                .join(" ");
+            return self.call_builtin_inner(name, vec![Value::Str(Rc::new(text))], span);
+        }
         let label = args
             .iter()
             .fold(Label::PUBLIC, |acc, v| acc.join(v.label()));
         let args: Vec<Value> = args.iter().map(|v| v.unlabeled().clone()).collect();
         self.call_builtin_inner(name, args, span)
             .map(|v| v.with_label(label))
+    }
+
+    /// Produce a public view of a value for terminal output.
+    ///
+    /// This differs from `redact()`: `redact()` produces stable, typed
+    /// placeholders that a program may deliberately pass to another sink;
+    /// this only prepares a human-facing rendering and uses the project's
+    /// single configurable marker for every classified leaf.
+    fn output_value(&self, value: &Value) -> Value {
+        redact_for_output(
+            value,
+            &self.types,
+            &self.config.classified_placeholder,
+            false,
+        )
     }
 
     fn call_builtin_inner(
@@ -2105,14 +2153,18 @@ fn close_enough(a: &str, b: &str) -> bool {
 ///
 /// A label on the outcome rides onto whichever side comes out, so unwrapping
 /// classified data cannot launder it.
-fn unwrap_outcome(value: &Value, span: Span) -> Result<Result<Value, Value>, RuntimeError> {
+fn unwrap_outcome(
+    value: &Value,
+    span: Span,
+) -> Result<Result<Value, (Value, String)>, RuntimeError> {
     let label = value.label();
     let relabel = |v: Value| v.with_label(label.clone());
     match value.unlabeled() {
         Value::Variant { tag, payload } => match tag.as_str() {
             "Ok" => Ok(Ok(relabel(payload.first().cloned().unwrap_or(Value::None)))),
-            "Err" | "Uncertain" | "Exhausted" | "Failed" => Ok(Err(relabel(
-                payload.first().cloned().unwrap_or(Value::None),
+            "Err" | "Uncertain" | "Exhausted" | "Failed" => Ok(Err((
+                relabel(payload.first().cloned().unwrap_or(Value::None)),
+                tag.to_ascii_lowercase(),
             ))),
             other => Err(RuntimeError::new(
                 format!("`else` binding expects an outcome, found `{other}(...)`"),
@@ -2192,6 +2244,9 @@ fn match_structure(pattern: &Pattern, value: &Value) -> Option<Vec<(String, Valu
             Value::Bool(got) if got == want => Some(vec![]),
             _ => None,
         },
+        Pattern::Or(alternatives) => alternatives
+            .iter()
+            .find_map(|alternative| match_structure(alternative, value)),
     }
 }
 
@@ -2218,12 +2273,14 @@ impl Interpreter {
     ///
     /// The declared type becomes a JSON schema the model must satisfy, so the
     /// result is ordinary typed data the rest of the program can branch on.
+    #[allow(clippy::too_many_arguments)]
     fn eval_analyze(
         &mut self,
         ty: &TypeExpr,
         args: &[Expr],
         kwargs: &[(String, Expr)],
         on_token: Option<&TokenHandler>,
+        stream: bool,
         span: Span,
         scope: &mut Scope,
     ) -> Result<Value, RuntimeError> {
@@ -2330,9 +2387,9 @@ impl Interpreter {
         // fragments of syntax -- `{"merch` -- which no program wants to
         // print and no reader wants to see. Refused with the reason rather
         // than allowed to disappoint at runtime.
-        if on_token.is_some() && !schema.text {
+        if (on_token.is_some() || stream) && !schema.text {
             return Err(RuntimeError::new(
-                format!("`on token` needs a `str` result, but this call asks for `{}`", crate::value::short_type_name(&type_name)),
+                format!("streaming needs a `str` result, but this call asks for `{}`", crate::value::short_type_name(&type_name)),
                 span,
             )
             .with_hint(
@@ -2350,11 +2407,11 @@ impl Interpreter {
             // has no way to script the pieces a real provider would choose.
             // Without this, `with mock` would make the handler body dead
             // code under every test that uses it.
-            if let (Some(handler), Value::Variant { tag, payload }) = (on_token, mocked.unlabeled())
-            {
+            if let Value::Variant { tag, payload } = mocked.unlabeled() {
                 if tag.as_str() == "Ok" {
                     if let Some(Value::Str(text)) = payload.first().map(Value::unlabeled) {
-                        self.run_token_handler(handler, text.as_str(), scope)?;
+                        self.deliver_stream_piece(on_token, stream, text.as_str(), scope, span)?;
+                        self.finish_stream_output(stream, true, span)?;
                     }
                 }
             }
@@ -2366,6 +2423,13 @@ impl Interpreter {
             Some((_, arg)) => self.tool_list(arg, scope)?,
             Option::None => Vec::new(),
         };
+        if (on_token.is_some() || stream) && !tool_funcs.is_empty() {
+            return Err(
+                RuntimeError::new("streaming cannot be combined with tools", span).with_hint(
+                    "drop `stream` to let the model use tools, or make a plain prose call",
+                ),
+            );
+        }
 
         // An MCP server is a separate process, so offering its tools is a
         // second destination for the data — distinct from the model itself.
@@ -2450,7 +2514,7 @@ impl Interpreter {
         let journal_site = format!("{site}#model");
         if let Some((outcome, chunks)) = self.journal_model_call(&journal_site, span)? {
             self.trace_replayed_call(&type_name, "journal");
-            self.replay_chunks(on_token, &chunks, scope)?;
+            self.replay_chunks(on_token, stream, &chunks, scope, span)?;
             return self.outcome_to_value(outcome, &type_name, span);
         }
 
@@ -2463,7 +2527,8 @@ impl Interpreter {
         });
         if let Some(outcome) = recorded {
             self.trace_replayed_call(&type_name, "cassette");
-            self.replay_chunks(on_token, &chunks_of(&outcome), scope)?;
+            let chunks = chunks_of(&outcome);
+            self.replay_chunks(on_token, stream, &chunks, scope, span)?;
             return self.outcome_to_value(outcome_from_record(outcome), &type_name, span);
         }
         let mode = self
@@ -2480,7 +2545,18 @@ impl Interpreter {
 
         let (outcome, chunks) = match on_token {
             Some(handler) => self.run_stream(
-                &model, &prompt, &data_text, &images, &schema, handler, scope, span,
+                &model,
+                &prompt,
+                &data_text,
+                &images,
+                &schema,
+                Some(handler),
+                stream,
+                scope,
+                span,
+            )?,
+            None if stream => self.run_stream(
+                &model, &prompt, &data_text, &images, &schema, None, true, scope, span,
             )?,
             None => (
                 self.run_tool_loop(
@@ -2496,6 +2572,7 @@ impl Interpreter {
                 Vec::new(),
             ),
         };
+        self.finish_stream_output(stream, !chunks.is_empty(), span)?;
         // Journal before anything else: a crash after this point must resume
         // without paying for the call again.
         self.journal_record_model(&journal_site, &outcome, &chunks, span)?;
@@ -3372,8 +3449,42 @@ impl Interpreter {
         }
     }
 
-    /// A streamed `analyze()`: the answer is handed to the handler as it is
-    /// written, and the outcome comes back exactly as a blocking call's would.
+    /// Deliver one streamed text piece either to a programmer-defined handler
+    /// or to Kora's safe terminal renderer for the `stream` shorthand.
+    fn deliver_stream_piece(
+        &mut self,
+        handler: Option<&TokenHandler>,
+        stream: bool,
+        text: &str,
+        scope: &mut Scope,
+        span: Span,
+    ) -> Result<(), RuntimeError> {
+        if let Some(handler) = handler {
+            self.run_token_handler(handler, text, scope)
+        } else if stream {
+            self.call_builtin("write", vec![Value::Str(Rc::new(text.to_string()))], span)?;
+            Ok(())
+        } else {
+            Ok(())
+        }
+    }
+
+    /// Finish the line opened by concise `stream` syntax. No output is
+    /// produced for a refusal or an outage that yielded no visible text.
+    fn finish_stream_output(
+        &mut self,
+        stream: bool,
+        wrote_text: bool,
+        span: Span,
+    ) -> Result<(), RuntimeError> {
+        if stream && wrote_text {
+            self.call_builtin("print", Vec::new(), span)?;
+        }
+        Ok(())
+    }
+
+    /// A streamed `analyze()`: text is handed to a custom handler or the
+    /// concise `stream` renderer, and the outcome comes back unchanged.
     ///
     /// Returns the pieces alongside the outcome so a recording keeps them.
     /// Replaying an answer as one lump when it was written as forty would
@@ -3386,9 +3497,10 @@ impl Interpreter {
         data_text: &str,
         images: &[Rc<crate::media::Image>],
         schema: &Schema,
-        handler: &TokenHandler,
+        handler: Option<&TokenHandler>,
+        stream: bool,
         scope: &mut Scope,
-        _span: Span,
+        span: Span,
     ) -> Result<(AnalyzeOutcome, Vec<String>), RuntimeError> {
         let request = AnalyzeRequest {
             prompt: prompt.to_string(),
@@ -3410,7 +3522,7 @@ impl Interpreter {
         let result = {
             let mut on_text = |text: &str| -> Result<kora_models::Flow, kora_models::ModelError> {
                 chunks.push(text.to_string());
-                match self.run_token_handler(handler, text, scope) {
+                match self.deliver_stream_piece(handler, stream, text, scope, span) {
                     Ok(()) => Ok(kora_models::Flow::Continue),
                     Err(e) => {
                         // The handler raising is the program failing, not the
@@ -3660,6 +3772,77 @@ impl Interpreter {
     }
 }
 
+/// Replace classified leaves for a terminal rendering. Public values keep
+/// their ordinary display form, including public fields of a structured
+/// value. A label on a container marks every descendant classified.
+fn redact_for_output(
+    value: &Value,
+    types: &HashMap<String, Vec<FieldDef>>,
+    placeholder: &str,
+    inherited: bool,
+) -> Value {
+    match value {
+        Value::Labeled { label, inner } => redact_for_output(
+            inner,
+            types,
+            placeholder,
+            inherited || label.is_classified(),
+        ),
+        Value::List(items) => Value::List(Rc::new(RefCell::new(
+            items
+                .borrow()
+                .iter()
+                .map(|value| redact_for_output(value, types, placeholder, inherited))
+                .collect(),
+        ))),
+        Value::Dict(entries) => Value::Dict(Rc::new(RefCell::new(
+            entries
+                .borrow()
+                .iter()
+                .map(|(key, value)| {
+                    (
+                        key.clone(),
+                        redact_for_output(value, types, placeholder, inherited),
+                    )
+                })
+                .collect(),
+        ))),
+        Value::Object { type_name, fields } => {
+            let declared = types.get(type_name.as_str());
+            Value::Object {
+                type_name: type_name.clone(),
+                fields: Rc::new(RefCell::new(
+                    fields
+                        .borrow()
+                        .iter()
+                        .map(|(name, value)| {
+                            let sensitive = inherited
+                                || declared.is_some_and(|fields| {
+                                    fields
+                                        .iter()
+                                        .any(|field| field.name == *name && field.classified)
+                                });
+                            (
+                                name.clone(),
+                                redact_for_output(value, types, placeholder, sensitive),
+                            )
+                        })
+                        .collect(),
+                )),
+            }
+        }
+        Value::Variant { tag, payload } => Value::Variant {
+            tag: tag.clone(),
+            payload: payload
+                .iter()
+                .map(|value| redact_for_output(value, types, placeholder, inherited))
+                .collect(),
+        },
+        _ if inherited => Value::Str(Rc::new(placeholder.to_string())),
+        other => other.clone(),
+    }
+}
+
 /// Replace sensitive leaf values with stable placeholders.
 ///
 /// The model gets shape without secrets: `<STR_1> owes <NUM_2>`. Because the
@@ -3864,15 +4047,15 @@ impl Interpreter {
     fn replay_chunks(
         &mut self,
         on_token: Option<&TokenHandler>,
+        stream: bool,
         chunks: &[String],
         scope: &mut Scope,
+        span: Span,
     ) -> Result<(), RuntimeError> {
-        let Some(handler) = on_token else {
-            return Ok(());
-        };
         for chunk in chunks {
-            self.run_token_handler(handler, chunk, scope)?;
+            self.deliver_stream_piece(on_token, stream, chunk, scope, span)?;
         }
+        self.finish_stream_output(stream, !chunks.is_empty(), span)?;
         Ok(())
     }
 }

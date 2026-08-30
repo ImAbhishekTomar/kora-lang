@@ -29,6 +29,11 @@ pub enum StmtKind {
         /// call still returns an outcome to match on. Watching a stream and
         /// getting an answer are two things one call does, not two calls.
         on_token: Option<TokenHandler>,
+        /// `answer: str = analyze(...) stream` writes text pieces to standard
+        /// output with the safe default renderer. It is shorthand for the
+        /// common `on token(piece): write(piece)` handler, including closing
+        /// the line when the stream reaches a terminal outcome.
+        stream: bool,
     },
     /// `x += expr` and friends (desugared op stored explicitly)
     AugAssign {
@@ -174,6 +179,12 @@ pub enum StmtKind {
         classified: bool,
         /// `else (why):` binds the reason the outcome was not successful.
         reason: Option<String>,
+        /// `else (why, kind):` also binds the stable lower-case outcome tag,
+        /// such as `uncertain`, `exhausted`, or `failed`.
+        status: Option<String>,
+        /// The concise terminal streaming modifier on the wrapped analyze
+        /// call, e.g. `answer: str = analyze(...) stream else:`.
+        stream: bool,
         else_body: Vec<Stmt>,
     },
 }
@@ -206,6 +217,8 @@ pub enum Pattern {
     LiteralInt(i64),
     LiteralStr(String),
     LiteralBool(bool),
+    /// `case A(x) | B(x):` — alternatives with identical binders.
+    Or(Vec<Pattern>),
 }
 
 #[derive(Debug, Clone, PartialEq)]

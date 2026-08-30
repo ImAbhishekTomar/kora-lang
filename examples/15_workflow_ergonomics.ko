@@ -1,0 +1,42 @@
+# A compact, observable prompt chain.
+#
+# `stream` shows each prose answer as it arrives. `else (why, kind)` keeps the
+# failure path flat while retaining whether the provider declined, the budget
+# ran out, or the provider failed. The steps list is ordinary program data,
+# useful when this workflow needs to hand its progress to a caller.
+
+type StepInfo:
+    step: str
+    status: str
+    text: str
+
+agent joke_pipeline(topic: str) -> list[StepInfo]:
+    budget: max_tokens = 8000, max_calls = 3
+    steps = []
+    current = topic
+    stages = [
+        ["generation", "Write a short joke about this topic."],
+        ["improvement", "Make this joke funnier by adding wordplay."],
+        ["polishing", "Add a surprising twist to this joke."],
+    ]
+
+    for stage in stages:
+        current: str = analyze(current, stage[1]) stream else (why, kind):
+            append(steps, StepInfo(stage[0], kind, why))
+            return steps
+        append(steps, StepInfo(stage[0], "ok", current))
+
+    return steps
+
+def main():
+    for step in joke_pipeline("cats"):
+        print(f"{step.step}: {step.status}")
+
+test "the compact workflow records three successful steps":
+    with mock analyze -> Ok("cats are fine"):
+        assert len(joke_pipeline("cats")) == 3
+
+test "the compact workflow records a provider failure":
+    with mock analyze -> Failed("connection refused"):
+        steps = joke_pipeline("cats")
+        assert steps[0].status == "failed"
