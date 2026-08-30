@@ -338,3 +338,6 @@ publication except to correct factual documentation errors.
   does, rename something instead.
 - Prefer the design that stays correct as the language grows over the one
   that is quickest to write.
+
+
+**worktree**  github worktree you can only use when looks really need, and if you start that make sure to commit and clean that.
