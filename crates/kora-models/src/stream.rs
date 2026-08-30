@@ -9,9 +9,13 @@
 //! Two rules are load-bearing here:
 //!
 //! * **A response that has already emitted characters is never retried.**
-//!   The transport retries a request that failed before the first delta,
-//!   because nothing was observed and a second attempt is free of
-//!   consequence. Once a character has reached the program, a retry would
+//!   The transport retries a request that failed before the first *visible
+//!   character*, because nothing was observed and a second attempt is free
+//!   of consequence. The distinction matters: a stream opens with frames
+//!   that carry no answer — a role-only delta, usage totals, a keep-alive,
+//!   `[DONE]` — and treating their arrival as observation would forfeit the
+//!   retry over a frame the program never saw. Once a character has reached
+//!   the program, a retry would
 //!   replay the answer from the start on top of output the program has
 //!   already acted on. That is the same reason tool calls are not retried:
 //!   the point of failure is exactly where "did it happen" stops being
@@ -39,19 +43,35 @@ pub enum Flow {
     Stop,
 }
 
+/// One frame of the response body, already stripped of its SSE framing.
+///
+/// Answers whether to keep reading, and whether this frame put any of the
+/// answer in front of the program — which is what decides if a failed
+/// attempt may be tried again.
+pub(crate) type OnFrame<'a> = dyn FnMut(&str) -> Result<(Flow, Observed), ModelError> + 'a;
+
 /// One HTTP POST that reads a response line by line instead of whole.
 ///
-/// The callback is handed each raw line of the response body with any
-/// `data: ` prefix already stripped, and returns whether to keep reading.
 /// Isolated behind a function type for the same reason the blocking
 /// [`crate::provider::Transport`] is: the provider-specific parsing above it
 /// is worth testing without a socket.
-pub(crate) type StreamTransport = dyn Fn(
-    &str,
-    &[(&str, String)],
-    &Value,
-    &mut dyn FnMut(&str) -> Result<Flow, ModelError>,
-) -> Result<(), ModelError>;
+pub(crate) type StreamTransport =
+    dyn Fn(&str, &[(&str, String)], &Value, &mut OnFrame<'_>) -> Result<(), ModelError>;
+
+/// Whether a frame put any of the answer in front of the program.
+///
+/// This is the only thing that decides whether a failed attempt may be tried
+/// again, so it deliberately does not mean "a frame arrived". Providers open
+/// a stream with frames that carry no answer at all — a role-only delta,
+/// usage totals, a keep-alive, `[DONE]` — and a connection that dies just
+/// after one of those has shown the program nothing, so retrying it is free
+/// of consequence. Only once characters have been handed over does a second
+/// attempt risk writing the answer twice.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum Observed {
+    Nothing,
+    Text,
+}
 
 /// Pulls the value of the `answer` field out of a JSON object arriving in
 /// fragments.
@@ -263,17 +283,20 @@ pub(crate) fn analyze_streaming_with(
                 tokens_out = part.tokens_out;
             }
             if part.text.is_empty() {
-                return Ok(Flow::Continue);
+                return Ok((Flow::Continue, Observed::Nothing));
             }
+            // Fragments of the JSON wrapper are not the answer. Until the
+            // extractor yields a character, the program has still seen
+            // nothing and the attempt is still safe to repeat.
             let visible = extractor.push(&part.text);
             if visible.is_empty() {
-                return Ok(Flow::Continue);
+                return Ok((Flow::Continue, Observed::Nothing));
             }
             match on_text(&visible)? {
-                Flow::Continue => Ok(Flow::Continue),
+                Flow::Continue => Ok((Flow::Continue, Observed::Text)),
                 Flow::Stop => {
                     stopped = true;
-                    Ok(Flow::Stop)
+                    Ok((Flow::Stop, Observed::Text))
                 }
             }
         },
@@ -315,17 +338,16 @@ pub(crate) fn analyze_streaming_with(
 /// The real streaming transport: one POST whose body is read as it arrives.
 ///
 /// Retries only while nothing has been observed. `emitted` is set by the
-/// first line handed to the callback, and once set the loop stops being a
-/// retry loop — a stream that dies half way through is a `Failed` outcome
+/// first frame that puts characters of the answer in front of the program —
+/// not merely by the first frame to arrive, since a provider opens a stream
+/// with frames that carry no answer at all. Once set the loop stops being a
+/// retry loop: a stream that dies half way through is a `Failed` outcome
 /// carrying what was already written, not a request to run again.
 pub(crate) fn stream_transport_for(config: &crate::ModelConfig) -> Box<StreamTransport> {
     let timeout = std::time::Duration::from_secs(config.timeout_secs.max(1));
     let attempts = config.max_retries.saturating_add(1);
     Box::new(
-        move |url: &str,
-              headers: &[(&str, String)],
-              body: &Value,
-              on_line: &mut dyn FnMut(&str) -> Result<Flow, ModelError>| {
+        move |url: &str, headers: &[(&str, String)], body: &Value, on_line: &mut OnFrame<'_>| {
             let mut attempt = 0;
             loop {
                 attempt += 1;
@@ -353,7 +375,7 @@ fn send_streaming(
     body: &Value,
     timeout: std::time::Duration,
     emitted: &mut bool,
-    on_line: &mut dyn FnMut(&str) -> Result<Flow, ModelError>,
+    on_line: &mut OnFrame<'_>,
 ) -> Result<(), ModelError> {
     use std::io::BufRead;
 
@@ -391,12 +413,30 @@ fn send_streaming(
             // twice.
             ModelError::new(format!("stream from {url} broke mid-response: {e}"))
         })?;
-        let payload = line.strip_prefix("data: ").unwrap_or(&line).trim();
+        // An SSE comment — a line whose first character is `:` — is a
+        // keep-alive with no event in it. Handing it on would fail the
+        // stream as "not JSON" over a frame that exists precisely to say
+        // nothing. Checked before the `data:` strip so that a comment is
+        // never mistaken for a field.
+        if line.starts_with(':') {
+            continue;
+        }
+        // The space after `data:` is optional in the SSE grammar, and only
+        // one prefix is ever stripped, so a payload that itself begins with
+        // `data:` survives intact.
+        let payload = line
+            .strip_prefix("data:")
+            .map(|rest| rest.strip_prefix(' ').unwrap_or(rest))
+            .unwrap_or(&line)
+            .trim();
         if payload.is_empty() {
             continue;
         }
-        *emitted = true;
-        if on_line(payload)? == Flow::Stop {
+        let (flow, observed) = on_line(payload)?;
+        if observed == Observed::Text {
+            *emitted = true;
+        }
+        if flow == Flow::Stop {
             return Ok(());
         }
     }

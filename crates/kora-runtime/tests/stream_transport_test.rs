@@ -86,6 +86,76 @@ fn spawn_streaming_provider(
     (format!("http://127.0.0.1:{port}"), requests)
 }
 
+/// A provider whose stream is interleaved with the protocol frames a real
+/// one sends: SSE keep-alive comments, and payloads behind `data:` with and
+/// without the optional space.
+fn spawn_noisy_provider(frames: Vec<String>) -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a free port");
+    let port = listener.local_addr().unwrap().port();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&requests);
+
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut length = 0usize;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                if line == "\r\n" || line == "\n" {
+                    break;
+                }
+                if let Some(rest) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = rest.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; length];
+            let _ = reader.read_exact(&mut body);
+            seen.fetch_add(1, Ordering::SeqCst);
+
+            let mut payload = String::new();
+            // A keep-alive before anything else, which is when a provider is
+            // most likely to send one.
+            payload.push_str(": ping\n");
+            for (n, frame) in frames.iter().enumerate() {
+                let event =
+                    serde_json::json!({"message": {"content": frame}, "done": false}).to_string();
+                // Alternate the optional space after `data:`; both are legal
+                // SSE and a provider may use either.
+                if n % 2 == 0 {
+                    payload.push_str(&format!("data: {event}\n"));
+                } else {
+                    payload.push_str(&format!("data:{event}\n"));
+                }
+                payload.push_str(": keep-alive\n");
+            }
+            payload.push_str(&format!(
+                "data: {}\n",
+                serde_json::json!({
+                    "message": {"content": ""},
+                    "done": true,
+                    "prompt_eval_count": 3,
+                    "eval_count": 2,
+                })
+            ));
+            payload.push_str("data: [DONE]\n");
+
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                payload.len(),
+                payload
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+
+    (format!("http://127.0.0.1:{port}"), requests)
+}
+
 fn config(endpoint: &str) -> String {
     format!(
         r#"
@@ -335,4 +405,57 @@ fn spawn_error_provider(message: &str) -> (String, Arc<AtomicUsize>) {
     });
 
     (format!("http://127.0.0.1:{port}"), requests)
+}
+
+#[test]
+fn keep_alive_comments_and_done_markers_do_not_break_the_stream() {
+    // A `: ping` line is an SSE comment: a frame that exists to say nothing.
+    // Passing it on as a payload failed the whole call as "not JSON" over a
+    // keep-alive, so a slow answer was more likely to fail than a fast one.
+    let (endpoint, _) = spawn_noisy_provider(hello_frames());
+    let i = run(
+        &config(&endpoint),
+        r#"
+def main():
+    answer: str = analyze("q", "greet") on token(t):
+        print(f"piece: {t}")
+    match answer:
+        case Ok(text):
+            print(f"final: {text}")
+        case Failed(why):
+            print(f"failed: {why}")
+"#,
+    );
+    assert_eq!(
+        i.output,
+        vec![
+            "piece: hel",
+            "piece: lo ",
+            "piece: there",
+            "final: hello there"
+        ]
+    );
+}
+
+#[test]
+fn protocol_only_frames_are_not_counted_as_answer_text() {
+    // The usage frame and `[DONE]` arrive after the answer but carry none of
+    // it, and the handler is only ever handed characters of the answer.
+    let (endpoint, _) = spawn_noisy_provider(hello_frames());
+    let i = run(
+        &config(&endpoint),
+        r#"
+def main():
+    answer: str = analyze("q", "greet") on token(t):
+        print(f"[{t}]")
+    match answer:
+        case Ok(text):
+            print("done")
+"#,
+    );
+    assert_eq!(i.output, vec!["[hel]", "[lo ]", "[there]", "done"]);
+    // Usage still reaches the budget, even though those frames showed the
+    // program nothing.
+    assert_eq!(i.tokens_in, 3);
+    assert_eq!(i.tokens_out, 2);
 }
