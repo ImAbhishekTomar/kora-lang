@@ -449,6 +449,7 @@ const KEYWORDS: &[&str] = &[
     "case",
     "parallel for",
     "budget",
+    "context",
     "classified",
     "declassify",
     "use",
@@ -456,6 +457,7 @@ const KEYWORDS: &[&str] = &[
     "assert",
     "with mock",
     "with budget",
+    "with context",
 ];
 
 fn cast<P: serde::de::DeserializeOwned>(request: &Request) -> Option<P> {
