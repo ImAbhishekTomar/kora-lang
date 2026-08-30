@@ -25,6 +25,8 @@ no API key and no model installed.
 | [14_streaming.ko](14_streaming.ko) | a streamed `str` answer, and why it still has an outcome | `kora run --replay` |
 | [15_workflow_ergonomics.ko](15_workflow_ergonomics.ko) | a compact streamed prompt chain with explicit step results | `kora test` |
 | [16_context_policy.ko](16_context_policy.ko) | bounded tool-loop context, separate from the spend budget | `kora run` |
+| [17_qa_agent.ko](17_qa_agent.ko) | the smallest agent, in a loop: ask, get an answer, `exit`/`bye`/`close` to quit | `kora run` |
+| [18_notes.ko](18_notes.ko) | a durable run's own scratch space, journaled reads and all | `kora run --durable` |
 
 ## The pattern set
 
@@ -61,7 +63,7 @@ model to re-record, and `kora.toml` names one under `vision`:
 
 ```toml
 [models]
-vision = "local:gemma4:12b"
+vision = "local:moondream"
 timeout_secs = 900
 ```
 

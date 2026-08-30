@@ -259,6 +259,13 @@ space. It never clips prompts, data, or a tool exchange, and returns
 data, not a trusted instruction. Its envelope and the system contract reduce
 instruction confusion, but they are not a prompt-injection security boundary.
 
+Which exchanges were kept is journaled per turn, the same way a model call
+is: a durable resume replays the original pruning decision rather than
+recomputing it, so a later change to the size estimate cannot change what an
+old run resumes to. `kora run --durable` and `kora runs`/`kora answer` cover
+the resume story; there is no separate command to inspect a pruning decision
+on its own today.
+
 ### Choosing a model
 
 By default a call uses `[models] default` from `kora.toml`. A call that needs
@@ -271,7 +278,7 @@ r: Receipt = analyze(picture, "read this receipt", model="vision")
 ```toml
 [models]
 default = "local:qwen3:8b"
-vision  = "local:gemma4:12b"
+vision  = "local:moondream"
 ```
 
 `model=` takes a name declared in `[models]`, never a provider spec like
@@ -1084,6 +1091,7 @@ always has.
 | `redact(x)` | mask sensitive leaves |
 | `tokens_spent()` `tokens_remaining()` `calls_spent()` | budget state |
 | `ask_human(question, context)` | suspend for a person |
+| `input(prompt)` | read one line from the terminal |
 
 ---
 

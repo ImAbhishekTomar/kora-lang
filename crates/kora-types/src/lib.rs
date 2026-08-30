@@ -200,6 +200,7 @@ const BUILTINS: &[&str] = &[
     "calls_spent",
     "redact",
     "ask_human",
+    "input",
     "analyze",
 ];
 
@@ -220,6 +221,7 @@ const MODULES: &[(&str, &[&str])] = &[
     ),
     ("time", &["now", "format", "elapsed"]),
     ("re", &["matches", "find", "find_all", "replace", "split"]),
+    ("notes", &["read", "write"]),
 ];
 
 impl Checker<'_> {

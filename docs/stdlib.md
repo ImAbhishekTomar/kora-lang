@@ -1,6 +1,6 @@
 # The standard library
 
-Eight native modules, each backed by a Rust crate. Every one exists to fix a
+Nine native modules, each backed by a Rust crate. Every one exists to fix a
 specific, well-known defect in its equivalent elsewhere — rewriting a library
 is only worth it if the rewrite fixes what everyone already knows is broken.
 
@@ -268,10 +268,43 @@ A bad pattern is `Err`, not a crash, since patterns come from configuration.
 
 ---
 
+## `notes`
+
+**What everyone else gets wrong.** A tool loop's plan, partial results, and
+things learned two turns ago live in local variables — gone the moment the
+process dies, invisible to anything outside it. Reaching for a plain file
+gives durability but drops label propagation and durable-replay correctness.
+
+| | |
+|---|---|
+| `notes.write(key, value)` | `Ok(None)` or `Err(reason)` |
+| `notes.read(key, default)` | the stored value, or `default` if the key is absent |
+
+A single key-value store scoped to exactly one identity — the current durable
+run — at `.kora/notes/<run-id>.json`. `notes.write` goes straight to the
+file, live; `notes.read` is journaled, the same way `time.now()` is, so a
+resumed run sees what the live run actually read rather than whatever the
+store holds by the time the replay happens.
+
+A classified value keeps its label crossing `notes.write`/`notes.read`, and a
+value read back is additionally `unverified` — the store is external to this
+evaluation, the same rule `fs.read` follows. `notes.read`'s `default` is
+positional, not `Ok`/`Err`: a missing key is not a failure, it is simply the
+default, the same way a dict lookup with a fallback is not.
+
+Requires a durable run (`kora run --durable`), for the same reason
+`ask_human` does — there is no run id, and so no store to address, without
+one. See [`examples/18_notes.ko`](../examples/18_notes.ko).
+
+---
+
 ## Not built yet
 
 `polars`-backed dataframes, S3, PDF, full-text search, and Postgres. Images
-are in (`fs.image`); documents are not. See the
-ecosystem strategy in [DECISIONS.md](../DECISIONS.md) for what comes next —
-MCP integration is the highest-leverage item, since it inherits an existing
-ecosystem of tools rather than adding one binding at a time.
+are in (`fs.image`); documents are not.
+
+This is about stdlib bindings specifically — MCP client support itself is
+already implemented (`use mcp` in [language.md](language.md#mcp-servers)) and
+is how a program reaches most of these systems today (a Postgres MCP server,
+an S3 MCP server, and so on) without a dedicated binding. See the ecosystem
+strategy in [DECISIONS.md](../DECISIONS.md) for what comes next.

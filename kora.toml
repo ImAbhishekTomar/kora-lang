@@ -4,7 +4,7 @@
 [models]
 default = "local:qwen3:8b"
 smart   = "openai:gpt-4o"
-vision  = "local:gemma4:12b"        # named per role, not per call site
+vision  = "local:moondream"         # named per role, not per call site
 
 timeout_secs = 900                  # one call; a local vision model is slow
 

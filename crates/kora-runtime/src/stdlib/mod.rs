@@ -26,6 +26,7 @@ pub mod fs;
 pub(crate) mod glob;
 pub mod http;
 pub mod json;
+pub mod notes;
 pub mod re;
 pub mod sql;
 pub mod time;
@@ -63,12 +64,15 @@ pub fn module(name: &str) -> Option<Module> {
         "fs" => Some(Module::new("fs", fs::EXPORTS)),
         "time" => Some(Module::new("time", time::EXPORTS)),
         "re" => Some(Module::new("re", re::EXPORTS)),
+        "notes" => Some(Module::new("notes", notes::EXPORTS)),
         _ => None,
     }
 }
 
 /// Module names, for "did you mean" hints.
-pub const MODULE_NAMES: &[&str] = &["json", "csv", "http", "sql", "env", "fs", "time", "re"];
+pub const MODULE_NAMES: &[&str] = &[
+    "json", "csv", "http", "sql", "env", "fs", "time", "re", "notes",
+];
 
 // --- shared helpers for module implementations ---
 

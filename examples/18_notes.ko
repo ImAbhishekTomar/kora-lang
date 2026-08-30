@@ -1,0 +1,20 @@
+# A durable run's own scratch space, made visible outside it.
+#
+# `notes` is a single key-value store scoped to exactly one identity: the
+# current durable run. `write` goes straight to disk; `read` is journaled,
+# so a resumed run sees what the live run actually read, not whatever the
+# store holds by the time the replay happens.
+
+use notes
+
+def main():
+    plan: list[str] = notes.read("plan", [])
+    if len(plan) == 0:
+        print("no plan yet — writing one")
+        notes.write("plan", ["find sources", "check dates", "draft"])
+    else:
+        print(f"resuming a plan with {len(plan)} steps: {plan}")
+
+    seen: int = notes.read("visits", 0)
+    notes.write("visits", seen + 1)
+    print(f"this run has read notes {seen + 1} time(s)")

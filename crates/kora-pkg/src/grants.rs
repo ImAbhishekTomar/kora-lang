@@ -42,6 +42,9 @@ impl Capability {
         match module {
             "http" => Some(Capability::Net),
             "fs" => Some(Capability::Fs),
+            // The notes store is filesystem-backed (`.kora/notes/<run-id>.json`),
+            // so a dependency needs the same grant `fs` does to touch it.
+            "notes" => Some(Capability::Fs),
             "sql" => Some(Capability::Sql),
             "env" => Some(Capability::Env),
             _ => None,

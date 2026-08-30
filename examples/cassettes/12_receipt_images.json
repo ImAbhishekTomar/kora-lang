@@ -43,6 +43,34 @@
         "tokens_in": 3300,
         "tokens_out": 69
       }
+    },
+    {
+      "key": "65e7e3b49cb23710",
+      "site": "examples/12_receipt_images.ko:41",
+      "model": "ollama:moondream",
+      "prompt": "Read this expense receipt. Use ISO date YYYY-MM-DD. Choose one category: meals, travel, office, software, services, or other. Set needs_review when the total or the merchant is unclear, and say why in review_reason.",
+      "data": "\"<image>\"",
+      "media": "image/png:ef826807fa672fbf",
+      "outcome": {
+        "kind": "uncertain",
+        "reason": "</image>",
+        "tokens_in": 799,
+        "tokens_out": 94
+      }
+    },
+    {
+      "key": "7b7a3548667e6345",
+      "site": "examples/12_receipt_images.ko:41",
+      "model": "ollama:moondream",
+      "prompt": "Read this expense receipt. Use ISO date YYYY-MM-DD. Choose one category: meals, travel, office, software, services, or other. Set needs_review when the total or the merchant is unclear, and say why in review_reason.",
+      "data": "\"<image>\"",
+      "media": "image/png:2af5365b6eb11930",
+      "outcome": {
+        "kind": "uncertain",
+        "reason": "</image>",
+        "tokens_in": 799,
+        "tokens_out": 92
+      }
     }
   ]
 }

@@ -274,6 +274,41 @@ pub struct Interpreter {
 /// the stdlib's result shape.
 const OUTCOME_TAGS: &[&str] = &["Ok", "Err", "Uncertain", "Exhausted", "Failed"];
 
+/// Encode a labeled value for the journal: `notes.read` is the one effect
+/// whose payload is an arbitrary program value rather than a scalar, so it
+/// needs its own JSON shape (value plus the label it carried).
+fn encode_labeled_json(value: &Value) -> String {
+    let json = crate::stdlib::json::value_to_json(value.unlabeled()).unwrap_or(serde_json::Value::Null);
+    let label = value.label();
+    let secrecy = match label.secrecy {
+        crate::label::Secrecy::Classified => "classified",
+        crate::label::Secrecy::Public => "public",
+    };
+    let released = label.released.map(|s| s.to_string());
+    serde_json::json!({ "value": json, "secrecy": secrecy, "released": released }).to_string()
+}
+
+fn decode_labeled_json(text: &str) -> Value {
+    let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) else {
+        return Value::None;
+    };
+    let value = parsed.get("value").cloned().unwrap_or(serde_json::Value::Null);
+    let secrecy = match parsed.get("secrecy").and_then(|s| s.as_str()) {
+        Some("classified") => crate::label::Secrecy::Classified,
+        _ => crate::label::Secrecy::Public,
+    };
+    let released = parsed
+        .get("released")
+        .and_then(|r| r.as_str())
+        .map(|s| s.to_string().into_boxed_str());
+    let label = Label {
+        secrecy,
+        trust: crate::label::Trust::Unverified,
+        released,
+    };
+    crate::stdlib::json::json_to_value(&value).with_label(label)
+}
+
 const BUILTINS: &[&str] = &[
     "print",
     "write",
@@ -296,6 +331,7 @@ const BUILTINS: &[&str] = &[
     "calls_spent",
     "redact",
     "ask_human",
+    "input",
 ];
 
 impl Default for Interpreter {
@@ -1880,6 +1916,9 @@ impl Interpreter {
         }
         if name == "ask_human" {
             return self.ask_human(args, span);
+        }
+        if name == "input" {
+            return self.input(args, span);
         }
         if matches!(name, "print" | "write") {
             // Output is not a declassification sink. A terminal, captured
@@ -4236,6 +4275,37 @@ impl Interpreter {
         }
     }
 
+    /// Read one line from the terminal. Unlike `ask_human`, this is a
+    /// synchronous prompt with no suspend/resume story: a durable run cannot
+    /// journal it usefully (there is nothing to replay a person typing
+    /// tomorrow into), so it is only available when stdout is the real
+    /// terminal (`kora run`), not under `--durable`, `kora test`, or the
+    /// language server, where there is no one at a keyboard to answer it.
+    fn input(&mut self, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
+        if !self.direct_stdout {
+            return Err(
+                RuntimeError::new("input() needs an interactive run", span)
+                    .with_hint("run with `kora run <file.ko>`, without --durable"),
+            );
+        }
+        if let Some(prompt) = args.first() {
+            use std::io::Write as _;
+            print!("{}", self.output_value(prompt));
+            let _ = std::io::stdout().flush();
+        }
+        let mut line = String::new();
+        match std::io::stdin().read_line(&mut line) {
+            // End of input (Ctrl-D, or a piped stream ran out): `input()`
+            // returns `str`, so this is an empty line rather than a value
+            // outside the declared type.
+            Ok(0) => Ok(Value::Str(Rc::new(String::new()))),
+            Ok(_) => Ok(Value::Str(Rc::new(
+                line.trim_end_matches(['\n', '\r']).to_string(),
+            ))),
+            Err(e) => Err(RuntimeError::new(format!("input(): {e}"), span)),
+        }
+    }
+
     /// Route a model call through the journal so a resumed run does not pay
     /// for work already done.
     fn journal_model_call(
@@ -4949,6 +5019,71 @@ impl Interpreter {
             self.require_capability(capability, &format!("`{module_name}`"), span)?;
         }
         native(self, args, span)
+    }
+
+    /// The current durable run's id, or empty when this is a plain,
+    /// non-durable `kora run` — there is no run identity to address a notes
+    /// store with in that case.
+    pub fn journal_run_id(&self) -> String {
+        let journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
+        if journal.is_durable() {
+            journal.run().id.clone()
+        } else {
+            String::new()
+        }
+    }
+
+    /// Route a `notes.read` through the journal.
+    ///
+    /// The notes store itself is not part of this run's journal — it
+    /// outlives the run, and `notes.write` goes straight to it — but what a
+    /// live run *read* from it is journaled the same way `time.now()` is: a
+    /// replay must see the value the live run saw, not whatever the store
+    /// holds by the time replay runs, which could have moved on if something
+    /// else wrote to it meanwhile.
+    pub fn journal_memory_read(
+        &mut self,
+        key: &str,
+        span: Span,
+        live: impl FnOnce() -> Value,
+    ) -> Result<Value, RuntimeError> {
+        let site = format!("{}:{}#notes", self.program_name, span.line);
+        let mut journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
+        if !journal.is_durable() {
+            drop(journal);
+            return Err(RuntimeError::new("notes needs a durable run", span)
+                .with_hint("run with `kora run --durable <file.ko>`"));
+        }
+        let lookup = journal
+            .next(&self.scope, &site)
+            .map_err(|e| RuntimeError::new(e.to_string(), span))?;
+        drop(journal);
+        match lookup {
+            Lookup::Replayed(Effect::Memory { value_json, .. }) => {
+                Ok(decode_labeled_json(&value_json))
+            }
+            Lookup::Replayed(other) => Err(RuntimeError::new(
+                format!("journal step is {other:?}, but the program reached notes.read()"),
+                span,
+            )),
+            Lookup::Fresh { scope, seq } => {
+                let value = live();
+                let value_json = encode_labeled_json(&value);
+                let mut journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
+                journal
+                    .record(
+                        scope,
+                        seq,
+                        &site,
+                        Effect::Memory {
+                            key: key.to_string(),
+                            value_json,
+                        },
+                    )
+                    .map_err(|e| RuntimeError::new(e.to_string(), span))?;
+                Ok(value)
+            }
+        }
     }
 
     /// Read a value that is nondeterministic, journaling it in a durable run.

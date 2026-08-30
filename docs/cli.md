@@ -213,6 +213,18 @@ review                                 812ms
 
 Run the language server over stdio. Editors start this; you do not.
 
+| | |
+|---|---|
+| Diagnostics | parse errors and checker findings, pushed on open and on every change |
+| Hover | signatures and docstrings for names under the cursor |
+| Go to definition | jumps to where a name is declared |
+| Outline | document symbols — functions, agents, and top-level names |
+| Completion | triggered on `.`, plus general name completion |
+
+No rename, find-references, code actions, or formatting yet. Run/test
+buttons in the VS Code extension shell out to `kora run`/`kora test`
+directly; they are not LSP requests.
+
 ### `kora dap`
 
 Run the debug adapter over stdio. Editors start this; you do not.
@@ -251,7 +263,7 @@ optional.
 [models]
 default = "local:qwen3:8b"          # Ollama
 smart   = "openai:gpt-4o"           # needs OPENAI_API_KEY
-vision  = "local:gemma4:12b"        # named by `analyze(..., model="vision")`
+vision  = "local:moondream"         # named by `analyze(..., model="vision")`
 
 timeout_secs = 600                  # one model call; 0 is clamped, not honoured
 max_retries = 2                     # three attempts; 0 turns retrying off

@@ -1,0 +1,66 @@
+{
+  "entries": [
+    {
+      "key": "57024f374d7ee86d",
+      "site": "examples/17_qa_agent.ko:9",
+      "model": "ollama:qwen3:8b",
+      "prompt": "answer clearly and concisely",
+      "data": "\"What is the capital of France?\"",
+      "media": "",
+      "outcome": {
+        "kind": "ok",
+        "fields": {
+          "answer": "The capital of France is Paris."
+        },
+        "tokens_in": 350,
+        "tokens_out": 20
+      }
+    },
+    {
+      "key": "b807a0f9072d0823",
+      "site": "examples/17_qa_agent.ko:9",
+      "model": "ollama:qwen3:8b",
+      "prompt": "answer clearly and concisely",
+      "data": "\"Hello\"",
+      "media": "",
+      "outcome": {
+        "kind": "ok",
+        "fields": {
+          "answer": "Hello! How can I assist you today?"
+        },
+        "tokens_in": 463,
+        "tokens_out": 22
+      }
+    },
+    {
+      "key": "1006412bb27ad61b",
+      "site": "examples/17_qa_agent.ko:9",
+      "model": "ollama:qwen3:8b",
+      "prompt": "answer clearly and concisely",
+      "data": "\"\"",
+      "media": "",
+      "outcome": {
+        "kind": "uncertain",
+        "reason": "insufficient data",
+        "tokens_in": 335,
+        "tokens_out": 17
+      }
+    },
+    {
+      "key": "d1936a6503a340d5",
+      "site": "examples/17_qa_agent.ko:9",
+      "model": "ollama:qwen3:8b",
+      "prompt": "answer clearly and concisely",
+      "data": "\"who are you?\"",
+      "media": "",
+      "outcome": {
+        "kind": "ok",
+        "fields": {
+          "answer": "I am a writing engine designed to assist with writing tasks."
+        },
+        "tokens_in": 524,
+        "tokens_out": 25
+      }
+    }
+  ]
+}

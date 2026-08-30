@@ -97,6 +97,16 @@ pub enum Effect {
     /// journal cannot know whether the line before a crash was printed, so
     /// the only way to get exactly-once output is to record it.
     Output { text: String },
+    /// A `notes.read(key)` and the value it returned.
+    ///
+    /// The notes store itself (`.kora/notes/<run-id>.json`) outlives this
+    /// journal and is not replayed the way `Model`/`Tool`/`Human`/`Output`
+    /// effects are — a `notes.write` goes straight to that file, live, every
+    /// time. But the *read* inside one run is journaled, the same way
+    /// `time.now()` is: without it, a replay would see whatever the store
+    /// holds at replay time rather than what the live run actually read,
+    /// which could differ if another process wrote to the same store meanwhile.
+    Memory { key: String, value_json: String },
 }
 
 /// A journaled copy of one tool call and its result, kept by a
@@ -373,6 +383,18 @@ pub fn runs_dir(program: &Path) -> PathBuf {
         .unwrap_or(Path::new("."))
         .join(".kora")
         .join("runs")
+}
+
+/// Where a run's notes store lives: `.kora/notes/<run-id>.json` beside the
+/// program. A run's own scratch space, addressed by exactly one identity —
+/// which run wrote it — the way `run_path` addresses that run's journal.
+pub fn notes_path(program: &Path, run_id: &str) -> PathBuf {
+    program
+        .parent()
+        .unwrap_or(Path::new("."))
+        .join(".kora")
+        .join("notes")
+        .join(format!("{run_id}.json"))
 }
 
 /// A short, sortable run id.

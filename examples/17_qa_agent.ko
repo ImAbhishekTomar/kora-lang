@@ -1,0 +1,32 @@
+# A minimal agent: takes a question, returns an answer.
+#
+# One `agent` function wrapping one model call. No tools, no declared type —
+# just a `str` outcome matched down to plain text or a reason it failed.
+
+agent answer_question(question: str) -> str:
+    budget: max_tokens = 2000, max_steps = 1
+
+    result: str = analyze(question, "answer clearly and concisely")
+    match result:
+        case Ok(text):
+            return text
+        case Uncertain(reason):
+            return f"could not answer: {reason}"
+        case Failed(why):
+            return f"call failed: {why}"
+
+def main():
+    print("ask a question (exit / bye / close to quit)")
+    while True:
+        question = input("> ")
+        if question in ["exit", "bye", "close"]:
+            break
+        print(answer_question(question))
+
+test "a real answer comes back as plain text":
+    with mock analyze -> Ok("Paris."):
+        assert answer_question("What is the capital of France?") == "Paris."
+
+test "a declined question is a value, not an exception":
+    with mock analyze -> Uncertain("the question is out of scope"):
+        assert answer_question("anything") == "could not answer: the question is out of scope"
