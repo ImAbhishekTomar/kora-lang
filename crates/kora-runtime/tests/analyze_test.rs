@@ -104,6 +104,7 @@ fn ok_fields(pairs: &[(&str, serde_json::Value)]) -> RecordedOutcome {
         fields: map,
         tokens_in: 100,
         tokens_out: 20,
+        chunks: Vec::new(),
     }
 }
 
@@ -190,6 +191,94 @@ fn analyze_rejects_unsupported_field_types() {
     let src = "type Bad:\n    items: dict\n\ndef main():\n    x: Bad = analyze(\"d\", \"p\")\n";
     let err = run_with_cassette("bad-field", src, vec![]).unwrap_err();
     assert!(err.contains("cannot request"), "got: {err}");
+}
+
+const NESTED_PROGRAM: &str = r#"type Section:
+    name: str
+    description: str
+
+type Plan:
+    sections: list[Section]
+
+def main():
+    result: Plan = analyze("some data", "plan this")
+    match result:
+        case Ok(value):
+            for section in value.sections:
+                print(f"{section.name}: {section.description}")
+        case Uncertain(reason):
+            print(f"uncertain: {reason}")
+"#;
+
+#[test]
+fn analyze_result_field_may_be_a_list_of_declared_type() {
+    let path = scratch_program_path("nested-list");
+    let entry = entry_for(
+        &path,
+        9,
+        "plan this",
+        "\"some data\"",
+        ok_fields(&[(
+            "sections",
+            serde_json::json!([
+                {"name": "research", "description": "gather sources"},
+                {"name": "draft", "description": "write the sections"},
+            ]),
+        )]),
+    );
+    let out = run_with_cassette("nested-list", NESTED_PROGRAM, vec![entry]).unwrap();
+    assert_eq!(
+        out,
+        vec![
+            "research: gather sources".to_string(),
+            "draft: write the sections".to_string(),
+        ]
+    );
+}
+
+const NESTED_OBJECT_PROGRAM: &str = r#"type Address:
+    city: str
+    zip: str
+
+type Customer:
+    name: str
+    address: Address
+
+def main():
+    result: Customer = analyze("some data", "extract this")
+    match result:
+        case Ok(value):
+            print(f"{value.name} lives in {value.address.city} {value.address.zip}")
+        case Uncertain(reason):
+            print(f"uncertain: {reason}")
+"#;
+
+#[test]
+fn analyze_result_field_may_be_a_declared_type() {
+    let path = scratch_program_path("nested-object");
+    let entry = entry_for(
+        &path,
+        10,
+        "extract this",
+        "\"some data\"",
+        ok_fields(&[
+            ("name", serde_json::json!("Ada")),
+            (
+                "address",
+                serde_json::json!({"city": "London", "zip": "SW1"}),
+            ),
+        ]),
+    );
+    let out = run_with_cassette("nested-object", NESTED_OBJECT_PROGRAM, vec![entry]).unwrap();
+    assert_eq!(out, vec!["Ada lives in London SW1".to_string()]);
+}
+
+#[test]
+fn analyze_rejects_a_type_that_refers_to_itself() {
+    let src =
+        "type A:\n    b: B\n\ntype B:\n    a: A\n\ndef main():\n    x: A = analyze(\"d\", \"p\")\n";
+    let err = run_with_cassette("self-referential", src, vec![]).unwrap_err();
+    assert!(err.contains("refers to itself"), "got: {err}");
 }
 
 #[test]

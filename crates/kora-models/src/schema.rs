@@ -7,6 +7,12 @@ use serde_json::{json, Value};
 /// reason here when it cannot comply; empty string when confident.
 pub const UNCERTAIN_KEY: &str = "__uncertain__";
 
+/// The single field of a `str` result. Sorts after `UNCERTAIN_KEY` in the
+/// JSON object, which is what lets a streaming call know whether it is
+/// watching an answer or a refusal before the first character reaches the
+/// program.
+pub const TEXT_KEY: &str = "answer";
+
 /// Build the JSON schema object sent to the provider.
 ///
 /// Every declared field is a required property, plus the required
@@ -80,6 +86,24 @@ pub(crate) fn field_schema(field: &SchemaField) -> Value {
 
 /// System message explaining the output contract.
 pub fn system_prompt(schema: &Schema) -> String {
+    if schema.text {
+        return format!(
+            "You are a writing engine. Respond with ONLY a single JSON object with \
+             exactly these fields:\n\
+             - {UNCERTAIN_KEY}: string (refusal channel, see below)\n\
+             - {TEXT_KEY}: string (your answer, as plain prose)\n\n\
+             Contract for `{UNCERTAIN_KEY}`:\n\
+             - If you can fulfill the instruction, write your answer in \
+               \"{TEXT_KEY}\" and set \"{UNCERTAIN_KEY}\" to the empty string \"\".\n\
+             - If you cannot comply (the instruction is impossible, the data is \
+               insufficient, or you must refuse), put a short reason in \
+               \"{UNCERTAIN_KEY}\" and leave \"{TEXT_KEY}\" empty.\n\
+             Emit \"{UNCERTAIN_KEY}\" before \"{TEXT_KEY}\", so a reader following \
+             the response as it is written knows which one it is reading.\n\
+             Never output prose outside the JSON object, and never use markdown \
+             or code fences. Output only the JSON object."
+        );
+    }
     let field_list = describe_fields(schema, "");
     format!(
         "You are a data analysis engine. Respond with ONLY a single JSON object \
@@ -176,6 +200,7 @@ mod tests {
                     pattern: None,
                 },
             ],
+            text: false,
         }
     }
 

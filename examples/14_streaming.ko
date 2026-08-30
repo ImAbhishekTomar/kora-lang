@@ -1,0 +1,31 @@
+# Phase 3: a streamed answer.
+#
+# `analyze` still returns an outcome to match on. The handler watches the
+# answer as the model writes it, so a program can show prose while it is
+# still arriving instead of waiting for the whole thing.
+#
+# Only a `str` result streams. A declared type arrives as JSON, so its
+# "pieces" would be fragments of syntax — `{"merch` — which is nothing
+# anyone wants to print.
+
+def main():
+    question = "Why does a streamed answer still need an outcome to match on?"
+
+    answer: str = analyze(question, "answer in two short sentences, plainly") on token(piece):
+        write(piece)
+
+    # `write` leaves the line open; this closes it.
+    print("")
+
+    match answer:
+        case Ok(text):
+            print(f"-- done, {len(text)} characters")
+        case Uncertain(reason):
+            print(f"-- the model declined: {reason}")
+        case Exhausted(meter):
+            print(f"-- budget out of {meter}")
+        case Failed(why):
+            # Characters may already be on screen. A stream that broke after
+            # writing is not a call that never happened, and the program says
+            # so rather than pretending the answer was complete.
+            print(f"-- the stream broke: {why}")

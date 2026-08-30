@@ -244,6 +244,52 @@ ends up needing an environment variable to choose between two providers. A
 name that came from outside the program is refused: the model is a
 destination, and model output should not be able to redirect the call.
 
+### Streaming an answer
+
+A call annotated `str` may be watched as the model writes it:
+
+```python
+answer: str = analyze(question, "answer in two short sentences") on token(piece):
+    write(piece)
+
+print("")
+
+match answer:
+    case Ok(text):
+        save(text)
+    case Failed(why):
+        log(f"the stream broke: {why}")
+```
+
+`write` is `print` without the newline, for output that arrives in pieces.
+
+The handler hangs off the assignment rather than replacing it, because the
+call still produces an outcome. A loop over the pieces would end the same way
+whether the model finished or the provider vanished, and an outage that looks
+like success is the failure this language exists to remove. Match on the
+result exactly as you would without the handler.
+
+Two consequences follow from a stream being a thing that has already started:
+
+- **Characters already written are not taken back.** A stream that breaks
+  after fifty words is `Failed`, and those fifty words are on screen. A
+  program can print output *and then* take the failure arm; that is the
+  honest shape of what happened, not a bug.
+- **A broken stream is never retried.** The transport still retries a request
+  that failed before the first piece, since nothing was observed. After that,
+  a retry would write the answer twice on top of output the program already
+  acted on — the same reason a tool call is never retried.
+
+Only `str` streams. A declared type arrives as JSON, so its pieces are
+fragments of syntax — `{"merch` — and asking for a handler on one is an error
+that says so. Tools and streaming cannot be combined yet; that is refused
+rather than silently dropped.
+
+Refusal still works: the answer travels as an object whose refusal field is
+written first, so a call that declines produces `Uncertain` and the handler
+never runs. Recorded runs keep the piece boundaries, so `--replay` and a
+durable resume deliver the answer in the same pieces the live run did.
+
 ---
 
 ## Outcomes and `match`

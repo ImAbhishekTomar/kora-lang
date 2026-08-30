@@ -385,6 +385,7 @@ mod tests {
                 fields,
                 tokens_in: 1,
                 tokens_out: 1,
+                chunks: Vec::new(),
             },
         }
     }

@@ -73,5 +73,8 @@ Reading these should show the rough edges as well as the good parts.
   supervisor pattern — one agent delegating to specialists — has to be spelled
   as a `tool` that wraps the call, and the wrapper cannot carry its own
   budget.
-- **No streaming.** There is no equivalent of `stream_events`, so nothing here
-  can render tokens as they arrive.
+- **Streaming is text only.** `analyze(...) on token(t):` renders an answer as
+  it arrives, but only for a `str` result — a declared type arrives as JSON,
+  so its pieces are syntax rather than prose. Nothing here streams a typed
+  extraction, and there is still no equivalent of `stream_events` for events
+  other than tokens.

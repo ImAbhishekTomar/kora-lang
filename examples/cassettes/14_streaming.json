@@ -1,0 +1,34 @@
+{
+  "entries": [
+    {
+      "key": "3c2fc39b7d633556",
+      "site": "examples/14_streaming.ko:14",
+      "model": "ollama:qwen3:8b",
+      "prompt": "answer in two short sentences, plainly",
+      "data": "\"Why does a streamed answer still need an outcome to match on?\"",
+      "outcome": {
+        "kind": "ok",
+        "fields": {
+          "answer": "Because the pieces tell you what the model wrote, not whether it finished. A stream that breaks after ten words still has to come back as Failed, and only the outcome carries that."
+        },
+        "tokens_in": 118,
+        "tokens_out": 44,
+        "chunks": [
+          "Because the pieces",
+          " tell you what",
+          " the model wrote,",
+          " not whether",
+          " it finished.",
+          " A stream that",
+          " breaks after",
+          " ten words still",
+          " has to come",
+          " back as Failed,",
+          " and only the",
+          " outcome carries",
+          " that."
+        ]
+      }
+    }
+  ]
+}

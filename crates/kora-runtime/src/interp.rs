@@ -163,6 +163,13 @@ pub struct Interpreter {
     types: HashMap<String, Vec<FieldDef>>,
     /// Where `print` writes (swappable for tests).
     pub output: Vec<String>,
+    /// Text written by `write` that no newline has finished yet.
+    ///
+    /// A streamed answer arrives in pieces that are not lines, so `write`
+    /// has to be able to leave one open. Kept separate from `output` rather
+    /// than appended to its last entry, because a partial line is not a line
+    /// and anything reading `output` would otherwise see it as one.
+    pending_line: String,
     /// Print directly to stdout (true for `kora run`), or capture (tests).
     pub direct_stdout: bool,
     /// Model configuration from kora.toml.
@@ -241,6 +248,7 @@ const OUTCOME_TAGS: &[&str] = &["Ok", "Err", "Uncertain", "Exhausted", "Failed"]
 
 const BUILTINS: &[&str] = &[
     "print",
+    "write",
     "len",
     "range",
     "str",
@@ -282,6 +290,7 @@ impl Interpreter {
             loading: Vec::new(),
             types: HashMap::new(),
             output: Vec::new(),
+            pending_line: String::new(),
             direct_stdout: false,
             config: Config::default(),
             packages: Arc::new(kora_pkg::Resolution::default()),
@@ -364,7 +373,17 @@ impl Interpreter {
             }
             self.call_function(&main_fn, modules::ROOT, vec![], Span::new(0, 0, 1, 1))?;
         }
+        self.flush_pending();
         Ok(())
+    }
+
+    /// Close any line `write` left open, so a program that ends mid-line
+    /// does not lose its last piece of output.
+    pub fn flush_pending(&mut self) {
+        if !self.pending_line.is_empty() {
+            let line = std::mem::take(&mut self.pending_line);
+            self.output.push(line);
+        }
     }
 
     // --- statements ---
@@ -383,12 +402,24 @@ impl Interpreter {
                 ty,
                 value,
                 classified,
+                on_token,
             } => {
                 // `x: T = analyze(...)` is the one place the declared type is
                 // available, and analyze needs it to build the model schema.
                 let v = match (ty, analyze_args(value)) {
                     (Some(t), Some((args, kwargs))) => {
-                        self.eval_analyze(t, args, kwargs, value.span, scope)?
+                        self.eval_analyze(t, args, kwargs, on_token.as_ref(), value.span, scope)?
+                    }
+                    // The handler is only meaningful on a call that streams,
+                    // and only `analyze` streams. Caught here rather than
+                    // ignored, because a block that silently never runs is
+                    // worse than one that never parsed.
+                    (_, None) if on_token.is_some() => {
+                        return Err(RuntimeError::new(
+                            "`on token` can only watch an `analyze()` call",
+                            value.span,
+                        )
+                        .with_hint("write `answer: str = analyze(data, \"...\") on token(t):`"))
                     }
                     _ => {
                         let v = self.eval(value, scope)?;
@@ -809,7 +840,7 @@ impl Interpreter {
                 // handed the declared type so it can build the model schema.
                 let outcome = match (ty, analyze_args(value)) {
                     (Some(t), Some((args, kwargs))) => {
-                        self.eval_analyze(t, args, kwargs, value.span, scope)?
+                        self.eval_analyze(t, args, kwargs, None, value.span, scope)?
                     }
                     _ => self.eval(value, scope)?,
                 };
@@ -1805,12 +1836,43 @@ impl Interpreter {
             ))
         };
         match name {
+            "write" => {
+                // Like `print` without the newline, for output that arrives
+                // in pieces. The pieces of a streamed answer are not lines,
+                // and a handler that could only `print` would break one
+                // answer across as many lines as the model sent tokens.
+                let text = args
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if !self.record_output(&text, span)? {
+                    return Ok(Value::None);
+                }
+                if self.direct_stdout {
+                    use std::io::Write as _;
+                    print!("{text}");
+                    // Without this the answer appears all at once when the
+                    // line ends, which is the thing streaming exists to
+                    // avoid: stdout to a terminal is line-buffered.
+                    let _ = std::io::stdout().flush();
+                } else {
+                    self.pending_line.push_str(&text);
+                }
+                Ok(Value::None)
+            }
             "print" => {
                 let line = args
                     .iter()
                     .map(|v| v.to_string())
                     .collect::<Vec<_>>()
                     .join(" ");
+                // Anything `write` left open belongs to this line.
+                let line = if self.pending_line.is_empty() {
+                    line
+                } else {
+                    format!("{}{line}", std::mem::take(&mut self.pending_line))
+                };
                 // In a durable run, output is an effect: already-shown lines
                 // replay silently, so resuming continues rather than repeats.
                 if !self.record_output(&line, span)? {
@@ -2161,6 +2223,7 @@ impl Interpreter {
         ty: &TypeExpr,
         args: &[Expr],
         kwargs: &[(String, Expr)],
+        on_token: Option<&TokenHandler>,
         span: Span,
         scope: &mut Scope,
     ) -> Result<Value, RuntimeError> {
@@ -2262,11 +2325,39 @@ impl Interpreter {
         });
         let schema = self.schema_for(&type_name, span)?;
 
+        // Streaming is only offered where it means something. For a declared
+        // type the wire carries JSON, so the pieces of a "stream" are
+        // fragments of syntax -- `{"merch` -- which no program wants to
+        // print and no reader wants to see. Refused with the reason rather
+        // than allowed to disappoint at runtime.
+        if on_token.is_some() && !schema.text {
+            return Err(RuntimeError::new(
+                format!("`on token` needs a `str` result, but this call asks for `{}`", crate::value::short_type_name(&type_name)),
+                span,
+            )
+            .with_hint(
+                "a declared type arrives as JSON, so its pieces are syntax, not prose; annotate the call `: str` to stream an answer, or drop the handler to keep the typed result",
+            ));
+        }
+
         // A mock stands in for the whole call. It is checked against the
         // declared type, so a mock of the wrong shape fails the test instead
         // of passing it — which is the failure mode of untyped mocking.
         if let Some(mocked) = self.mocked_analyze.last().cloned() {
             self.check_mock(&mocked, &type_name, span)?;
+            // A mocked stream still runs the handler, once, over the whole
+            // mocked answer -- as one piece rather than none, since a test
+            // has no way to script the pieces a real provider would choose.
+            // Without this, `with mock` would make the handler body dead
+            // code under every test that uses it.
+            if let (Some(handler), Value::Variant { tag, payload }) = (on_token, mocked.unlabeled())
+            {
+                if tag.as_str() == "Ok" {
+                    if let Some(Value::Str(text)) = payload.first().map(Value::unlabeled) {
+                        self.run_token_handler(handler, text.as_str(), scope)?;
+                    }
+                }
+            }
             return Ok(mocked);
         }
 
@@ -2357,8 +2448,9 @@ impl Interpreter {
         // A durable run replays its own journal first: resuming must return
         // exactly what the earlier attempt returned.
         let journal_site = format!("{site}#model");
-        if let Some(outcome) = self.journal_model_call(&journal_site, span)? {
+        if let Some((outcome, chunks)) = self.journal_model_call(&journal_site, span)? {
             self.trace_replayed_call(&type_name, "journal");
+            self.replay_chunks(on_token, &chunks, scope)?;
             return self.outcome_to_value(outcome, &type_name, span);
         }
 
@@ -2371,6 +2463,7 @@ impl Interpreter {
         });
         if let Some(outcome) = recorded {
             self.trace_replayed_call(&type_name, "cassette");
+            self.replay_chunks(on_token, &chunks_of(&outcome), scope)?;
             return self.outcome_to_value(outcome_from_record(outcome), &type_name, span);
         }
         let mode = self
@@ -2385,19 +2478,27 @@ impl Interpreter {
             .with_hint("re-record with `kora run --record <file.ko>`"));
         }
 
-        let outcome = self.run_tool_loop(
-            &model,
-            &prompt,
-            &data_text,
-            &images,
-            &schema,
-            &tools,
-            &tool_funcs,
-            span,
-        )?;
+        let (outcome, chunks) = match on_token {
+            Some(handler) => self.run_stream(
+                &model, &prompt, &data_text, &images, &schema, handler, scope, span,
+            )?,
+            None => (
+                self.run_tool_loop(
+                    &model,
+                    &prompt,
+                    &data_text,
+                    &images,
+                    &schema,
+                    &tools,
+                    &tool_funcs,
+                    span,
+                )?,
+                Vec::new(),
+            ),
+        };
         // Journal before anything else: a crash after this point must resume
         // without paying for the call again.
-        self.journal_record_model(&journal_site, &outcome, span)?;
+        self.journal_record_model(&journal_site, &outcome, &chunks, span)?;
 
         // A cassette is a fixture. Recording an outage into one would make
         // every later replay fail for a reason that was over by the afternoon,
@@ -2413,7 +2514,7 @@ impl Interpreter {
                     prompt,
                     data: data_text,
                     media: media_key,
-                    outcome: record_from_outcome(&outcome),
+                    outcome: record_from_outcome_with(&outcome, &chunks),
                 });
             }
         }
@@ -2468,6 +2569,13 @@ impl Interpreter {
 
     /// Build the model schema from a Kora `type` declaration.
     fn schema_for(&self, type_name: &str, span: Span) -> Result<Schema, RuntimeError> {
+        // `str` is the one result type that is not a declared shape: the
+        // answer is prose, and asking for it should not require inventing a
+        // one-field type to hold it. It still travels as an object on the
+        // wire so `Uncertain` survives -- see `Schema::for_text`.
+        if type_name == "str" {
+            return Ok(Schema::for_text());
+        }
         let mut seen = HashSet::new();
         self.schema_for_inner(type_name, span, &mut seen)
     }
@@ -2508,6 +2616,7 @@ impl Interpreter {
         Ok(Schema {
             type_name: written.to_string(),
             fields: out,
+            text: false,
         })
     }
 
@@ -2595,6 +2704,21 @@ impl Interpreter {
                 self.tokens_in += tokens_in;
                 self.tokens_out += tokens_out;
                 self.budget.charge_call(tokens_in, tokens_out);
+                // A `str` result is handed back as the string itself. The
+                // single-field object it travelled in is a wire detail; a
+                // program that asked for prose should not have to reach
+                // through a field it never declared to read it.
+                if type_name == "str" {
+                    let text = fields_json
+                        .get(kora_models::TEXT_KEY)
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_string();
+                    return Ok(Value::Variant {
+                        tag: Rc::new("Ok".to_string()),
+                        payload: vec![Value::Str(Rc::new(text))],
+                    });
+                }
                 // Reconstructed from the original `TypeExpr`s, not the
                 // model-facing `Schema`, so a nested declared-type field
                 // becomes a `Value::Object` under its qualified name -- the
@@ -2653,7 +2777,15 @@ impl Interpreter {
     }
 }
 
-fn record_from_outcome(outcome: &AnalyzeOutcome) -> RecordedOutcome {
+/// The pieces a recorded outcome was written in, if it was streamed.
+fn chunks_of(outcome: &RecordedOutcome) -> Vec<String> {
+    match outcome {
+        RecordedOutcome::Ok { chunks, .. } => chunks.clone(),
+        _ => Vec::new(),
+    }
+}
+
+fn record_from_outcome_with(outcome: &AnalyzeOutcome, chunks: &[String]) -> RecordedOutcome {
     match outcome {
         AnalyzeOutcome::Ok {
             fields_json,
@@ -2663,6 +2795,7 @@ fn record_from_outcome(outcome: &AnalyzeOutcome) -> RecordedOutcome {
             fields: fields_json.clone(),
             tokens_in: *tokens_in,
             tokens_out: *tokens_out,
+            chunks: chunks.to_vec(),
         },
         AnalyzeOutcome::Uncertain {
             reason,
@@ -2691,6 +2824,7 @@ fn outcome_from_record(record: RecordedOutcome) -> AnalyzeOutcome {
             fields,
             tokens_in,
             tokens_out,
+            ..
         } => AnalyzeOutcome::Ok {
             fields_json: fields,
             tokens_in,
@@ -3122,6 +3256,8 @@ fn run_one(
         Err(e) => Err(e),
     };
 
+    // A branch that ended mid-line still wrote those characters.
+    interp.flush_pending();
     WorkerResult {
         value,
         output: interp.output,
@@ -3208,6 +3344,110 @@ impl Interpreter {
     /// Drive the model until it produces a final answer, running any tools it
     /// asks for along the way. Every turn is charged against the budget, so a
     /// runaway loop stops rather than spending forever.
+    #[allow(clippy::too_many_arguments)]
+    /// Run one `on token` handler body over a piece of the answer.
+    ///
+    /// `break` and `continue` are refused rather than silently ignored: the
+    /// handler is not a loop the program wrote, and a `break` here reads as
+    /// though it would stop the stream, which it does not.
+    fn run_token_handler(
+        &mut self,
+        handler: &TokenHandler,
+        text: &str,
+        scope: &mut Scope,
+    ) -> Result<(), RuntimeError> {
+        scope.insert(handler.var.clone(), Value::Str(Rc::new(text.to_string())));
+        match self.exec_block(&handler.body, scope)? {
+            Flow::Normal => Ok(()),
+            Flow::Break | Flow::Continue => Err(RuntimeError::new(
+                "`break` and `continue` have nothing to leave inside an `on token` handler",
+                handler.span,
+            )
+            .with_hint("the handler runs once per piece of the answer, not in a loop")),
+            Flow::Return(_) => Err(RuntimeError::new(
+                "`return` cannot be used inside an `on token` handler",
+                handler.span,
+            )
+            .with_hint("the call has not produced its outcome yet; return after matching on it")),
+        }
+    }
+
+    /// A streamed `analyze()`: the answer is handed to the handler as it is
+    /// written, and the outcome comes back exactly as a blocking call's would.
+    ///
+    /// Returns the pieces alongside the outcome so a recording keeps them.
+    /// Replaying an answer as one lump when it was written as forty would
+    /// make a handler that counts pieces disagree with the run it replays.
+    #[allow(clippy::too_many_arguments)]
+    fn run_stream(
+        &mut self,
+        model: &kora_models::ModelConfig,
+        prompt: &str,
+        data_text: &str,
+        images: &[Rc<crate::media::Image>],
+        schema: &Schema,
+        handler: &TokenHandler,
+        scope: &mut Scope,
+        _span: Span,
+    ) -> Result<(AnalyzeOutcome, Vec<String>), RuntimeError> {
+        let request = AnalyzeRequest {
+            prompt: prompt.to_string(),
+            data_json: data_text.to_string(),
+            images: images
+                .iter()
+                .map(|i| kora_models::ImagePart {
+                    mime: i.mime.clone(),
+                    bytes: i.bytes.clone(),
+                })
+                .collect(),
+            schema: schema.clone(),
+            tools: Vec::new(),
+            tool_history: Vec::new(),
+        };
+
+        let mut chunks: Vec<String> = Vec::new();
+        let mut handler_error: Option<RuntimeError> = None;
+        let result = {
+            let mut on_text = |text: &str| -> Result<kora_models::Flow, kora_models::ModelError> {
+                chunks.push(text.to_string());
+                match self.run_token_handler(handler, text, scope) {
+                    Ok(()) => Ok(kora_models::Flow::Continue),
+                    Err(e) => {
+                        // The handler raising is the program failing, not the
+                        // provider. Stop reading rather than paying for the
+                        // rest of an answer nobody will look at, and carry the
+                        // real error out past the transport's error type.
+                        handler_error = Some(e);
+                        Ok(kora_models::Flow::Stop)
+                    }
+                }
+            };
+            kora_models::analyze_streaming(model, &request, &mut on_text)
+        };
+        self.model_calls += 1;
+
+        if let Some(e) = handler_error {
+            return Err(e);
+        }
+        match result {
+            Ok(outcome) => Ok((outcome, chunks)),
+            // Same rule as the blocking path: a provider that does not answer
+            // is an outcome the program decides about, not a crash.
+            Err(e) => Ok((
+                AnalyzeOutcome::Failed {
+                    reason: e.message,
+                    tokens_in: 0,
+                    tokens_out: 0,
+                },
+                chunks,
+            )),
+        }
+    }
+
+    // The call is one thing described by many parts: which model, what to
+    // ask, what to send, and what may be called back. Bundling them into a
+    // struct used once here would move the same list somewhere further from
+    // where it is read.
     #[allow(clippy::too_many_arguments)]
     fn run_tool_loop(
         &mut self,
@@ -3568,7 +3808,7 @@ impl Interpreter {
         &mut self,
         site: &str,
         span: Span,
-    ) -> Result<Option<AnalyzeOutcome>, RuntimeError> {
+    ) -> Result<Option<(AnalyzeOutcome, Vec<String>)>, RuntimeError> {
         let mut journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
         if !journal.is_durable() {
             return Ok(None);
@@ -3577,7 +3817,10 @@ impl Interpreter {
             .next(&self.scope, site)
             .map_err(|e| RuntimeError::new(e.to_string(), span))?
         {
-            Lookup::Replayed(Effect::Model { outcome }) => Ok(Some(outcome_from_record(outcome))),
+            Lookup::Replayed(Effect::Model { outcome }) => {
+                let chunks = chunks_of(&outcome);
+                Ok(Some((outcome_from_record(outcome), chunks)))
+            }
             Lookup::Replayed(other) => Err(RuntimeError::new(
                 format!("journal step is {other:?}, but the program reached a model call"),
                 span,
@@ -3594,6 +3837,7 @@ impl Interpreter {
         &mut self,
         site: &str,
         outcome: &AnalyzeOutcome,
+        chunks: &[String],
         span: Span,
     ) -> Result<(), RuntimeError> {
         let Some((scope, seq)) = self.pending_slot.take() else {
@@ -3606,10 +3850,30 @@ impl Interpreter {
                 seq,
                 site,
                 Effect::Model {
-                    outcome: record_from_outcome(outcome),
+                    outcome: record_from_outcome_with(outcome, chunks),
                 },
             )
             .map_err(|e| RuntimeError::new(e.to_string(), span))
+    }
+
+    /// Re-run an `on token` handler over a recorded answer.
+    ///
+    /// A replayed run has to look like the run it replays, and the handler's
+    /// output is part of what the program did. An answer recorded before
+    /// streaming existed has no pieces, so it arrives as one.
+    fn replay_chunks(
+        &mut self,
+        on_token: Option<&TokenHandler>,
+        chunks: &[String],
+        scope: &mut Scope,
+    ) -> Result<(), RuntimeError> {
+        let Some(handler) = on_token else {
+            return Ok(());
+        };
+        for chunk in chunks {
+            self.run_token_handler(handler, chunk, scope)?;
+        }
+        Ok(())
     }
 }
 
@@ -4355,6 +4619,21 @@ impl Interpreter {
             ));
         };
         match tag.as_str() {
+            "Ok" if type_name == "str" => {
+                let Some(inner) = payload.first() else {
+                    return Err(RuntimeError::new("Ok(...) needs a value", span));
+                };
+                if !matches!(inner.unlabeled(), Value::Str(_)) {
+                    return Err(RuntimeError::new(
+                        format!(
+                            "the mock returns Ok({}), but this call site declares `str`",
+                            inner.type_name()
+                        ),
+                        span,
+                    ));
+                }
+                Ok(())
+            }
             "Ok" => {
                 let Some(inner) = payload.first() else {
                     return Err(RuntimeError::new("Ok(...) needs a value", span));

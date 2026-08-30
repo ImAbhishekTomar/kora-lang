@@ -229,6 +229,7 @@ mod tests {
                     pattern: None,
                 },
             ],
+            text: false,
         }
     }
 

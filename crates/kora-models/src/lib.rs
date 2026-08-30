@@ -6,12 +6,15 @@
 mod base64;
 mod provider;
 mod schema;
+mod stream;
 mod validate;
 
 use std::fmt;
 use std::rc::Rc;
 
 pub use provider::{parse_model_spec, DEFAULT_TIMEOUT_SECS};
+pub use schema::TEXT_KEY;
+pub use stream::Flow;
 
 /// JSON-schema-ish description of the expected result shape.
 /// Built by the runtime from Kora `type` declarations.
@@ -20,6 +23,31 @@ pub struct Schema {
     pub type_name: String,
     /// Ordered field list.
     pub fields: Vec<SchemaField>,
+    /// True when the program asked for `str` rather than a declared type.
+    ///
+    /// The wire shape is still a JSON object with one field, because the
+    /// refusal channel has to survive: a plain-text completion has nowhere
+    /// to put `Uncertain`, and dropping one of the four outcomes for the
+    /// one result type people reach for first would be the wrong trade.
+    /// What changes is the answer's shape on the way back — a string, not
+    /// an object with a single field the program never asked for.
+    pub text: bool,
+}
+
+impl Schema {
+    /// The schema for `answer: str = analyze(...)`.
+    pub fn for_text() -> Schema {
+        Schema {
+            type_name: "str".to_string(),
+            fields: vec![SchemaField {
+                name: schema::TEXT_KEY.to_string(),
+                field_type: FieldType::Str,
+                description: Some("Your answer, as plain prose.".to_string()),
+                pattern: None,
+            }],
+            text: true,
+        }
+    }
 }
 
 /// A model-visible field and its native Kora metadata.
@@ -235,4 +263,21 @@ pub fn analyze(config: &ModelConfig, req: &AnalyzeRequest) -> Result<AnalyzeOutc
 /// One turn of the tool loop: either the final answer, or a tool to run.
 pub fn step(config: &ModelConfig, req: &AnalyzeRequest) -> Result<Step, ModelError> {
     provider::step_with(config, req, &*provider::transport_for(config))
+}
+
+/// Run an analyze call, handing over the answer as it is written.
+///
+/// The outcome is parsed from the complete response exactly as a blocking
+/// call would parse it, so streaming never changes *what* a call returns.
+/// `on_text` sees only the answer itself — never the JSON around it — and
+/// returning [`Flow::Stop`] ends the request without draining the rest.
+///
+/// A stream that breaks after characters were already handed over is not
+/// retried: see [`stream`] for why.
+pub fn analyze_streaming(
+    config: &ModelConfig,
+    req: &AnalyzeRequest,
+    on_text: &mut dyn FnMut(&str) -> Result<Flow, ModelError>,
+) -> Result<AnalyzeOutcome, ModelError> {
+    stream::analyze_streaming_with(config, req, &*stream::stream_transport_for(config), on_text)
 }
