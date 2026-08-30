@@ -29,8 +29,7 @@ fn run_err(src: &str) -> String {
 
 #[test]
 fn on_token_runs_over_a_mocked_answer_and_the_outcome_still_matches() {
-    let out = run(
-        r#"
+    let out = run(r#"
 agent main():
     with mock analyze -> Ok("hello there"):
         answer: str = analyze("q", "answer this") on token(t):
@@ -40,8 +39,7 @@ agent main():
                 print(f"final: {text}")
             case Uncertain(reason):
                 print(f"uncertain: {reason}")
-"#,
-    );
+"#);
     // A mock has no pieces to script, so the handler runs once over the
     // whole answer rather than not at all -- otherwise `with mock` would
     // make the handler body dead code under every test that uses it.
@@ -50,8 +48,7 @@ agent main():
 
 #[test]
 fn on_token_sees_an_uncertain_refusal_only_through_the_match_not_the_handler() {
-    let out = run(
-        r#"
+    let out = run(r#"
 agent main():
     with mock analyze -> Uncertain("too vague"):
         answer: str = analyze("q", "answer this") on token(t):
@@ -61,8 +58,7 @@ agent main():
                 print(f"final: {text}")
             case Uncertain(reason):
                 print(f"uncertain: {reason}")
-"#,
-    );
+"#);
     // A refusal has no answer text, so the handler never fires -- only the
     // outcome match sees it, exactly as a non-streaming call would.
     assert_eq!(out, vec!["uncertain: too vague"]);
@@ -122,14 +118,12 @@ fn the_handler_variable_does_not_leak_the_wrong_type() {
     // Regression for the type checker: `on token`'s variable is declared
     // like a loop variable, so a program that only ever runs the handler
     // must not report it as unknown.
-    let out = run(
-        r#"
+    let out = run(r#"
 agent main():
     with mock analyze -> Ok("x"):
         answer: str = analyze("q", "answer this") on token(piece):
             upper = piece
             print(upper)
-"#,
-    );
+"#);
     assert_eq!(out, vec!["x"]);
 }

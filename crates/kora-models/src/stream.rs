@@ -190,35 +190,40 @@ pub(crate) fn analyze_streaming_with(
     transport: &StreamTransport,
     on_text: &mut dyn FnMut(&str) -> Result<Flow, ModelError>,
 ) -> Result<crate::AnalyzeOutcome, ModelError> {
-    let (url, headers, body) = crate::provider::stream_request(config, req)?;
+    let request = crate::provider::stream_request(config, req)?;
     let mut extractor = TextExtractor::new();
     let mut tokens_in = 0u64;
     let mut tokens_out = 0u64;
     let mut stopped = false;
 
-    let result = transport(&url, &headers, &body, &mut |payload| {
-        let part = crate::provider::parse_delta(&config.provider, payload)?;
-        if part.tokens_in > 0 {
-            tokens_in = part.tokens_in;
-        }
-        if part.tokens_out > 0 {
-            tokens_out = part.tokens_out;
-        }
-        if part.text.is_empty() {
-            return Ok(Flow::Continue);
-        }
-        let visible = extractor.push(&part.text);
-        if visible.is_empty() {
-            return Ok(Flow::Continue);
-        }
-        match on_text(&visible)? {
-            Flow::Continue => Ok(Flow::Continue),
-            Flow::Stop => {
-                stopped = true;
-                Ok(Flow::Stop)
+    let result = transport(
+        &request.url,
+        &request.headers,
+        &request.body,
+        &mut |payload| {
+            let part = crate::provider::parse_delta(&config.provider, payload)?;
+            if part.tokens_in > 0 {
+                tokens_in = part.tokens_in;
             }
-        }
-    });
+            if part.tokens_out > 0 {
+                tokens_out = part.tokens_out;
+            }
+            if part.text.is_empty() {
+                return Ok(Flow::Continue);
+            }
+            let visible = extractor.push(&part.text);
+            if visible.is_empty() {
+                return Ok(Flow::Continue);
+            }
+            match on_text(&visible)? {
+                Flow::Continue => Ok(Flow::Continue),
+                Flow::Stop => {
+                    stopped = true;
+                    Ok(Flow::Stop)
+                }
+            }
+        },
+    );
 
     if let Err(e) = result {
         // What was already written is not thrown away: the program has seen
@@ -228,7 +233,10 @@ pub(crate) fn analyze_streaming_with(
         let detail = if seen == 0 {
             e.message
         } else {
-            format!("{} (after {seen} characters had already arrived)", e.message)
+            format!(
+                "{} (after {seen} characters had already arrived)",
+                e.message
+            )
         };
         return Ok(crate::AnalyzeOutcome::Failed {
             reason: detail,
@@ -394,10 +402,7 @@ mod tests {
 
     #[test]
     fn nothing_is_emitted_after_the_value_closes() {
-        assert_eq!(
-            drain(&[r#"{"answer":"done","__uncertain__":""}"#]),
-            "done"
-        );
+        assert_eq!(drain(&[r#"{"answer":"done","__uncertain__":""}"#]), "done");
     }
 
     #[test]

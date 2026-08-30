@@ -163,6 +163,13 @@ pub struct Interpreter {
     types: HashMap<String, Vec<FieldDef>>,
     /// Where `print` writes (swappable for tests).
     pub output: Vec<String>,
+    /// Text written by `write` that no newline has finished yet.
+    ///
+    /// A streamed answer arrives in pieces that are not lines, so `write`
+    /// has to be able to leave one open. Kept separate from `output` rather
+    /// than appended to its last entry, because a partial line is not a line
+    /// and anything reading `output` would otherwise see it as one.
+    pending_line: String,
     /// Print directly to stdout (true for `kora run`), or capture (tests).
     pub direct_stdout: bool,
     /// Model configuration from kora.toml.
@@ -241,6 +248,7 @@ const OUTCOME_TAGS: &[&str] = &["Ok", "Err", "Uncertain", "Exhausted", "Failed"]
 
 const BUILTINS: &[&str] = &[
     "print",
+    "write",
     "len",
     "range",
     "str",
@@ -282,6 +290,7 @@ impl Interpreter {
             loading: Vec::new(),
             types: HashMap::new(),
             output: Vec::new(),
+            pending_line: String::new(),
             direct_stdout: false,
             config: Config::default(),
             packages: Arc::new(kora_pkg::Resolution::default()),
@@ -364,7 +373,17 @@ impl Interpreter {
             }
             self.call_function(&main_fn, modules::ROOT, vec![], Span::new(0, 0, 1, 1))?;
         }
+        self.flush_pending();
         Ok(())
+    }
+
+    /// Close any line `write` left open, so a program that ends mid-line
+    /// does not lose its last piece of output.
+    pub fn flush_pending(&mut self) {
+        if !self.pending_line.is_empty() {
+            let line = std::mem::take(&mut self.pending_line);
+            self.output.push(line);
+        }
     }
 
     // --- statements ---
@@ -400,9 +419,7 @@ impl Interpreter {
                             "`on token` can only watch an `analyze()` call",
                             value.span,
                         )
-                        .with_hint(
-                            "write `answer: str = analyze(data, \"...\") on token(t):`",
-                        ))
+                        .with_hint("write `answer: str = analyze(data, \"...\") on token(t):`"))
                     }
                     _ => {
                         let v = self.eval(value, scope)?;
@@ -1819,12 +1836,43 @@ impl Interpreter {
             ))
         };
         match name {
+            "write" => {
+                // Like `print` without the newline, for output that arrives
+                // in pieces. The pieces of a streamed answer are not lines,
+                // and a handler that could only `print` would break one
+                // answer across as many lines as the model sent tokens.
+                let text = args
+                    .iter()
+                    .map(|v| v.to_string())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                if !self.record_output(&text, span)? {
+                    return Ok(Value::None);
+                }
+                if self.direct_stdout {
+                    use std::io::Write as _;
+                    print!("{text}");
+                    // Without this the answer appears all at once when the
+                    // line ends, which is the thing streaming exists to
+                    // avoid: stdout to a terminal is line-buffered.
+                    let _ = std::io::stdout().flush();
+                } else {
+                    self.pending_line.push_str(&text);
+                }
+                Ok(Value::None)
+            }
             "print" => {
                 let line = args
                     .iter()
                     .map(|v| v.to_string())
                     .collect::<Vec<_>>()
                     .join(" ");
+                // Anything `write` left open belongs to this line.
+                let line = if self.pending_line.is_empty() {
+                    line
+                } else {
+                    format!("{}{line}", std::mem::take(&mut self.pending_line))
+                };
                 // In a durable run, output is an effect: already-shown lines
                 // replay silently, so resuming continues rather than repeats.
                 if !self.record_output(&line, span)? {
@@ -2302,8 +2350,7 @@ impl Interpreter {
             // has no way to script the pieces a real provider would choose.
             // Without this, `with mock` would make the handler body dead
             // code under every test that uses it.
-            if let (Some(handler), Value::Variant { tag, payload }) =
-                (on_token, mocked.unlabeled())
+            if let (Some(handler), Value::Variant { tag, payload }) = (on_token, mocked.unlabeled())
             {
                 if tag.as_str() == "Ok" {
                     if let Some(Value::Str(text)) = payload.first().map(Value::unlabeled) {
@@ -3209,6 +3256,8 @@ fn run_one(
         Err(e) => Err(e),
     };
 
+    // A branch that ended mid-line still wrote those characters.
+    interp.flush_pending();
     WorkerResult {
         value,
         output: interp.output,
@@ -3307,10 +3356,7 @@ impl Interpreter {
         text: &str,
         scope: &mut Scope,
     ) -> Result<(), RuntimeError> {
-        scope.insert(
-            handler.var.clone(),
-            Value::Str(Rc::new(text.to_string())),
-        );
+        scope.insert(handler.var.clone(), Value::Str(Rc::new(text.to_string())));
         match self.exec_block(&handler.body, scope)? {
             Flow::Normal => Ok(()),
             Flow::Break | Flow::Continue => Err(RuntimeError::new(
@@ -3322,9 +3368,7 @@ impl Interpreter {
                 "`return` cannot be used inside an `on token` handler",
                 handler.span,
             )
-            .with_hint(
-                "the call has not produced its outcome yet; return after matching on it",
-            )),
+            .with_hint("the call has not produced its outcome yet; return after matching on it")),
         }
     }
 
@@ -3400,6 +3444,11 @@ impl Interpreter {
         }
     }
 
+    // The call is one thing described by many parts: which model, what to
+    // ask, what to send, and what may be called back. Bundling them into a
+    // struct used once here would move the same list somewhere further from
+    // where it is read.
+    #[allow(clippy::too_many_arguments)]
     fn run_tool_loop(
         &mut self,
         model: &kora_models::ModelConfig,

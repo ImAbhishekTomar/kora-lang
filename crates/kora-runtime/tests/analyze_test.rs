@@ -275,7 +275,8 @@ fn analyze_result_field_may_be_a_declared_type() {
 
 #[test]
 fn analyze_rejects_a_type_that_refers_to_itself() {
-    let src = "type A:\n    b: B\n\ntype B:\n    a: A\n\ndef main():\n    x: A = analyze(\"d\", \"p\")\n";
+    let src =
+        "type A:\n    b: B\n\ntype B:\n    a: A\n\ndef main():\n    x: A = analyze(\"d\", \"p\")\n";
     let err = run_with_cassette("self-referential", src, vec![]).unwrap_err();
     assert!(err.contains("refers to itself"), "got: {err}");
 }

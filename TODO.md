@@ -135,6 +135,40 @@ model transport; the tool side of the same loop still had no timeout at all.
 - [x] Tighten the landing page hero, proof row, and footer spacing to match the supplied reference composition.
 - [x] Audit and refine landing navigation, syntax highlighting, execution trace, mascot presentation, viewport fit, and documentation routes.
 
+## Language and runtime status
+
+- [x] `if` / `let` / `match` / `case` — core language constructs, implemented.
+- [x] `Ok` / `Uncertain` / `Exhausted` / `Failed` — model-call outcome values.
+- [x] `analyze(...)` — implemented, blocking or streamed.
+- [x] Classified / `declassify` — label enforcement, implemented.
+- [x] `type` / `int` / `str` / `bool` — core types, implemented.
+- [x] `fs` / `csv` / `http` / `json` stdlib modules.
+- [x] `mcp` — tool-server integration (`kora-mcp` crate).
+- [x] **Token-by-token model streaming.** `answer: str = analyze(...) on
+      token(t):` hands over the answer as the model writes it, and the call
+      still returns an outcome to match on — a loop over the pieces would end
+      identically on success and on outage, which is the one failure this
+      language exists to remove. Only a `str` result streams: a declared type
+      arrives as JSON, so its pieces are syntax rather than prose. `str` is
+      therefore a result type now, carried in a one-field object so
+      `Uncertain` survives, with the refusal field written first so a watcher
+      knows which one it is reading. A stream that breaks after emitting is
+      `Failed` and is never retried, because the answer would be written
+      twice over output the program already acted on. Piece boundaries are
+      recorded to the cassette and the journal, since a handler that counts
+      them must see the same run twice. `write` is `print` without the
+      newline.
+- [ ] Streaming alongside tools, and streaming across `parallel for` — both
+      refused today rather than silently degraded. Budget metering is still
+      per call, not per token: providers report usage only when a stream
+      ends, so an in-flight call cannot be stopped at an exact ceiling.
+- [ ] SSE / `events` / `Streams` — no server-sent-events or generic event/stream
+      stdlib support yet.
+- [ ] `xml` / `yaml` stdlib modules — not implemented (only `fs`, `csv`,
+      `http`, `json`, `glob`, `re`, `sql`, `time`, `env` exist today).
+- [ ] `network` — no dedicated stdlib module beyond `http`.
+- [ ] CLI beautification — no dedicated polish pass tracked yet.
+
 ## Queue
 
 Neither is a hole in what exists; both extend it, and each waits on

@@ -318,6 +318,13 @@ pub(crate) struct DeltaPart {
     pub tokens_out: u64,
 }
 
+/// Everything one HTTP request needs, before it is sent.
+pub(crate) struct StreamRequest {
+    pub url: String,
+    pub headers: Vec<(&'static str, String)>,
+    pub body: Value,
+}
+
 /// Build the streaming request for a provider.
 ///
 /// Tools are refused rather than ignored: a streamed call that quietly
@@ -326,7 +333,7 @@ pub(crate) struct DeltaPart {
 pub(crate) fn stream_request(
     config: &ModelConfig,
     req: &AnalyzeRequest,
-) -> Result<(String, Vec<(&'static str, String)>, Value), ModelError> {
+) -> Result<StreamRequest, ModelError> {
     if !req.tools.is_empty() {
         return Err(ModelError::new(
             "a streaming analyze() cannot be given tools yet",
@@ -361,14 +368,14 @@ pub(crate) fn stream_request(
                     }
                 },
             });
-            Ok((
-                format!("{OPENAI_BASE}/chat/completions"),
-                vec![
+            Ok(StreamRequest {
+                url: format!("{OPENAI_BASE}/chat/completions"),
+                headers: vec![
                     ("Authorization", format!("Bearer {key}")),
                     ("Content-Type", "application/json".to_string()),
                 ],
                 body,
-            ))
+            })
         }
         Provider::Ollama => {
             let base = config.endpoint.as_deref().unwrap_or(OLLAMA_BASE);
@@ -379,11 +386,11 @@ pub(crate) fn stream_request(
                 "messages": messages(req, &Provider::Ollama),
                 "format": build_json_schema(&req.schema),
             });
-            Ok((
-                format!("{}/api/chat", base.trim_end_matches('/')),
-                vec![("Content-Type", "application/json".to_string())],
+            Ok(StreamRequest {
+                url: format!("{}/api/chat", base.trim_end_matches('/')),
+                headers: vec![("Content-Type", "application/json".to_string())],
                 body,
-            ))
+            })
         }
     }
 }

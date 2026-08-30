@@ -180,6 +180,7 @@ struct Checker<'a> {
 /// Names the runtime provides without a definition.
 const BUILTINS: &[&str] = &[
     "print",
+    "write",
     "len",
     "range",
     "str",
