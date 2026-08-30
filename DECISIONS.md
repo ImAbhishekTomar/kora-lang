@@ -263,6 +263,439 @@ design changes and should be deliberate.
   should agree with what really happened rather than with what the model
   asked for and didn't get.
 
+## Context engineering, phase 2
+
+**Proposed, not decided.** Everything below is a design, not a build — no
+code, syntax, or config in this section exists yet. It is recorded here,
+ahead of implementation, for the same reason the rest of this file exists:
+so the shape is argued out loud once rather than improvised per pull request.
+It follows [Anthropic's *effective context engineering for AI
+agents*](https://www.anthropic.com/engineering/effective-context-engineering-for-ai-agents):
+context is a finite, curated resource, not something to maximize; retrieval
+should be just-in-time, not front-loaded; and long-horizon agents need
+compaction, note-taking, and clean-context sub-agents.
+
+Kora already ships the compaction piece — `with
+context(max_input_tokens=N, reserve_output_tokens=N):`, a lexical fence with
+deterministic, journaled pruning that fails closed (`Exhausted("context")`)
+rather than truncating instructions or data, and never breaks label
+enforcement. What follows treats that fence as a given foundation and designs
+the four things the article calls for that Kora does not have: durable
+memory, retrieval, sub-agent handoffs with distilled returns, and curation of
+what a tool result adds back to context.
+
+### Notes before sessions, not sessions before notes
+
+Kora's shape changes what "note-taking" even means here. In the frameworks
+the article is written against, the *model* is the thing running the loop, so
+anything it should remember past a context-window compaction has to be
+written to an external file the next invocation can re-read — that is the
+entire reason note-taking exists as a pattern there. In Kora the *program* is
+the thing running the loop; `analyze()` is one stateless call inside it, and
+an ordinary local variable already survives for the program's whole lifetime,
+independent of what any one call's prompt contains. The classic problem the
+article's note-taking pattern solves is already solved by Kora's basic
+architecture. What Kora is actually missing is narrower: durability past
+*process* death, and visibility from *outside* the running process — because
+a plain variable dies with the interpreter, and nothing else can read it
+while the agent is still running.
+
+That narrower thing needs exactly one identity: which run wrote it. A
+cross-conversation, cross-user session needs a second identity: which
+*conversation* (or user, or ticket) a given fact belongs to, independent of
+which run happened to record it. The second is a strict generalization of the
+first — a session is a note store addressed by an explicit key instead of an
+implicit one.
+
+**Recommendation: build the single-key form first, generalize to the
+explicit-key form second.** The smaller primitive proves the mechanic — a
+storage tier distinct from the journal, label propagation on read and write,
+and a journaled record of what was read so replay doesn't diverge when the
+backing store keeps moving — without also having to get the harder session
+questions right on the first attempt: capability grants, key collisions
+across unrelated callers, and eviction across many keys instead of one. This
+reverses the naming order the two are usually discussed in, but not the
+dependency: sessions are notes plus an explicit key, never the other way
+around.
+
+#### Notes: a run's own scratch space, made durable and visible
+
+**The problem.** A long tool loop accumulates state — a plan, partial
+results, things learned two turns ago — that a program already holds in
+local variables. None of it survives a crash unless the whole run is
+journaled (it is, but only for *that* run's own replay), and none of it is
+readable by anything other than the running process itself — not a human
+checking progress, not a differently-invoked `kora` command.
+
+**The design.**
+
+```python
+use notes
+
+notes.write("plan", ["find sources", "check dates", "draft"])
+plan: list[str] = notes.read("plan", default=[])
+```
+
+A bare-word stdlib import, like `use fs` or `use json` — no name to give it,
+because there is exactly one notes store and it is implicit: the current
+durable run. `read`/`write` return `Ok(T)` / `Err(reason)`, the same shape as
+every other stdlib effect (`fs`, `http`, `sql`), not the four-arm outcome
+`analyze` returns — nothing here is a model call. A classified value written
+with `notes.write` keeps its label on the way back out of `notes.read`, the
+same transitivity a value already has crossing a `parallel for` boundary or a
+function return; reading old notes back into a prompt is subject to the same
+`declassify` rule as any other classified value. A value read out of notes is
+`unverified`, matching every other value that arrives from outside the
+program's own evaluation — a notes store is file- or database-backed, and
+what is on disk is not proven trustworthy merely because this program wrote
+it there once.
+
+Notes are not journaled as part of `Effect::Model` / `Effect::Tool` /
+`Effect::Human` / `Effect::Output` (`crates/kora-runtime/src/journal.rs`) —
+those exist to make *one run's* replay deterministic, and a notes store is
+explicitly meant to outlive the run that wrote it. But a `notes.read` inside
+one run **is** journaled, as a new `Effect::Memory { key, value_json }`
+variant, for the same reason `time.now()` and `random()` are effects: a
+replay must see the value the live run saw, even if another process appended
+more notes to the same store in the meantime. Without this, replay
+determinism would depend on the notes file's contents at replay time instead
+of at run time.
+
+**Rejected alternatives.**
+
+- **A special result type on `analyze()` itself** (e.g. a "scratchpad"
+  argument the runtime manages) — rejected: it would make note-taking a
+  property of one model call instead of the run, when the whole reason it is
+  needed is state that outlives many calls.
+- **No new primitive; just tell people to use `fs.write`** — rejected: a
+  plain file has no run identity, no label propagation, and no journal entry
+  to keep replay deterministic against a file that moved between the live run
+  and the replay. It would work once and be wrong the second time the file
+  changed underneath it.
+- **Automatic capture of every local variable** — rejected: implicit,
+  unbounded, and exactly the kind of ambient behavior the language avoids
+  elsewhere (no auto-parallelization, no implicit `try`/`except`). A program
+  says what it wants remembered.
+
+**Not in this slice.** Querying notes by anything other than an exact key,
+a size cap or eviction policy, encryption at rest, and reading another run's
+notes store by its run id (that is what sessions are for).
+
+#### Sessions: the same primitive, addressed by an explicit key
+
+**The problem.** An agent that should remember something about a user, a
+ticket, or a conversation *across separate runs* has no primitive at all —
+`notes` above is scoped to one run's own identity, chosen implicitly. There
+is also no capability story: unlike the root program's ambient access to
+`fs`/`http`/`sql`, a durable external store shared across every run of a
+program is closer in shape to an MCP server (a named, config-declared,
+long-lived thing outside the process) than to a bare stdlib module.
+
+**The design.**
+
+```python
+use session support as mem
+
+mem.write(ticket.id, "notes", updated_notes)
+history: list[Turn] = mem.read(ticket.id, "history", default=[])
+```
+
+```toml
+[session.support]
+backend = "sqlite"
+path = "./support.db"
+```
+
+Named the way `use mcp github as gh` is named: `support` is declared in
+`kora.toml` the way `[mcp.github]` is, and the alias (`mem`) is the runtime
+handle. Everything about `notes` carries over unchanged — `Ok`/`Err`,
+label propagation on write, `unverified` on read, and a journaled
+`Effect::Memory` entry per read — with one addition: the first argument to
+`read`/`write`/`forget` is the caller-supplied key (a `ticket.id`, a user id,
+a conversation id) that `notes` fixed to the run's own identity. `notes`
+becomes exactly `session(<current run>).read/write` with the key argument
+pre-filled — one runtime type underneath both.
+
+A package needs a grant to use one, the same as `net`/`fs`/`sql`:
+`grants = { session = ["support"] }`, naming which declared stores it may
+reach — a dependency has no ambient authority to a store any more than it
+does to the filesystem. The root program needs no grant, per the existing
+rule that the root program is unrestricted, bounded only by its own
+`kora.toml`.
+
+Eviction is explicit only, for v1: `mem.forget(key, field)`. No native TTL —
+a scheduler primitive does not exist yet (see the capability roadmap in
+[TODO.md](TODO.md), "Scheduler/cron: Build"), and syntax for automatic
+time-based expiry with no runtime mechanism to enact it would be decoration
+rather than a feature. An operational cap (`[session.support] max_records`)
+is a config-level knob enforced by the backend, surfaced as an ordinary
+`Err(reason)` when hit — not a new `Exhausted` variant, since `Exhausted`
+names a *budget* meter running out (tokens, calls, steps) and a storage quota
+is a different kind of limit wearing the same word would blur.
+
+**Rejected alternatives.**
+
+- **An implicit "current session" (thread-local or ambient context object)**
+  — rejected outright: Kora has no ambient anything — no implicit `self`, no
+  request-local state — and which store a `mem.read` reaches should be
+  visible at the call site, not inherited from an invisible context.
+- **Storing sessions inside the existing `Run`/journal** — rejected: `Run`
+  (`crates/kora-runtime/src/journal.rs`) is scoped to one process invocation's
+  own replay and keyed by an internally chosen run id; conflating it with a
+  durable, externally-keyed store would make the journal file grow across a
+  user's entire relationship with the program instead of one run, and would
+  require replay determinism to reason about a different run's history than
+  the one actually being replayed.
+- **A capability lattice keyed by store name AND field name** (e.g. grant
+  `support.notes` but not `support.history`) — deferred, not rejected: field-
+  level grants exist nowhere else in the capability model (`net`, `fs`, `sql`
+  are all-or-nothing), and introducing field-level scoping for exactly one
+  effect would be an inconsistency the rest of the grant system does not
+  share. Store-level grants match everything else; revisit only if a real
+  program needs finer scoping and the pain is concrete.
+
+**Not in this slice.** Encryption at rest, concurrent-write semantics for two
+`parallel for` branches writing the same key (today: last write wins, which
+is likely wrong and explicitly not designed here), a query language over
+stored history, cross-store queries, and automatic summarization on write —
+compaction is the context fence's job, not memory's.
+
+### Just-in-time retrieval
+
+**The problem.** Kora has no embeddings, chunking, vector index, or retrieval
+primitive of any kind today (confirmed absent from `crates/kora-runtime`,
+`crates/kora-models`, and `crates/kora-syntax`). The article's core claim —
+fetch what is needed when needed, rather than front-loading a whole corpus —
+is also the strongest existing argument for the context fence landing
+concurrently with this design: a retrieved chunk is exactly the kind of
+variable-sized, rankable content a token budget should gate before it ever
+reaches a prompt.
+
+**The design.** Four small pieces, no vector database of Kora's own yet:
+
+```python
+use vector_index docs as idx
+
+e: Embedding = embed(paragraph)                    # model-transport effect
+chunks: list[Chunk] = chunk(document, size=500, overlap=50)   # pure function
+idx.upsert(chunks)                                             # Ok/Err
+hits: list[Chunk] = idx.search(embed(query), k=5)              # Ok/Err
+```
+
+`embed(text) -> Result[Embedding]` is a model-transport effect exactly like
+`analyze` — it goes through the same provider abstraction, the same
+timeout/retry/backoff rules (`[models] max_retries`), and the same
+journaling, because it is the same kind of thing: a call to a hosted model
+that can time out, rate-limit, or 5xx. It returns `Ok`/`Failed` (no
+`Uncertain` — an embedding endpoint does not refuse, it either answers or
+does not) rather than the four-arm `analyze` outcome, because there is no
+model judgment to record as `Uncertain`.
+
+`chunk(text, size, overlap) -> list[Chunk]` is a pure function, not an
+effect — deterministic string splitting needs no journal entry, the same way
+`re` and `json` parsing are non-effectful except for the `unverified` label
+already carried by whatever text they are given.
+
+`use vector_index <name> as <alias>` is declared in `kora.toml`
+(`[vector_index.docs]`, naming a backend) the same way `use mcp <server> as
+<alias>` is — a vector store is a long-lived external thing, and package
+grants apply to it the same way (`grants = { vector_index = ["docs"] }`).
+
+A `Chunk` returned by `idx.search` is `unverified` by default — the same rule
+as `fs.read`, `http` response bodies, and model output: it is content that
+originated outside this evaluation, and a compromised or merely
+out-of-date index should not get to skip the narrowing every other external
+value needs before reaching a dangerous sink. Provenance (which document a
+chunk came from) rides as an ordinary field, `Chunk.source`, not a new label
+dimension — the label lattice is deliberately binary per axis today (see
+Parked/non-goals), and "which document" is data the program can already
+branch on, not a security property that needs its own channel.
+
+Composition with the context fence is the whole point of sequencing this
+after Slice 1: `hits` handed into `analyze()` inside `with
+context(max_input_tokens=N):` is pruned or rejected the same deterministic
+way an oversized tool-history entry already is. Retrieval needs no
+budgeting logic of its own — it is a plain producer of ordinary values that
+the fence already knows how to gate.
+
+**Rejected alternatives.**
+
+- **Build a native vector store first** (the "P3 native vector store" row in
+  [TODO.md](TODO.md)) — rejected as the *first* step, not as a destination.
+  MCP shipped tool support before Kora had any native tool ecosystem of its
+  own; the same sequencing applies here — a thin `vector_index` effect that
+  can be backed by an external process today, with a native `kora-vector`
+  backend behind the identical interface later if warranted, costs nothing
+  to defer and de-risks the effect's shape before committing to storage
+  internals.
+- **Leave retrieval entirely to MCP servers, no first-class construct** —
+  rejected as the *only* answer: MCP is the right way to reach a *specific*
+  vector database (Pinecone, Weaviate) — the same way `use mcp github`
+  coexists with the native `http` module — but leaving retrieval with no
+  language-level shape at all would forgo the provenance labeling and
+  context-fence composition that make it safe by construction, for every
+  program that uses it, not just the ones that happen to write careful MCP
+  wrappers.
+- **A new label dimension for "retrieved" or "synthetic" content** —
+  rejected: redundant with plain `unverified` plus the ordinary `source`
+  field, and the label lattice staying binary per axis is already a stated
+  non-goal to relitigate only under real pressure, which this does not
+  supply.
+
+**Not in this slice.** Any specific vector database's client, hybrid
+search or reranking, chunking heuristics tuned per document type, staleness
+or incremental re-indexing, and non-text embeddings — `embed()` here is text
+only, the same deliberate narrowness `fs.image` shipped with before video or
+audio were considered.
+
+### Sub-agent handoff with a distilled return
+
+**The problem.** The article wants a sub-agent that runs with a clean context
+window and hands back a distilled summary, so a supervisor's own context
+does not accumulate the sub-agent's entire scratch work. Kora already has two
+relevant primitives, and neither is quite this:
+
+- **Agent-as-tool** (`tools=[specialist]`) resolves through the `tools=[...]`
+  match on `FuncKind::Agent` in `crates/kora-runtime/src/interp.rs`
+  (`tool_list`), and runs through the same `call_function` a direct
+  `specialist(...)` call would — **in the caller's own heap**, synchronously,
+  by decision (see the Memory model section above): isolation exists to make
+  concurrent *threads* safe, and a tool call is one more step in the same
+  loop, not a second thread.
+- **`parallel for`** (`Interpreter::run_parallel`, same file) gives every
+  branch a fully isolated heap via a `Portable` snapshot
+  (`crates/kora-runtime/src/portable.rs`), but it is built for concurrent
+  fan-out over a collection, not a single delegated sub-task, and a branch's
+  return value is whatever it happens to `return` — no summary convention.
+
+One thing is already true by construction and needs no new design: the
+"clean context window" the article means is the *model's* prompt, and in
+Kora every `analyze()` call already builds its prompt explicitly from
+whatever `data` and instructions the program passes it — there is no ambient
+conversation state to leak from a supervisor into a specialist's call. A
+delegated agent's model calls are already clean, because nothing in Kora ever
+implicitly carries a caller's prompt history into a callee's.
+
+**The design.** What is missing is narrower than a new calling convention:
+
+1. **Distillation is a type, not a mechanism.** A specialist agent should
+   declare a narrow return type (`-> Digest`, not `-> RawTranscript`); the
+   type checker already enforces that the caller sees only the declared
+   shape. No new syntax — this is a documented convention
+   (`docs/language.md`, "Functions, agents, and tools") plus an example in
+   `examples/patterns/`, not a compiler change.
+2. **An opt-in isolated heap for an agent called through `tools=[...]`.**
+   This is the one real gap: today isolation is fixed by call site
+   (`tools=[...]` never isolates; `parallel for` always does), not by intent.
+   A supervisor delegating one expensive, stateful sub-task through
+   `tools=[...]` has no way to ask for the isolation a `parallel for` branch
+   gets, short of wrapping it in a one-item `parallel for`, which pays the
+   thread-pool machinery for something that is not concurrent.
+   Proposed: an agent that opts in at its own declaration,
+   `agent specialist(...) -> Digest: isolated`, so the effect is visible at
+   the definition rather than at every call site that happens to reach it
+   through `tools=[...]`. When called via `tools=[...]`, an `isolated` agent
+   gets a `Portable` snapshot of its arguments and its own fresh
+   `Interpreter`, the same machinery `run_parallel` already builds — one
+   worker, run inline rather than on a spawned thread, since there is
+   nothing to parallelize.
+
+**Rejected alternatives.**
+
+- **Always isolating an agent reached through `tools=[...]`** — rejected: it
+  reverses the standing decision in the Memory model section above, for the
+  majority of tool-agent calls that are cheap and share the heap on purpose;
+  isolation should be something a specialist opts into, not something every
+  caller pays for.
+- **Automatic summarization of a sub-agent's tool history, injected as its
+  return value** — rejected: this is model-generated compaction of a data
+  path, exactly the failure mode the context fence deliberately avoided by
+  choosing deterministic pruning over LLM summarization. A `Digest` should
+  come from the specialist's own explicit code (including, if it chooses, an
+  `analyze()` call it makes on purpose) — never synthesized invisibly by the
+  handoff mechanism itself.
+- **A new `handoff` statement, separate from `tools=[...]`** — rejected: it
+  would duplicate the calling convention agent-as-tool already has (same
+  `call_function`, same nested budget) for no capability beyond isolation,
+  which the smaller `isolated` declaration already buys without inventing a
+  second way to call an agent.
+
+**Not in this slice.** Ownership transfer or supervision semantics (tracked
+separately in [TODO.md](TODO.md), "Multi-agent/handoffs: Partial"), mid-call
+cancellation of a delegated agent, and cross-process or distributed handoff
+("Distributed agents: Build").
+
+### Curating a tool result before it re-enters context
+
+**The problem.** `analyze(..., tools=[...]) on tool_call(name, args):`
+(`crates/kora-syntax/src/ast.rs`, `ToolCallHandler`;
+`crates/kora-runtime/src/interp.rs`, `run_tool_call_handler`) watches a call
+**before** it runs — a program can approve, rewrite, or substitute for a
+call the model is about to make. It has no visibility into what the tool
+**returned**, which is exactly the moment the article's "just enough, right
+when needed" principle applies to what feeds back into the loop: a giant
+file read, a verbose API response, or a result containing something that
+should never reach the model's context unredacted all need to be inspected
+*after* the tool runs and *before* the result is appended to tool history.
+
+**The design.** A second, symmetric hook:
+
+```python
+t: Ticket = analyze(raw, "triage this", tools=[search_kb]) on tool_result(name, args, result):
+    if name == "search_kb" and len(result.body) > 2000:
+        return truncate(result.body, 2000)
+```
+
+`on tool_result(name, args, result):` runs once per tool call, after the
+tool executes and before its result is recorded to tool history. `result` is
+a mutable value of the tool's declared return type, edited the same way
+`args` is edited in `on tool_call` — ordinary field assignment, no new
+syntax. `return <T>` (matching the tool's own declared return type, not
+hardcoded to `str`) replaces the result outright. The existing rule that a
+rewritten call's *actual arguments* are what the tool history records gets a
+mirror: a rewritten *result* is what the tool history and journal record —
+the same reasoning, that any trace of the run should agree with what really
+happened, not with what the tool originally answered.
+
+Both hooks may be attached to the same call — they watch two different
+moments of one tool loop and do not conflict, unlike the streaming handler
+which is mutually exclusive with tools by construction (`str` results don't
+take tools; typed results with tools don't stream):
+
+```python
+analyze(raw, "...", tools=[search_kb])
+    on tool_call(name, args):
+        print(f"calling {name}")
+    on tool_result(name, args, result):
+        result.body = redact(result.body)
+```
+
+**Rejected alternatives.**
+
+- **One handler that sees both phases** (e.g. `result` is `None` before the
+  call and populated after) — rejected: `args` and `result` are different
+  types with different mutation targets, and telling the two phases apart by
+  checking whether a field is `None` is exactly the kind of implicit
+  mode-switch the language avoids elsewhere (see the guard/`case` design,
+  which forces separate arms rather than an implicit fallthrough).
+- **Curation lives entirely inside the tool's own body** — rejected as the
+  *only* mechanism: it works for a tool the program wrote, but an MCP tool is
+  opaque, and result curation is a caller-side policy (redact before history,
+  truncate a huge fetch) that should not require forking or wrapping every
+  third-party tool to enforce.
+- **Fold curation into the context fence instead of a hook** — rejected as
+  the *only* answer, though the two are complementary: the fence prunes
+  deterministically by token budget once history exists, but it has no way
+  to redact one field or replace one tool's result with a one-line digest —
+  that decision needs the tool's name and arguments, which only a per-call
+  hook has. The hook does semantic, per-tool curation; the fence does the
+  token-budget-driven pruning of whatever the hook lets through.
+
+**Not in this slice.** Retrying a tool call from inside the result hook,
+curating results for an MCP tool beyond its declared JSON shape, and any
+curation the program's own handler code did not explicitly perform — nothing
+here redacts on the program's behalf.
+
 ## Security labels
 
 - `classified` (confidentiality, transitive through all operations,
