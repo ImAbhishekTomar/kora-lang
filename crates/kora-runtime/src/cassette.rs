@@ -47,6 +47,16 @@ pub enum RecordedOutcome {
         fields: serde_json::Map<String, serde_json::Value>,
         tokens_in: u64,
         tokens_out: u64,
+        /// The answer as it was written, piece by piece, when the call
+        /// streamed. Empty for an ordinary call.
+        ///
+        /// Recorded because the boundaries are observable: an `on token`
+        /// handler that counts pieces, or writes a separator between them,
+        /// gives a different answer for the same text delivered in one lump.
+        /// Defaulted so cassettes recorded before streaming existed still
+        /// load, replaying as a single piece.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        chunks: Vec<String>,
     },
     Uncertain {
         reason: String,
@@ -220,6 +230,7 @@ mod tests {
                 fields: serde_json::Map::new(),
                 tokens_in: 5,
                 tokens_out: 7,
+                chunks: Vec::new(),
             },
         }
     }

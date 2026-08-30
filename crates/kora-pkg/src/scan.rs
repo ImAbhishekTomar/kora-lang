@@ -77,9 +77,15 @@ fn walk(stmts: &[Stmt], include_tests: bool, out: &mut Imports) {
                 }
             }
             StmtKind::BindOrElse { else_body, .. } => walk(else_body, include_tests, out),
+            // `on token(t):` has a body like any other block, so it can hide
+            // an import the same way a loop or a match arm can.
+            StmtKind::Assign {
+                on_token: Some(handler),
+                ..
+            } => walk(&handler.body, include_tests, out),
 
-            // Statements with no body cannot hide an import.
-            StmtKind::Assign { .. }
+            // Every other statement has no body and cannot hide an import.
+            StmtKind::Assign { on_token: None, .. }
             | StmtKind::AugAssign { .. }
             | StmtKind::Expr(_)
             | StmtKind::TypeDef { .. }

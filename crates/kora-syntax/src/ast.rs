@@ -22,6 +22,13 @@ pub enum StmtKind {
         value: Expr,
         /// Declared with `classified`, so the bound value carries the label.
         classified: bool,
+        /// `answer: str = analyze(...) on token(t):` — a block run for each
+        /// piece of the answer as the model writes it.
+        ///
+        /// It hangs off the assignment rather than replacing it because the
+        /// call still returns an outcome to match on. Watching a stream and
+        /// getting an answer are two things one call does, not two calls.
+        on_token: Option<TokenHandler>,
     },
     /// `x += expr` and friends (desugared op stored explicitly)
     AugAssign {
@@ -241,6 +248,15 @@ pub struct BudgetSpec {
 pub struct Param {
     pub name: String,
     pub ty: Option<TypeExpr>,
+    pub span: Span,
+}
+
+/// The `on token(t):` block of a streaming `analyze()` call.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TokenHandler {
+    /// Name bound to each piece of the answer inside the block.
+    pub var: String,
+    pub body: Vec<Stmt>,
     pub span: Span,
 }
 

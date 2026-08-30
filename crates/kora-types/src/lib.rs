@@ -580,7 +580,11 @@ impl Checker<'_> {
     fn check_stmt(&mut self, stmt: &Stmt) {
         match &stmt.kind {
             StmtKind::Assign {
-                target, ty, value, ..
+                target,
+                ty,
+                value,
+                on_token,
+                ..
             } => {
                 self.check_expr(value);
                 if let Some(ty) = ty {
@@ -592,6 +596,12 @@ impl Checker<'_> {
                         kind: other.clone(),
                         span: target.span,
                     }),
+                }
+                // The handler's variable outlives the block, like a loop
+                // variable, since Kora scopes only at function boundaries.
+                if let Some(handler) = on_token {
+                    self.declare(&handler.var);
+                    self.nested(&handler.body);
                 }
             }
             StmtKind::AugAssign { target, value, .. } => {

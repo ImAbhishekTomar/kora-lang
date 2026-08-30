@@ -308,6 +308,129 @@ fn ollama(
     parse_response(content, &req.schema, tokens_in, tokens_out).map(Step::Done)
 }
 
+/// One piece of a streamed response.
+#[derive(Debug, Default, PartialEq)]
+pub(crate) struct DeltaPart {
+    /// New characters of the assistant message, if this line carried any.
+    pub text: String,
+    /// Usage, which both providers report only once, at the end.
+    pub tokens_in: u64,
+    pub tokens_out: u64,
+}
+
+/// Build the streaming request for a provider.
+///
+/// Tools are refused rather than ignored: a streamed call that quietly
+/// dropped the tools it was given would answer without them and look like it
+/// had simply chosen not to call any.
+pub(crate) fn stream_request(
+    config: &ModelConfig,
+    req: &AnalyzeRequest,
+) -> Result<(String, Vec<(&'static str, String)>, Value), ModelError> {
+    if !req.tools.is_empty() {
+        return Err(ModelError::new(
+            "a streaming analyze() cannot be given tools yet",
+        ));
+    }
+    match config.provider {
+        Provider::OpenAI => {
+            let key = config
+                .api_key
+                .clone()
+                .or_else(|| std::env::var("OPENAI_API_KEY").ok())
+                .filter(|k| !k.trim().is_empty())
+                .ok_or_else(|| {
+                    ModelError::new(
+                        "OPENAI_API_KEY not set (export it, or set api_key in kora.toml)",
+                    )
+                })?;
+            let body = json!({
+                "model": config.model,
+                "max_completion_tokens": config.max_output_tokens,
+                "messages": messages(req, &Provider::OpenAI),
+                "stream": true,
+                // Usage is omitted from a stream unless it is asked for, and
+                // a call whose cost is unknown cannot be charged to a budget.
+                "stream_options": {"include_usage": true},
+                "response_format": {
+                    "type": "json_schema",
+                    "json_schema": {
+                        "name": sanitize_schema_name(&req.schema.type_name),
+                        "strict": true,
+                        "schema": build_json_schema(&req.schema),
+                    }
+                },
+            });
+            Ok((
+                format!("{OPENAI_BASE}/chat/completions"),
+                vec![
+                    ("Authorization", format!("Bearer {key}")),
+                    ("Content-Type", "application/json".to_string()),
+                ],
+                body,
+            ))
+        }
+        Provider::Ollama => {
+            let base = config.endpoint.as_deref().unwrap_or(OLLAMA_BASE);
+            let body = json!({
+                "model": config.model,
+                "stream": true,
+                "options": {"num_predict": config.max_output_tokens},
+                "messages": messages(req, &Provider::Ollama),
+                "format": build_json_schema(&req.schema),
+            });
+            Ok((
+                format!("{}/api/chat", base.trim_end_matches('/')),
+                vec![("Content-Type", "application/json".to_string())],
+                body,
+            ))
+        }
+    }
+}
+
+/// Turn one line of a streamed body into the text and usage it carried.
+///
+/// A line that means nothing to us — a keep-alive, OpenAI's `[DONE]`, a
+/// chunk with an empty delta — is not an error. Providers send plenty of
+/// them, and treating an unrecognised line as a failure would make the
+/// stream break on the first thing either of them adds.
+pub(crate) fn parse_delta(provider: &Provider, payload: &str) -> Result<DeltaPart, ModelError> {
+    if payload == "[DONE]" {
+        return Ok(DeltaPart::default());
+    }
+    let value: Value = serde_json::from_str(payload).map_err(|e| {
+        ModelError::new(format!(
+            "streamed line was not JSON ({e}): {}",
+            truncate(payload, 200)
+        ))
+    })?;
+
+    // An error delivered mid-stream, which both providers do instead of a
+    // non-200 once the response has started.
+    if let Some(message) = value["error"]["message"].as_str() {
+        return Err(ModelError::new(format!("provider reported: {message}")));
+    }
+
+    Ok(match provider {
+        Provider::OpenAI => DeltaPart {
+            text: value["choices"][0]["delta"]["content"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            tokens_in: value["usage"]["prompt_tokens"].as_u64().unwrap_or(0),
+            tokens_out: value["usage"]["completion_tokens"].as_u64().unwrap_or(0),
+        },
+        Provider::Ollama => DeltaPart {
+            text: value["message"]["content"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string(),
+            tokens_in: value["prompt_eval_count"].as_u64().unwrap_or(0),
+            tokens_out: value["eval_count"].as_u64().unwrap_or(0),
+        },
+    })
+}
+
 /// OpenAI requires schema names to match `^[a-zA-Z0-9_-]+$`.
 fn sanitize_schema_name(name: &str) -> String {
     let cleaned: String = name
@@ -391,12 +514,22 @@ fn jitter_ms(base: u64) -> u64 {
     nanos % (base / 4).max(1)
 }
 
+/// The backoff a streaming attempt waits, in milliseconds.
+///
+/// Shared with the blocking path so the two do not drift into arguing about
+/// how long a 429 is worth. A streaming request has no `Retry-After` to
+/// honour, because it is only ever retried before a response began.
+pub(crate) fn retry_base_delay(attempt: u32) -> u64 {
+    let base = RETRY_BASE_MS.saturating_mul(1 << (attempt - 1).min(5));
+    base + jitter_ms(base)
+}
+
 /// Whether waiting could plausibly change the answer, and for how long.
 ///
 /// 408, 409, 429 and every 5xx are the provider saying "not now". Everything
 /// else in the 4xx range is the request itself being wrong, and a retry only
 /// wastes the caller's time twice.
-fn retryable_status(code: u16) -> bool {
+pub(crate) fn retryable_status(code: u16) -> bool {
     matches!(code, 408 | 409 | 429) || (500..600).contains(&code)
 }
 
@@ -468,6 +601,7 @@ mod tests {
                     pattern: None,
                 },
             ],
+            text: false,
         }
     }
 

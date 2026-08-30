@@ -119,13 +119,17 @@ impl Parser {
                 };
                 return self.bind_or_else(name, Some(ty), value, false, span);
             }
-            self.expect_newline("assignment")?;
+            let on_token = self.token_handler()?;
+            if on_token.is_none() {
+                self.expect_newline("assignment")?;
+            }
             return Ok(Stmt {
                 kind: StmtKind::Assign {
                     target: expr,
                     ty: Some(ty),
                     value,
                     classified: false,
+                    on_token,
                 },
                 span,
             });
@@ -169,6 +173,7 @@ impl Parser {
                     ty: None,
                     value,
                     classified: false,
+                    on_token: None,
                 },
                 span,
             });
@@ -592,6 +597,7 @@ impl Parser {
                 ty,
                 value,
                 classified: true,
+                on_token: None,
             },
             span,
         })
@@ -1041,6 +1047,33 @@ impl Parser {
     }
 
     /// `: NEWLINE INDENT stmt+ DEDENT`
+    /// `on token(t):` after an annotated assignment, if it is there.
+    ///
+    /// `on` is contextual, like `with`: it is only a keyword directly before
+    /// `token`, so a program that already uses `on` as a variable keeps
+    /// working. Nothing else may follow the assignment, so a mistyped
+    /// handler name is reported here rather than as a stray expression on
+    /// the next line.
+    fn token_handler(&mut self) -> Result<Option<TokenHandler>, SyntaxError> {
+        let is_on = matches!(self.peek_kind(), TokenKind::Ident(name) if name == "on");
+        if !is_on {
+            return Ok(None);
+        }
+        let span = self.peek_span();
+        let followed_by_token =
+            matches!(self.peek_next_kind(), Some(TokenKind::Ident(n)) if n == "token");
+        if !followed_by_token {
+            return Ok(None);
+        }
+        self.advance();
+        self.advance();
+        self.expect(&TokenKind::LParen, "expected `(` after `on token`")?;
+        let var = self.expect_ident("a name for each piece of the answer")?;
+        self.expect(&TokenKind::RParen, "expected `)` after the handler name")?;
+        let body = self.block("the `on token` handler")?;
+        Ok(Some(TokenHandler { var, body, span }))
+    }
+
     fn block(&mut self, what: &str) -> Result<Vec<Stmt>, SyntaxError> {
         self.expect(&TokenKind::Colon, &format!("expected `:` to start {what}"))?;
         self.expect(&TokenKind::Newline, "expected newline after `:`")?;
@@ -1442,6 +1475,10 @@ impl Parser {
 
     fn peek_span(&self) -> Span {
         self.tokens[self.pos.min(self.tokens.len() - 1)].span
+    }
+
+    fn peek_next_kind(&self) -> Option<&TokenKind> {
+        self.tokens.get(self.pos + 1).map(|t| &t.kind)
     }
 
     fn peek_next_is(&self, kind: &TokenKind) -> bool {
