@@ -15,6 +15,7 @@ and the constructs Python has no equivalent for.
 - [Control flow](#control-flow)
 - [Functions, agents, and tools](#functions-agents-and-tools)
 - [Model calls](#model-calls)
+- [Context policies](#context-policies)
 - [Outcomes and `match`](#outcomes-and-match)
 - [Chaining outcomes with `else`](#chaining-outcomes-with-else)
 - [Parallelism](#parallelism)
@@ -222,6 +223,22 @@ With tools the model may call:
 ```python
 t: Ticket = analyze(raw, "classify this ticket", tools=[priority_for])
 ```
+
+### Context policies
+
+Use a lexical context policy to keep a tool loop's request focused. It is
+separate from `budget`: it limits estimated request size, not provider spend.
+
+```kora
+with context(max_input_tokens = 12_000, reserve_output_tokens = 2_000):
+    result: Insight = analyze(data, "investigate the discrepancy", tools=[lookup])
+```
+
+Kora keeps the newest complete tool exchanges that fit after reserving output
+space. It never clips prompts, data, or a tool exchange, and returns
+`Failed(reason)` when the base request cannot fit. Tool output is untrusted
+data, not a trusted instruction. Its envelope and the system contract reduce
+instruction confusion, but they are not a prompt-injection security boundary.
 
 ### Choosing a model
 

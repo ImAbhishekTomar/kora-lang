@@ -131,6 +131,7 @@ fn count_declassify(stmts: &[kora_syntax::ast::Stmt]) -> usize {
             | StmtKind::ParallelFor { body, .. }
             | StmtKind::WithMock { body, .. }
             | StmtKind::WithBudget { body, .. }
+            | StmtKind::WithContext { body, .. }
             | StmtKind::Test { body, .. } => total += count_declassify(body),
             StmtKind::FuncDef(def) => total += count_declassify(&def.body),
             StmtKind::Match { arms, .. } => {

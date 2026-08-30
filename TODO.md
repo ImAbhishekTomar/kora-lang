@@ -144,6 +144,14 @@ model transport; the tool side of the same loop still had no timeout at all.
 - [x] `type` / `int` / `str` / `bool` — core types, implemented.
 - [x] `fs` / `csv` / `http` / `json` stdlib modules.
 - [x] `mcp` — tool-server integration (`kora-mcp` crate).
+- [x] **Lexical context policy.** `with context(max_input_tokens = N,
+      reserve_output_tokens = N):` deterministically bounds model request
+      context without spending from the lexical `budget`. It retains newest
+      whole tool exchanges and fails rather than clipping base prompt or data.
+- [ ] **Prompt-injection resilience.** Tool output is attributed as untrusted
+      data before a later model turn. Delimiters reduce confusion but are not
+      a security boundary; add explicit tool-call policies, bounded result
+      projections, provenance, and adversarial MCP/retrieval tests.
 - [x] **Token-by-token model streaming.** `answer: str = analyze(...) on
       token(t):` hands over the answer as the model writes it, and the call
       still returns an outcome to match on — a loop over the pieces would end
@@ -168,6 +176,20 @@ model transport; the tool side of the same loop still had no timeout at all.
       `http`, `json`, `glob`, `re`, `sql`, `time`, `env` exist today).
 - [ ] `network` — no dedicated stdlib module beyond `http`.
 - [ ] CLI beautification — no dedicated polish pass tracked yet.
+
+### Context engineering delivery order
+
+- [x] Bound short-term tool-loop context with a lexical policy, whole-exchange
+      retention, conservative deterministic estimation, and untrusted-result
+      attribution.
+- [ ] Add explicit tool-call policies, bounded result projections, provenance,
+      and adversarial prompt-injection tests.
+- [ ] Add durable structured notes, then compaction with labels, provenance,
+      and replay semantics.
+- [ ] Add just-in-time retrieval references and bounded excerpts before
+      embeddings or a vector store.
+- [ ] Add typed handoff contracts that transfer a compact brief and references,
+      not raw agent history.
 
 ## Queue
 

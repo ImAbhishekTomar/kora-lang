@@ -145,6 +145,11 @@ pub enum StmtKind {
         budget: BudgetSpec,
         body: Vec<Stmt>,
     },
+    /// `with context(max_input_tokens = N):` — a scoped context-window fence.
+    WithContext {
+        context: ContextSpec,
+        body: Vec<Stmt>,
+    },
     Break,
     Continue,
     Pass,
@@ -241,6 +246,14 @@ pub struct BudgetSpec {
     pub max_tokens: Option<u64>,
     pub max_calls: Option<u64>,
     pub max_steps: Option<u64>,
+    pub span_line: u32,
+}
+
+/// `with context(max_input_tokens = 12_000, reserve_output_tokens = 1_000):`
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct ContextSpec {
+    pub max_input_tokens: Option<u64>,
+    pub reserve_output_tokens: Option<u64>,
     pub span_line: u32,
 }
 

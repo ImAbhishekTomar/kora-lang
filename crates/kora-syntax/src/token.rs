@@ -67,6 +67,7 @@ pub enum TokenKind {
     Mock,
     Assert,
     Budget,
+    Context,
     Parallel,
 
     // Operators
@@ -147,6 +148,7 @@ impl fmt::Display for TokenKind {
             Mock => write!(f, "mock"),
             Assert => write!(f, "assert"),
             Budget => write!(f, "budget"),
+            Context => write!(f, "context"),
             Parallel => write!(f, "parallel"),
             Plus => write!(f, "+"),
             Minus => write!(f, "-"),

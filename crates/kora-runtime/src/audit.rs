@@ -144,6 +144,7 @@ fn walk_stmt(stmt: &Stmt, file: &str, out: &mut Vec<DeclassifySite>) {
         | StmtKind::For { body, .. }
         | StmtKind::ParallelFor { body, .. }
         | StmtKind::WithBudget { body, .. }
+        | StmtKind::WithContext { body, .. }
         | StmtKind::WithMock { body, .. }
         | StmtKind::Test { body, .. } => walk_stmts(body, file, out),
         StmtKind::Match { arms, .. } => {

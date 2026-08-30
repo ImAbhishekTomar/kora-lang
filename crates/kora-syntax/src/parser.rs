@@ -48,6 +48,9 @@ impl Parser {
             TokenKind::Ident(name) if name == "with" && self.peek_next_is(&TokenKind::Budget) => {
                 self.with_stmt()
             }
+            TokenKind::Ident(name) if name == "with" && self.peek_next_is(&TokenKind::Context) => {
+                self.with_context()
+            }
             TokenKind::Ident(name) if name == "with" && self.peek_next_is(&TokenKind::Mock) => {
                 self.with_mock()
             }
@@ -716,6 +719,80 @@ impl Parser {
             kind: StmtKind::WithBudget { budget, body },
             span,
         })
+    }
+
+    /// `with context(max_input_tokens = N, reserve_output_tokens = N):` block.
+    fn with_context(&mut self) -> Result<Stmt, SyntaxError> {
+        let span = self.peek_span();
+        self.advance(); // `with` (an identifier, not a keyword)
+        self.expect(&TokenKind::Context, "expected `context` after `with`")?;
+        self.expect(&TokenKind::LParen, "expected `(` after `context`")?;
+        let context = self.context_fields(span.line, &[TokenKind::RParen])?;
+        self.expect(&TokenKind::RParen, "expected `)` to close context")?;
+        let body = self.block("context block")?;
+        Ok(Stmt {
+            kind: StmtKind::WithContext { context, body },
+            span,
+        })
+    }
+
+    /// `name = value, name = value` until one of `terminators` is reached.
+    fn context_fields(
+        &mut self,
+        line: u32,
+        terminators: &[TokenKind],
+    ) -> Result<ContextSpec, SyntaxError> {
+        let mut spec = ContextSpec {
+            span_line: line,
+            ..Default::default()
+        };
+        let mut seen_any = false;
+        loop {
+            if terminators.iter().any(|t| self.check(t)) {
+                break;
+            }
+            let field_span = self.peek_span();
+            let field = self.expect_ident("a context field name")?;
+            self.expect(&TokenKind::Eq, "expected `=` after context field")?;
+            let value_span = self.peek_span();
+            let value = match self.peek_kind().clone() {
+                TokenKind::Int(v) if v >= 0 => {
+                    self.advance();
+                    v as u64
+                }
+                other => {
+                    return Err(SyntaxError::new(
+                        format!("context values must be whole numbers, found `{other}`"),
+                        value_span,
+                    )
+                    .with_hint("context limits are counted in tokens"));
+                }
+            };
+            match field.as_str() {
+                "max_input_tokens" => spec.max_input_tokens = Some(value),
+                "reserve_output_tokens" => spec.reserve_output_tokens = Some(value),
+                other => {
+                    return Err(SyntaxError::new(
+                        format!("unknown context field `{other}`"),
+                        field_span,
+                    )
+                    .with_hint("known fields: max_input_tokens, reserve_output_tokens"));
+                }
+            }
+            seen_any = true;
+            if self.check(&TokenKind::Comma) {
+                self.advance();
+            } else {
+                break;
+            }
+        }
+        if !seen_any {
+            return Err(
+                SyntaxError::new("context needs at least one limit", self.peek_span())
+                    .with_hint("for example: `with context(max_input_tokens = 12_000):`"),
+            );
+        }
+        Ok(spec)
     }
 
     /// `parallel for x in xs:` — optionally bound as `results = parallel for ...`
@@ -1721,6 +1798,48 @@ mod tests {
             p.items[0].kind,
             StmtKind::AugAssign { op: BinOp::Add, .. }
         ));
+    }
+
+    #[test]
+    fn context_block_parses_limits_and_body() {
+        let p = ok(
+            "with context(max_input_tokens = 12_000, reserve_output_tokens = 1_000):\n    answer = 1\n",
+        );
+        let StmtKind::WithContext { context, body } = &p.items[0].kind else {
+            panic!("expected context block");
+        };
+        assert_eq!(context.max_input_tokens, Some(12_000));
+        assert_eq!(context.reserve_output_tokens, Some(1_000));
+        assert_eq!(body.len(), 1);
+    }
+
+    #[test]
+    fn context_block_accepts_each_limit_independently() {
+        let p = ok("with context(max_input_tokens = 12_000):\n    pass\n");
+        let StmtKind::WithContext { context, .. } = &p.items[0].kind else {
+            panic!("expected context block");
+        };
+        assert_eq!(context.max_input_tokens, Some(12_000));
+        assert_eq!(context.reserve_output_tokens, None);
+    }
+
+    #[test]
+    fn context_block_rejects_unknown_fields() {
+        let err = parse("with context(max_tokens = 12_000):\n    pass\n").unwrap_err();
+        assert!(err.message.contains("unknown context field `max_tokens`"));
+        assert!(err.hint.unwrap().contains("max_input_tokens"));
+    }
+
+    #[test]
+    fn context_block_rejects_non_integer_and_empty_limits() {
+        let non_integer =
+            parse("with context(max_input_tokens = \"many\"):\n    pass\n").unwrap_err();
+        assert!(non_integer
+            .message
+            .contains("context values must be whole numbers"));
+
+        let empty = parse("with context():\n    pass\n").unwrap_err();
+        assert!(empty.message.contains("context needs at least one limit"));
     }
 
     #[test]

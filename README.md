@@ -29,9 +29,13 @@ def main():
   fans out across all cores. Safe because agents share nothing.
 - **`classified` / `declassify`** — sensitive data cannot reach a model
   unless explicitly declassified for a named sink, checked at compile time.
-  Prompt-injection-relevant flows become compile errors.
+  This controls data disclosure; it does not make untrusted text safe to
+  follow as instructions.
 - **Native budgets** — token-denominated, lexically scoped, shared across
   parallel work. Exhaustion is a value, not a crash; partial work survives.
+- **Lexical context policies** — `with context(...)` bounds model input
+  independently of spend budgets, keeps only whole recent tool exchanges, and
+  fails rather than silently truncating base prompt or data.
 - **Typed model calls** — `analyze(data, "prompt")` returns your declared
   type or an explicit `Uncertain`. No raw-string parsing, no confidence theater.
 - **An outage is a value too** — model calls retry with backoff, and a

@@ -734,7 +734,9 @@ impl Checker<'_> {
                 self.declare(binding);
                 self.nested(body);
             }
-            StmtKind::WithBudget { body, .. } => self.nested(body),
+            StmtKind::WithBudget { body, .. } | StmtKind::WithContext { body, .. } => {
+                self.nested(body)
+            }
             StmtKind::WithMock { result, body, .. } => {
                 self.check_expr(result);
                 self.nested(body);
@@ -1078,6 +1080,7 @@ fn diverges(body: &[Stmt]) -> bool {
             !arms.is_empty() && arms.iter().all(|arm| diverges(&arm.body))
         }
         StmtKind::WithBudget { body, .. }
+        | StmtKind::WithContext { body, .. }
         | StmtKind::WithMock { body, .. }
         | StmtKind::Declassify { body, .. } => diverges(body),
         _ => false,

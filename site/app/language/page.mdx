@@ -58,6 +58,21 @@ match result:
         print(f"No clear answer: {reason}")
 ```
 
+## Context policies
+
+`with context(...)` keeps tool-loop requests focused without becoming a second
+spend budget. It estimates input size, reserves space for the answer, and keeps
+only the newest whole tool exchanges that fit.
+
+```kora
+with context(max_input_tokens = 12_000, reserve_output_tokens = 2_000):
+    result: Report = analyze(case_file, "review the evidence", tools=[lookup])
+```
+
+Kora never silently trims prompt or data. If the base request cannot fit, the
+call returns `Failed(reason)`. Tool output remains untrusted data. Its envelope
+reduces instruction confusion, but it is not a prompt-injection boundary.
+
 ## The file and the entry point
 
 Kora files end in `.ko`. A program starts at `main()` when it is defined.

@@ -147,6 +147,32 @@ enum Flow {
 /// One lexical scope frame.
 type Scope = HashMap<String, Value>;
 
+/// A lexical admission policy for model context. It is intentionally separate
+/// from `Budget`: this bounds what one request may carry, while `Budget`
+/// charges what a provider actually consumed.
+#[derive(Debug, Clone, Default)]
+struct ContextPolicy {
+    max_input_tokens: Option<u64>,
+    reserve_output_tokens: u64,
+}
+
+impl ContextPolicy {
+    fn nested(&self, spec: &ContextSpec) -> ContextPolicy {
+        ContextPolicy {
+            max_input_tokens: match (self.max_input_tokens, spec.max_input_tokens) {
+                (Some(outer), Some(inner)) => Some(outer.min(inner)),
+                (Some(outer), None) => Some(outer),
+                (None, Some(inner)) => Some(inner),
+                (None, None) => None,
+            },
+            // A nested block may reserve more of the same window, never less.
+            reserve_output_tokens: self
+                .reserve_output_tokens
+                .max(spec.reserve_output_tokens.unwrap_or(0)),
+        }
+    }
+}
+
 pub struct Interpreter {
     /// Top-level names of the module currently executing. Swapped out with
     /// `modules[current_module].names` whenever execution crosses a file
@@ -186,6 +212,8 @@ pub struct Interpreter {
     pub model_calls: u64,
     /// Budget in force at the current point of execution.
     pub budget: Budget,
+    /// Context-window admission policy in force at the current point.
+    context: ContextPolicy,
     /// How many worker threads `parallel for` may use at once.
     pub max_workers: usize,
     /// Which sinks may receive which labels, from `[sinks]` in kora.toml.
@@ -300,6 +328,7 @@ impl Interpreter {
             tokens_out: 0,
             model_calls: 0,
             budget: Budget::unlimited(),
+            context: ContextPolicy::default(),
             max_workers: std::thread::available_parallelism()
                 .map(|n| n.get())
                 .unwrap_or(4),
@@ -747,6 +776,13 @@ impl Interpreter {
                 self.budget = outer.nested(budget);
                 let result = self.exec_block(body, scope);
                 self.budget = outer;
+                result
+            }
+            StmtKind::WithContext { context, body } => {
+                let outer = self.context.clone();
+                self.context = outer.nested(context);
+                let result = self.exec_block(body, scope);
+                self.context = outer;
                 result
             }
             StmtKind::ParallelFor {
@@ -3069,6 +3105,7 @@ impl Interpreter {
         let program_name = self.program_name.clone();
         let body: Vec<Stmt> = body.to_vec();
         let budget = self.budget.clone();
+        let context = self.context.clone();
         // Crosses the thread boundary as data, like everything else a worker
         // is seeded with.
         let mocked_analyze: Vec<Portable> = self
@@ -3111,6 +3148,7 @@ impl Interpreter {
                         &sinks,
                         &program_name,
                         &budget,
+                        &context,
                         &mocked_analyze,
                         cassette.as_ref(),
                         &journal,
@@ -3197,6 +3235,7 @@ fn run_one(
     sinks: &SinkPolicy,
     program_name: &str,
     budget: &Budget,
+    context: &ContextPolicy,
     mocked_analyze: &[Portable],
     cassette: Option<&Arc<Mutex<Cassette>>>,
     journal: &Arc<Mutex<Journal>>,
@@ -3216,6 +3255,7 @@ fn run_one(
     interp.sinks = sinks.clone();
     interp.program_name = program_name.to_string();
     interp.budget = budget.clone();
+    interp.context = context.clone();
     // A mock is part of the test that set it up, and a `parallel for` inside
     // that test is still inside it. Without this the fan-out reaches for a
     // real model, which makes the one path most worth testing the one path
@@ -3404,6 +3444,25 @@ impl Interpreter {
             tools: Vec::new(),
             tool_history: Vec::new(),
         };
+        if let Some(max_input_tokens) = self.context.max_input_tokens {
+            match kora_models::prune_tool_history(
+                &request,
+                max_input_tokens,
+                self.context.reserve_output_tokens,
+            ) {
+                Ok((_, plan)) => self.trace_context_plan(&plan),
+                Err(reason) => {
+                    return Ok((
+                        AnalyzeOutcome::Failed {
+                            reason,
+                            tokens_in: 0,
+                            tokens_out: 0,
+                        },
+                        Vec::new(),
+                    ));
+                }
+            }
+        }
 
         let mut chunks: Vec<String> = Vec::new();
         let mut handler_error: Option<RuntimeError> = None;
@@ -3481,7 +3540,7 @@ impl Interpreter {
                     span,
                 ));
             }
-            let request = AnalyzeRequest {
+            let mut request = AnalyzeRequest {
                 prompt: prompt.to_string(),
                 data_json: data_text.to_string(),
                 images: parts.clone(),
@@ -3489,6 +3548,25 @@ impl Interpreter {
                 tools: tools.to_vec(),
                 tool_history: history.clone(),
             };
+            if let Some(max_input_tokens) = self.context.max_input_tokens {
+                match kora_models::prune_tool_history(
+                    &request,
+                    max_input_tokens,
+                    self.context.reserve_output_tokens,
+                ) {
+                    Ok((history, plan)) => {
+                        request.tool_history = history;
+                        self.trace_context_plan(&plan);
+                    }
+                    Err(reason) => {
+                        return Ok(AnalyzeOutcome::Failed {
+                            reason,
+                            tokens_in: 0,
+                            tokens_out: 0,
+                        });
+                    }
+                }
+            }
             // A provider that does not answer is an outcome, not a crash.
             // The transport has already retried whatever was worth retrying,
             // so reaching here means the failure outlasted the backoff -- and
@@ -3597,6 +3675,31 @@ impl Interpreter {
         }
 
         let result = self.call_function(&func, home, args, span)?;
+        // A Kora tool's result becomes part of the next model request. That
+        // is a model sink exactly as much as the original `analyze` data is;
+        // otherwise a helper could launder a classified value through the
+        // closed tool loop.
+        let label = self.deep_label(&result);
+        if label.is_classified() {
+            let sink = self.model_sink_name();
+            if !label.may_reach(&sink) {
+                return Err(RuntimeError::new(
+                    format!(
+                        "classified result of tool `{name}` cannot reach model sink `{sink}` (no declassify in scope)"
+                    ),
+                    span,
+                )
+                .with_hint(format!(
+                    "declassify the tool result for `{sink}` before returning it"
+                )));
+            }
+            if !self.sinks.permits(&sink, label) {
+                return Err(RuntimeError::new(
+                    format!("policy forbids tool `{name}` returning classified data to model sink `{sink}`"),
+                    span,
+                ));
+            }
+        }
         Ok(ToolRun::Result(
             serde_json::to_string(&value_to_json(&result)).unwrap_or_else(|_| "null".to_string()),
         ))
@@ -4697,6 +4800,42 @@ impl Interpreter {
 }
 
 impl Interpreter {
+    /// Context admission is observable without exporting any prompt or tool
+    /// content. Counts make pruning explainable while labels still protect
+    /// the values that led to the plan.
+    fn trace_context_plan(&mut self, plan: &kora_models::ContextPlan) {
+        if !self.tracer.records_calls() {
+            return;
+        }
+        let mut span = self.tracer.start("context", self.parent_span.clone());
+        self.tracer.set_plain(
+            &mut span,
+            "kora.context.max_input_tokens",
+            serde_json::json!(plan.max_input_tokens),
+        );
+        self.tracer.set_plain(
+            &mut span,
+            "kora.context.reserve_output_tokens",
+            serde_json::json!(plan.reserve_output_tokens),
+        );
+        self.tracer.set_plain(
+            &mut span,
+            "kora.context.estimated_input_tokens",
+            serde_json::json!(plan.estimated_input_tokens),
+        );
+        self.tracer.set_plain(
+            &mut span,
+            "kora.context.retained_tool_exchanges",
+            serde_json::json!(plan.retained_exchanges),
+        );
+        self.tracer.set_plain(
+            &mut span,
+            "kora.context.dropped_tool_exchanges",
+            serde_json::json!(plan.dropped_exchanges),
+        );
+        self.tracer.end(span, None);
+    }
+
     /// Record a model call that was served from a cassette or journal.
     ///
     /// Worth a span of its own: a trace where cached calls are simply absent

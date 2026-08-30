@@ -36,6 +36,9 @@ extension at the one you just built rather than reordering your `PATH`:
 "kora.serverPath": "/absolute/path/to/.cargo/bin/kora"
 ```
 
+The grammar recognizes agent constructs including `with context(...)`, so a
+context policy is highlighted alongside `budget`, `analyze`, and tools.
+
 ## Settings
 
 | Setting | Description | Default |
