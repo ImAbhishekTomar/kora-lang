@@ -26,6 +26,13 @@ and agent, already looks for it. It is also published, as the site's
 `site/app/decisions/page.mdx` by hand; `check_docs.py` fails when the two
 drift.
 
+## Git Worktree: Isolation and Parallel Work
+
+**ALWAYS use git worktree for any feature work.** Worktrees keep work isolated,
+enable parallel sessions without conflicts, and prevent state collision in
+builds and caches. When an agent creates a worktree, it will explain the setup
+and guide you through the workflow in that session.
+
 ## Where things live
 
 ```
@@ -325,6 +332,3 @@ publication except to correct factual documentation errors.
   does, rename something instead.
 - Prefer the design that stays correct as the language grows over the one
   that is quickest to write.
-
-
-**worktree**  github worktree you can only use when looks really need, and if you start that make sure to commit and clean that.
