@@ -47,6 +47,11 @@ Checking follows `use "./lib.ko"` imports, so a name that only exists in an
 imported file resolves here, and a name no imported file defines is reported.
 Problems *inside* an imported file belong to that file: check it directly.
 
+It also catches Python habits that would otherwise only surface when the file
+runs: `xs.append(v)` (Kora has no methods) and keyword arguments on a
+user-defined function (only `analyze()` takes them) are both reported here,
+not just at `kora run`.
+
 Exits non-zero if anything fails to parse or resolve.
 
 ### `kora test <file.ko>`

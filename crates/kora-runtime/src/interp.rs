@@ -278,7 +278,8 @@ const OUTCOME_TAGS: &[&str] = &["Ok", "Err", "Uncertain", "Exhausted", "Failed"]
 /// whose payload is an arbitrary program value rather than a scalar, so it
 /// needs its own JSON shape (value plus the label it carried).
 fn encode_labeled_json(value: &Value) -> String {
-    let json = crate::stdlib::json::value_to_json(value.unlabeled()).unwrap_or(serde_json::Value::Null);
+    let json =
+        crate::stdlib::json::value_to_json(value.unlabeled()).unwrap_or(serde_json::Value::Null);
     let label = value.label();
     let secrecy = match label.secrecy {
         crate::label::Secrecy::Classified => "classified",
@@ -292,7 +293,10 @@ fn decode_labeled_json(text: &str) -> Value {
     let Ok(parsed) = serde_json::from_str::<serde_json::Value>(text) else {
         return Value::None;
     };
-    let value = parsed.get("value").cloned().unwrap_or(serde_json::Value::Null);
+    let value = parsed
+        .get("value")
+        .cloned()
+        .unwrap_or(serde_json::Value::Null);
     let secrecy = match parsed.get("secrecy").and_then(|s| s.as_str()) {
         Some("classified") => crate::label::Secrecy::Classified,
         _ => crate::label::Secrecy::Public,
@@ -4283,10 +4287,8 @@ impl Interpreter {
     /// language server, where there is no one at a keyboard to answer it.
     fn input(&mut self, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
         if !self.direct_stdout {
-            return Err(
-                RuntimeError::new("input() needs an interactive run", span)
-                    .with_hint("run with `kora run <file.ko>`, without --durable"),
-            );
+            return Err(RuntimeError::new("input() needs an interactive run", span)
+                .with_hint("run with `kora run <file.ko>`, without --durable"));
         }
         if let Some(prompt) = args.first() {
             use std::io::Write as _;

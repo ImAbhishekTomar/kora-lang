@@ -1617,6 +1617,15 @@ impl Parser {
                 while !self.check(&TokenKind::RBracket) {
                     items.push(self.expression()?);
                     self.skip_newlines_in_brackets();
+                    if self.check(&TokenKind::For) {
+                        return Err(SyntaxError::new(
+                            "expected `,` between list items, found `for`",
+                            self.peek_span(),
+                        )
+                        .with_hint(
+                            "no comprehensions yet -- use a for loop:\n           ys = []\n           for x in xs:\n               append(ys, x * 2)",
+                        ));
+                    }
                     if !self.check(&TokenKind::RBracket) {
                         self.expect(&TokenKind::Comma, "expected `,` between list items")?;
                         self.skip_newlines_in_brackets();
@@ -1638,6 +1647,15 @@ impl Parser {
                     let value = self.expression()?;
                     pairs.push((key, value));
                     self.skip_newlines_in_brackets();
+                    if self.check(&TokenKind::For) {
+                        return Err(SyntaxError::new(
+                            "expected `,` between dict entries, found `for`",
+                            self.peek_span(),
+                        )
+                        .with_hint(
+                            "no comprehensions yet -- use a for loop:\n           d = {}\n           for k in xs:\n               d[k] = k * 2",
+                        ));
+                    }
                     if !self.check(&TokenKind::RBrace) {
                         self.expect(&TokenKind::Comma, "expected `,` between dict entries")?;
                         self.skip_newlines_in_brackets();
@@ -1786,6 +1804,18 @@ mod tests {
             StmtKind::Assign { ty: Some(t), .. } => assert_eq!(t.display(), "int"),
             other => panic!("expected typed assign, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn a_list_comprehension_gets_a_for_loop_hint() {
+        let err = parse("def main():\n    ys = [x * 2 for x in xs]\n").unwrap_err();
+        assert!(err.hint.as_deref().unwrap_or("").contains("for loop"));
+    }
+
+    #[test]
+    fn a_dict_comprehension_gets_a_for_loop_hint() {
+        let err = parse("def main():\n    d = {k: v for k in xs}\n").unwrap_err();
+        assert!(err.hint.as_deref().unwrap_or("").contains("for loop"));
     }
 
     #[test]

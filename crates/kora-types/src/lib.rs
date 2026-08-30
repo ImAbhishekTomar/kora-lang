@@ -968,6 +968,48 @@ impl Checker<'_> {
                 args,
                 kwargs,
             } => {
+                // Kora has no methods: `xs.append(v)` parses as a call whose
+                // callee is `xs.append`, and only a module/package/mcp/python
+                // alias may be called this way (`json.parse(...)`). Anything
+                // else is a Python habit that would otherwise only fail at
+                // runtime, one full `check`-fix-`check` cycle later.
+                if let ExprKind::Attr { object, name } = &callee.kind {
+                    if let ExprKind::Name(alias) = &object.kind {
+                        let is_module = self
+                            .analysis
+                            .symbols
+                            .get(alias)
+                            .is_some_and(|s| s.kind == SymbolKind::Module);
+                        if !is_module && self.is_known(alias) {
+                            let rest = if args.is_empty() {
+                                String::new()
+                            } else {
+                                format!(", {}", vec!["v"; args.len()].join(", "))
+                            };
+                            self.analysis.diagnostics.push(
+                                Diagnostic::error(
+                                    callee.span,
+                                    format!("method calls are not supported here: `.{name}(...)`"),
+                                )
+                                .with_hint(format!(
+                                    "Kora has no methods -- write `{name}({alias}{rest})` instead"
+                                )),
+                            );
+                        }
+                    }
+                }
+                if !kwargs.is_empty()
+                    && !matches!(&callee.kind, ExprKind::Name(n) if n == "analyze")
+                {
+                    let (name, arg) = &kwargs[0];
+                    self.analysis.diagnostics.push(
+                        Diagnostic::error(
+                            arg.span,
+                            format!("`{name}` is not a keyword argument here"),
+                        )
+                        .with_hint("only analyze() takes keyword arguments today"),
+                    );
+                }
                 self.check_expr(callee);
                 for a in args {
                     self.check_expr(a);
@@ -1192,6 +1234,41 @@ def main():
             .as_deref()
             .unwrap_or("")
             .contains("parse"));
+    }
+
+    #[test]
+    fn a_python_style_method_call_is_reported_at_check_time() {
+        let src = "def main():\n    xs = [1, 2, 3]\n    xs.append(4)\n";
+        let analysis = check(src);
+        assert!(analysis.diagnostics[0]
+            .message
+            .contains("method calls are not supported"));
+        assert!(analysis.diagnostics[0]
+            .hint
+            .as_deref()
+            .unwrap_or("")
+            .contains("append(xs, v)"));
+    }
+
+    #[test]
+    fn a_module_call_is_not_mistaken_for_a_method_call() {
+        let src = "use json\ndef main():\n    json.parse(\"{}\")\n";
+        let analysis = check(src);
+        assert_eq!(analysis.diagnostics.len(), 0);
+    }
+
+    #[test]
+    fn keyword_arguments_on_a_user_function_are_reported_at_check_time() {
+        let src = "def greet(name: str) -> str:\n    return name\n\ndef main():\n    print(greet(name=\"ada\"))\n";
+        let analysis = check(src);
+        assert!(analysis.diagnostics[0]
+            .message
+            .contains("`name` is not a keyword argument here"));
+        assert!(analysis.diagnostics[0]
+            .hint
+            .as_deref()
+            .unwrap_or("")
+            .contains("only analyze()"));
     }
 
     #[test]
