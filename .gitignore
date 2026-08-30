@@ -33,3 +33,8 @@ ruff.note
 
 # Python bytecode from scripts/
 __pycache__/
+AUDIT_SUMMARY.md
+CODE_COVERAGE_REPORT.md
+COMPILER_AUDIT.md
+COMPILER_AUDIT.html
+QUALITY_ASSESSMENT_REPORT.md
