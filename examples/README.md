@@ -23,6 +23,7 @@ no API key and no model installed.
 | [12_receipt_images.ko](12_receipt_images.ko) | the same job from the *pictures*: `fs.glob`, `fs.image`, a vision model | `kora run --replay` |
 | [13_packages.ko](13_packages.ko) | naming a dependency, and letting the source decide what is used | `kora run` |
 | [14_streaming.ko](14_streaming.ko) | a streamed `str` answer, and why it still has an outcome | `kora run --replay` |
+| [15_workflow_ergonomics.ko](15_workflow_ergonomics.ko) | a compact streamed prompt chain with explicit step results | `kora test` |
 
 ## The pattern set
 

@@ -31,6 +31,25 @@ def main():
 
 No raw JSON parsing. No confidence float to interpret. A model can give you a useful answer or say it is not sure.
 
+## Streaming prose
+
+Annotate an answer as `str` and add `stream` to show it as it arrives, while
+still receiving the same outcome to handle afterward:
+
+```kora
+answer: str = analyze(question, "answer in two sentences") stream
+
+match answer:
+    case Ok(text):
+        print(text)
+    case Failed(why):
+        print(f"stream ended early: {why}")
+```
+
+`stream` is for the normal terminal-output case. Use `on token(piece):` only
+when each piece needs custom handling. Both forms require `str`; typed results
+arrive as JSON and cannot be usefully streamed as prose.
+
 ## Images
 
 The data argument can be a picture. `fs.image` loads one, and the same typed result comes back:

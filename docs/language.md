@@ -265,7 +265,20 @@ destination, and model output should not be able to redirect the call.
 
 ### Streaming an answer
 
-A call annotated `str` may be watched as the model writes it:
+For the common case, add `stream` to a `str` call. Kora writes pieces as they
+arrive and closes the line when the call reaches an outcome:
+
+```python
+answer: str = analyze(question, "answer in two short sentences") stream
+
+match answer:
+    case Ok(text):
+        save(text)
+    case Failed(why):
+        log(f"the stream broke: {why}")
+```
+
+For custom handling, use `on token(piece):` instead:
 
 ```python
 answer: str = analyze(question, "answer in two short sentences") on token(piece):
@@ -280,7 +293,8 @@ match answer:
         log(f"the stream broke: {why}")
 ```
 
-`write` is `print` without the newline, for output that arrives in pieces.
+`stream` and `on token` cannot be combined. `write` is `print` without the
+newline, for output that arrives in pieces.
 
 The handler hangs off the assignment rather than replacing it, because the
 call still produces an outcome. A loop over the pieces would end the same way
@@ -370,6 +384,7 @@ Patterns:
 | `case name:` | anything, binding it |
 | `case _:` | anything |
 | `case Ok(v) if v.score > 5:` | the pattern, when the guard is also true |
+| `case Uncertain(r) \| Failed(r):` | either alternative, binding the same names |
 
 ### Retries
 
@@ -455,6 +470,16 @@ row: Receipt = analyze(text, "read this receipt") else (why):
     return f"skipped: {why}"
 ```
 
+When the failure behavior is the same but the record must keep its category,
+bind a second name. It receives a stable lower-case status such as `uncertain`,
+`exhausted`, or `failed`:
+
+```python
+answer: str = analyze(question, "answer plainly") stream else (why, kind):
+    print(f"{kind}: {why}")
+    return ""
+```
+
 Rules:
 
 - The right-hand side must be an outcome (`Ok`, `Err`, `Uncertain`,
@@ -466,9 +491,9 @@ Rules:
 - A label is preserved. Unwrapping a classified outcome gives a classified
   payload; `else` is not a way around `declassify`.
 
-`else` deliberately treats every unsuccessful outcome alike. When the
-difference matters — and it often does, because `Exhausted` means the budget
-ran out and `Failed` means the provider never answered — write a real `match`.
+`else` deliberately keeps the failure path flat. Use `else (why, kind)` when
+you only need to record the category; write a real `match` when categories
+need different behavior.
 
 You can construct outcomes yourself — useful in tests:
 
@@ -575,6 +600,15 @@ analyze(disguised, "...")   # still refused
 `redact()` is the easy path when the model needs shape, not values. It
 replaces sensitive leaves with placeholders (`<NUM_1>`), so nothing sensitive
 leaves and no declassification is needed.
+
+Terminal output is also a redacting boundary. `print` and `write` preserve
+public values but replace classified leaves with `__CLASSIFIED__`; releasing a
+value to a model does not make it printable. Change the marker per project:
+
+```toml
+[output]
+classified_placeholder = "[private]"
+```
 
 Data entering from outside — file contents, HTTP bodies, parsed JSON, model
 output — is **unverified** and cannot reach a dangerous sink until narrowed:

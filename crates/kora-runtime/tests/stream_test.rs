@@ -47,6 +47,86 @@ agent main():
 }
 
 #[test]
+fn stream_is_the_concise_safe_stdout_form() {
+    let out = run(r#"
+agent main():
+    with mock analyze -> Ok("hello there"):
+        answer: str = analyze("q", "answer this") stream
+        match answer:
+            case Ok(text):
+                print(f"final: {text}")
+"#);
+    assert_eq!(out, vec!["hello there", "final: hello there"]);
+}
+
+#[test]
+fn stream_can_be_combined_with_a_flat_else_binding() {
+    let out = run(r#"
+agent main() -> str:
+    with mock analyze -> Failed("offline"):
+        answer: str = analyze("q", "answer this") stream else (why, kind):
+            print(f"{kind}: {why}")
+            return kind
+        return answer
+"#);
+    assert_eq!(out, vec!["failed: offline"]);
+}
+
+#[test]
+fn stream_needs_a_str_result() {
+    let err = run_err(
+        r#"
+type Ticket:
+    severity: str
+
+agent main():
+    t: Ticket = analyze("q", "classify") stream
+"#,
+    );
+    assert!(err.contains("needs a `str` result"), "{err}");
+}
+
+#[test]
+fn stream_and_a_custom_handler_are_mutually_exclusive() {
+    let err = parse(
+        r#"
+agent main():
+    answer: str = analyze("q", "answer this") stream on token(piece):
+        print(piece)
+"#,
+    )
+    .unwrap_err();
+    assert!(
+        err.message.contains("cannot be combined"),
+        "{}",
+        err.message
+    );
+}
+
+#[test]
+fn stream_and_a_tool_call_handler_are_mutually_exclusive() {
+    // `stream` is shorthand for a token handler, and a call watches its
+    // answer or its tool calls, not both -- so the shorthand collides with
+    // `on tool_call` for the same reason the longhand does.
+    let err = parse(
+        r#"
+tool lookup(q: str) -> str:
+    return q
+
+agent main():
+    answer: str = analyze("q", "answer this", tools=[lookup]) stream on tool_call(name, args):
+        print(name)
+"#,
+    )
+    .unwrap_err();
+    assert!(
+        err.message.contains("cannot be combined"),
+        "{}",
+        err.message
+    );
+}
+
+#[test]
 fn on_token_sees_an_uncertain_refusal_only_through_the_match_not_the_handler() {
     let out = run(r#"
 agent main():

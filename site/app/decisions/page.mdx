@@ -133,12 +133,19 @@ design changes and should be deliberate.
   - The right-hand side must be an outcome. Treating a plain value as success
     would mean the failure path could never run, which is a silently dead
     branch — the thing this language most wants not to have.
-  - It deliberately collapses `Uncertain` and `Exhausted`. That is a real loss:
-    `Exhausted` means the budget ran out, not that the model declined. It is
-    accepted because both are handled identically in the code this exists to
-    flatten, and because the outcome is still recorded — a swallowed
-    `Exhausted` is not an invisible one. When the difference matters, `match`
-    is still there.
+  - `else (why, kind):` preserves the lower-case outcome tag for the flat
+    "record and leave" case. It avoids forcing four identical `match` arms
+    merely to write a trace, without making `else` a disguised branch table.
+    When categories need different behavior, `match` is still there.
+- **Pattern alternatives bind the same names or do not parse.** `case
+  Uncertain(reason) | Failed(reason):` captures the ordinary shared-recovery
+  branch without hiding which names a body may read. Alternatives with
+  different binders are rejected instead of making a name conditionally exist.
+- **`stream` is the standard-output shortcut, not a second result type.**
+  `answer: str = analyze(...) stream` means "show the prose as it arrives"
+  while preserving the same outcome that an ordinary call returns. A custom
+  `on token(piece):` handler remains for work beyond printing; a loop over
+  pieces still cannot replace matching the terminal outcome.
 - **Destructuring reads through a label and re-applies it.** `match` on a
   classified outcome used to skip every `Ok(...)` arm, so a classified value
   silently took a different branch than the same value unclassified. Reading
@@ -265,6 +272,11 @@ design changes and should be deliberate.
   declassified values. Sink-aware policy from config.
 - Redaction (`redact()`) is the blessed easy path: placeholders out, real
   values re-substituted, nothing secret leaves.
+- **Terminal output is a redacting boundary.** `print` and `write` render
+  public structure but replace classified leaves with `__CLASSIFIED__` by
+  default, configurable per project under `[output]`. A `declassify` release
+  names a sink such as `local_model`; it never doubles as permission to copy a
+  secret into a terminal, test log, debugger console, or redirected output.
 - Integrity direction: data entering from outside is `unverified` and cannot
   reach a dangerous sink until narrowed. Shipped with the stdlib, since that
   is where the sinks are.

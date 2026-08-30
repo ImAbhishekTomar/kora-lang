@@ -163,6 +163,9 @@ fixed:
       visual, with direct links to Getting started and the documentation.
 - [x] Tighten the landing page hero, proof row, and footer spacing to match the supplied reference composition.
 - [x] Audit and refine landing navigation, syntax highlighting, execution trace, mascot presentation, viewport fit, and documentation routes.
+- [x] Add workflow ergonomics: concise `stream`, outcome-status bindings, and
+      match alternatives. Terminal output now redacts classified leaves with a
+      configurable project marker.
 
 ## Language and runtime status
 
@@ -173,8 +176,9 @@ fixed:
 - [x] `type` / `int` / `str` / `bool` — core types, implemented.
 - [x] `fs` / `csv` / `http` / `json` stdlib modules.
 - [x] `mcp` — tool-server integration (`kora-mcp` crate).
-- [x] **Token-by-token model streaming.** `answer: str = analyze(...) on
-      token(t):` hands over the answer as the model writes it, and the call
+- [x] **Token-by-token model streaming.** `answer: str = analyze(...) stream`
+      is the concise terminal-output form; `on token(t):` remains available
+      for custom handlers. Both hand over the answer as the model writes it, and the call
       still returns an outcome to match on — a loop over the pieces would end
       identically on success and on outage, which is the one failure this
       language exists to remove. Only a `str` result streams: a declared type
@@ -288,6 +292,16 @@ extending streaming with tools or `parallel for`.
       safety; add fsync and per-run locking where required.
 
 ## Queue
+
+- [ ] **Language-surface stabilization.** Tighten compatibility guarantees,
+      diagnostics, and configuration behavior before calling Kora
+      production-ready.
+- [ ] **Broader distribution.** Publish the CLI on crates.io and the VS Code
+      extension on Open VSX, alongside the existing Homebrew, npm, and release
+      archive channels.
+- [ ] **Project-aware editor workflows.** Add richer refactoring, debugging
+      views, project configuration, and code actions to the existing VS Code
+      and language-server support.
 
 Neither is a hole in what exists; both extend it, and each waits on
 something that is not code. Full reasoning in

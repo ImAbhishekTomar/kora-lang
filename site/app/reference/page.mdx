@@ -112,6 +112,14 @@ match result:
 
 Model calls and standard-library operations use result values such as `Ok`, `Err`, `Uncertain`, and `Exhausted`. Treat the failure path as part of normal program flow.
 
+Alternatives keep a shared branch compact when they bind the same names:
+
+```kora
+match result:
+    case Uncertain(reason) | Failed(reason):
+        print(f"try later: {reason}")
+```
+
 ## Built-in functions
 
 These functions are available without an import.
@@ -123,6 +131,10 @@ Prints values separated by spaces. It returns `None`.
 ```kora
 print("total", 42)
 ```
+
+Classified leaves are never written to terminal output. They display as
+`__CLASSIFIED__` by default, configurable with `[output] classified_placeholder`
+in `kora.toml`.
 
 ### `len(value)`
 
@@ -487,6 +499,9 @@ default = "local:llama3.2:latest"
 
 [budget]
 program_max_tokens = 2_000_000
+
+[output]
+classified_placeholder = "[private]"
 
 [install]
 jobs = 16

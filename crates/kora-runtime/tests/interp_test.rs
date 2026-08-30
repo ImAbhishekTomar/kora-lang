@@ -27,6 +27,48 @@ fn hello_world() {
 }
 
 #[test]
+fn else_can_bind_the_reason_and_outcome_status() {
+    let out = run(r#"
+def stage() -> str:
+    result = Failed("connection refused") else (why, kind):
+        return f"{kind}: {why}"
+    return result
+
+print(stage())
+"#);
+    assert_eq!(out, vec!["failed: connection refused"]);
+}
+
+#[test]
+fn match_alternatives_share_their_binder() {
+    let out = run(r#"
+def explain(result) -> str:
+    match result:
+        case Uncertain(reason) | Failed(reason):
+            return f"try later: {reason}"
+        case _:
+            return "done"
+
+print(explain(Failed("offline")))
+print(explain(Uncertain("too vague")))
+"#);
+    assert_eq!(out, vec!["try later: offline", "try later: too vague"]);
+}
+
+#[test]
+fn match_alternatives_must_bind_the_same_names() {
+    let err = parse(
+        r#"
+match Failed("offline"):
+    case Failed(reason) | Uncertain(other):
+        print(reason)
+"#,
+    )
+    .unwrap_err();
+    assert!(err.message.contains("same names"), "{}", err.message);
+}
+
+#[test]
 fn arithmetic_precedence() {
     assert_eq!(run("print(1 + 2 * 3)\n"), vec!["7"]);
     assert_eq!(run("print((1 + 2) * 3)\n"), vec!["9"]);

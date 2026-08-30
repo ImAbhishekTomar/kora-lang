@@ -112,12 +112,13 @@ impl Parser {
             let ty = self.type_expr()?;
             self.expect(&TokenKind::Eq, "expected `=` after type annotation")?;
             let value = self.expression()?;
+            let stream = self.stream_modifier();
             if self.check(&TokenKind::Else) {
                 let name = match &expr.kind {
                     ExprKind::Name(n) => n.clone(),
                     _ => unreachable!("annotated assignment target is a name"),
                 };
-                return self.bind_or_else(name, Some(ty), value, false, span);
+                return self.bind_or_else(name, Some(ty), value, false, stream, span);
             }
             let on_token = self.token_handler()?;
             let on_tool_call = if on_token.is_none() {
@@ -125,7 +126,27 @@ impl Parser {
             } else {
                 None
             };
-            if on_token.is_none() && on_tool_call.is_none() {
+            // `stream` is shorthand for a token handler, so it collides with
+            // an explicit one for the same reason two handlers would, and
+            // with a tool-call handler for the reason `on token` does: a
+            // call streams prose or watches its own tool calls, not both.
+            if stream && on_token.is_some() {
+                return Err(SyntaxError::new(
+                    "`stream` cannot be combined with `on token`",
+                    self.peek_span(),
+                )
+                .with_hint(
+                    "use `stream` for terminal output, or `on token(piece):` for a custom handler",
+                ));
+            }
+            if stream && on_tool_call.is_some() {
+                return Err(SyntaxError::new(
+                    "`stream` cannot be combined with `on tool_call`",
+                    self.peek_span(),
+                )
+                .with_hint("a call streams its answer or watches its tool calls, not both"));
+            }
+            if !stream && on_token.is_none() && on_tool_call.is_none() {
                 self.expect_newline("assignment")?;
             }
             return Ok(Stmt {
@@ -136,6 +157,7 @@ impl Parser {
                     classified: false,
                     on_token,
                     on_tool_call,
+                    stream,
                 },
                 span,
             });
@@ -170,7 +192,7 @@ impl Parser {
                         .with_hint("write `name = <outcome> else:`"))
                     }
                 };
-                return self.bind_or_else(name, None, value, false, span);
+                return self.bind_or_else(name, None, value, false, false, span);
             }
             self.expect_newline("assignment")?;
             return Ok(Stmt {
@@ -181,6 +203,7 @@ impl Parser {
                     classified: false,
                     on_token: None,
                     on_tool_call: None,
+                    stream: false,
                 },
                 span,
             });
@@ -592,7 +615,7 @@ impl Parser {
         self.expect(&TokenKind::Eq, "expected `=` in a classified declaration")?;
         let value = self.expression()?;
         if self.check(&TokenKind::Else) {
-            return self.bind_or_else(name, ty, value, true, span);
+            return self.bind_or_else(name, ty, value, true, false, span);
         }
         self.expect_newline("declaration")?;
         Ok(Stmt {
@@ -606,6 +629,7 @@ impl Parser {
                 classified: true,
                 on_token: None,
                 on_tool_call: None,
+                stream: false,
             },
             span,
         })
@@ -614,25 +638,33 @@ impl Parser {
     /// The tail of `name = <outcome> else:` -- called with the cursor on
     /// `else`, after the value expression has been parsed.
     ///
-    /// `else (reason):` names why the outcome was not successful. Without it
-    /// the reason is dropped, which is why the runtime still records the
-    /// outcome: a swallowed `Exhausted` must not become an invisible one.
+    /// `else (reason, status):` names why an outcome was not successful and,
+    /// when requested, its stable status. Without either name the runtime
+    /// still records the outcome: a swallowed `Exhausted` must not become an
+    /// invisible one.
     fn bind_or_else(
         &mut self,
         name: String,
         ty: Option<TypeExpr>,
         value: Expr,
         classified: bool,
+        stream: bool,
         span: Span,
     ) -> Result<Stmt, SyntaxError> {
         self.advance(); // else
-        let reason = if self.check(&TokenKind::LParen) {
+        let (reason, status) = if self.check(&TokenKind::LParen) {
             self.advance();
             let bound = self.expect_ident("a name for the reason")?;
+            let status = if self.check(&TokenKind::Comma) {
+                self.advance();
+                Some(self.expect_ident("a name for the outcome status")?)
+            } else {
+                None
+            };
             self.expect(&TokenKind::RParen, "expected `)` after the reason name")?;
-            Some(bound)
+            (Some(bound), status)
         } else {
-            None
+            (None, None)
         };
         let else_body = self.block("the `else` block of a binding")?;
         Ok(Stmt {
@@ -642,6 +674,8 @@ impl Parser {
                 value,
                 classified,
                 reason,
+                status,
+                stream,
                 else_body,
             },
             span,
@@ -950,6 +984,29 @@ impl Parser {
 
     fn pattern(&mut self) -> Result<Pattern, SyntaxError> {
         let span = self.peek_span();
+        let first = self.pattern_atom()?;
+        if !self.check(&TokenKind::Pipe) {
+            return Ok(first);
+        }
+        let binders = pattern_binders(&first);
+        let mut alternatives = vec![first];
+        while self.check(&TokenKind::Pipe) {
+            self.advance();
+            let alternative = self.pattern_atom()?;
+            if pattern_binders(&alternative) != binders {
+                return Err(SyntaxError::new(
+                    "every alternative in a `case A | B` pattern must bind the same names",
+                    span,
+                )
+                .with_hint("use the same binder names in every alternative, or split the cases"));
+            }
+            alternatives.push(alternative);
+        }
+        Ok(Pattern::Or(alternatives))
+    }
+
+    fn pattern_atom(&mut self) -> Result<Pattern, SyntaxError> {
+        let span = self.peek_span();
         match self.peek_kind().clone() {
             TokenKind::Ident(name) => {
                 self.advance();
@@ -1052,6 +1109,17 @@ impl Parser {
             kind: StmtKind::For { var, iter, body },
             span,
         })
+    }
+
+    /// Contextual `stream` after an annotated assignment. It stays a normal
+    /// identifier everywhere else, so existing programs may keep a variable
+    /// named `stream`.
+    fn stream_modifier(&mut self) -> bool {
+        let is_stream = matches!(self.peek_kind(), TokenKind::Ident(name) if name == "stream");
+        if is_stream {
+            self.advance();
+        }
+        is_stream
     }
 
     /// `: NEWLINE INDENT stmt+ DEDENT`
@@ -1605,6 +1673,23 @@ fn binary(op: BinOp, left: Expr, right: Expr) -> Expr {
             right: Box::new(right),
         },
         span,
+    }
+}
+
+/// Names introduced by one alternative. Alternation is only sound when every
+/// alternative supplies the names its body may read.
+fn pattern_binders(pattern: &Pattern) -> Vec<String> {
+    match pattern {
+        Pattern::Bind(name) => vec![name.clone()],
+        Pattern::Ctor(_, binders) => binders.clone(),
+        Pattern::Or(alternatives) => alternatives
+            .first()
+            .map(pattern_binders)
+            .unwrap_or_default(),
+        Pattern::Wildcard
+        | Pattern::LiteralInt(_)
+        | Pattern::LiteralStr(_)
+        | Pattern::LiteralBool(_) => Vec::new(),
     }
 }
 
