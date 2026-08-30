@@ -1,0 +1,406 @@
+---
+title: Internals
+description: How the Kora compiler and runtime actually work — pipeline, crates, and the parts that don't exist in most languages.
+---
+
+# Internals
+
+Kora is a tree-walking interpreter built around durable execution, information-flow
+labels, and token budgets — not a generic scripting VM. This page traces the
+pipeline from source text to a running agent, then the runtime mechanisms behind
+[Decisions](/decisions) that don't show up in a typical language.
+
+<div className="internals-page">
+
+## Compiler pipeline
+
+<div className="internals-pipeline">
+  <div className="internals-stage">
+    <div className="tag">crates/kora-syntax</div>
+    <div className="name">lexer.rs</div>
+    <div className="desc">source text → tokens (token.rs)</div>
+  </div>
+  <div className="internals-arrow">→</div>
+  <div className="internals-stage">
+    <div className="tag">crates/kora-syntax</div>
+    <div className="name">parser.rs</div>
+    <div className="desc">tokens → AST (ast.rs)</div>
+  </div>
+  <div className="internals-arrow">→</div>
+  <div className="internals-stage">
+    <div className="tag">crates/kora-types</div>
+    <div className="name">typecheck</div>
+    <div className="desc">AST → checked AST + labels</div>
+  </div>
+  <div className="internals-arrow">→</div>
+  <div className="internals-stage">
+    <div className="tag">crates/kora-runtime</div>
+    <div className="name">interp.rs</div>
+    <div className="desc">tree-walk execution</div>
+  </div>
+  <div className="internals-arrow">→</div>
+  <div className="internals-stage">
+    <div className="tag">crates/kora-cli</div>
+    <div className="name">main.rs</div>
+    <div className="desc">driver, CLI surface</div>
+  </div>
+</div>
+
+## Crate map
+
+<div className="internals-crates">
+  <div className="internals-crate"><b>kora-syntax</b>lex + parse + AST</div>
+  <div className="internals-crate"><b>kora-types</b>type / label checking</div>
+  <div className="internals-crate"><b>kora-runtime</b>interpreter, budgets, journal, labels, telemetry</div>
+  <div className="internals-crate"><b>kora-cli</b>run / repl / driver</div>
+  <div className="internals-crate"><b>kora-lsp</b>editor language server</div>
+  <div className="internals-crate"><b>kora-dap</b>debug adapter (debug.rs)</div>
+  <div className="internals-crate"><b>kora-mcp</b>MCP tool exposure</div>
+  <div className="internals-crate"><b>kora-pkg</b>package manager</div>
+</div>
+
+## The unique parts
+
+<div className="internals-grid">
+
+<div className="internals-card">
+  <h3>Journal — durable execution by replay</h3>
+  <p>No stack snapshot. Every effect (model call, tool result, human answer, clock read) is appended to a journal on disk. Resuming = re-running from the top, effects served from the journal instead of re-executed, fast-forwarding to where it stopped.</p>
+  <div className="internals-why">Why: a Rust call stack can't be serialized — Temporal / Restate solve durability the same way.</div>
+</div>
+
+<div className="internals-card">
+  <h3>Labels — information flow tracking</h3>
+  <p><code>classified</code> values carry a secrecy tag (Public / Classified) and a trust tag (Unverified / Trusted). Labels are transitive: survive slicing, formatting, arithmetic, container insert, return values.</p>
+  <div className="internals-why">Why: one line of laundering breaks the whole model — this killed Perl taint mode and Ruby $SAFE.</div>
+</div>
+
+<div className="internals-card">
+  <h3>Declassify blocks — auditable release</h3>
+  <p><code>audit.rs</code> statically enumerates every <code>declassify ... for sink:</code> site in a program, its imports, and its packages — exhaustively, not via grep.</p>
+  <div className="internals-why">Why: makes "what data reached the model" answerable to a reviewer, not best-effort.</div>
+</div>
+
+<div className="internals-card">
+  <h3>Budgets — tokens as the unit of control</h3>
+  <p>Budgets are denominated in tokens, the thing the runtime can actually measure, not money. They nest: a child scope can only tighten a parent's limit. Exhaustion is a returned value, never an exception.</p>
+  <div className="internals-why">Why: partial agent work should survive running out of budget, not crash.</div>
+</div>
+
+<div className="internals-card">
+  <h3>Cassettes — record/replay for model calls</h3>
+  <p>Three modes: Live, Record (call + append to disk), Replay (never call — a missing entry is an error). Keys cover call site, model, prompt, and resolved input.</p>
+  <div className="internals-why">Why: deterministic, free CI without touching a real provider.</div>
+</div>
+
+<div className="internals-card">
+  <h3>Portable values — the agent isolation boundary</h3>
+  <p>Runtime values use <code>Rc</code> for cheap in-agent sharing, so they can't cross threads as-is. <code>Portable</code> is an explicit deep, Send-safe copy used only when values move between agents.</p>
+  <div className="internals-why">Why: agents share nothing — isolation is paid for explicitly at the boundary, not assumed.</div>
+</div>
+
+<div className="internals-card">
+  <h3>Images as values</h3>
+  <p><code>fs.image(path)</code> returns a first-class value like <code>fs.read</code> does for text, and flows into <code>analyze()</code>. Type is sniffed from magic bytes, never the file extension; size is checked at read time, not at the provider.</p>
+  <div className="internals-why">Why: most real agent work is receipts, screenshots, and forms — not plain text.</div>
+</div>
+
+<div className="internals-card">
+  <h3>Telemetry — labels guard the exporter too</h3>
+  <p>Spans are emitted by the scheduler itself (it already owns every model call, budget meter, declassification) as raw OTLP/HTTP JSON, no SDK. A classified value cannot become a span attribute.</p>
+  <div className="internals-why">Why: prompt leakage into observability vendors is a live incident category.</div>
+</div>
+
+<div className="internals-card">
+  <h3>Modules — one file, one namespace</h3>
+  <p>A module is one Kora file (<code>use "./lib/tax.ko" as tax</code>). Its top-level names live in their own namespace, so two files can reuse a name without colliding, and a function always reads the file it was written in. Import paths resolve relative to the <em>importing</em> file, never the working directory.</p>
+  <div className="internals-why">Why: a program stays a directory that can be moved or vendored whole.</div>
+</div>
+
+<div className="internals-card">
+  <h3>Notes — a durable run's own scratch space</h3>
+  <p>A key-value store scoped to one durable run (<code>.kora/notes/&lt;run-id&gt;.json</code>), for state a plain variable can't hold: it survives a crash, and a different <code>kora</code> invocation can read it. A <code>classified</code> value written through <code>notes.write</code> keeps its label on the way back out.</p>
+  <div className="internals-why">Why: long tool loops already keep a plan and partial results in locals — those shouldn't die with the interpreter.</div>
+</div>
+
+<div className="internals-card">
+  <h3>Debugger — a zero-cost hook</h3>
+  <p>The interpreter knows nothing about DAP. It keeps a frame stack and asks a <code>Debugger</code> whether to stop before each statement — one <code>Option</code> check, no snapshot, when nothing is attached. The editor-facing protocol lives entirely in <code>kora-dap</code>.</p>
+  <div className="internals-why">Why: debuggability shouldn't tax every run that isn't being debugged.</div>
+</div>
+
+<div className="internals-card">
+  <h3>Config — unknown keys are not an error</h3>
+  <p><code>kora.toml</code> sections for budgets, sinks, and telemetry parse today even though only model settings are used — Phase 2 ignores keys it doesn't need yet instead of rejecting them.</p>
+  <div className="internals-why">Why: a config written now keeps working as later phases start reading more of it.</div>
+</div>
+
+</div>
+
+## Package security
+
+<div className="internals-grid">
+
+<div className="internals-card">
+  <h3>Capabilities — no ambient authority</h3>
+  <p>A dependency reaches the network, filesystem, a database, the environment, a Python worker, or an MCP server only where the importing program granted it (<code>net</code>, <code>fs</code>, ...) — and it can never pass on more than it holds itself.</p>
+  <div className="internals-why">Why: in most package ecosystems a dependency runs with the program's full rights, so one compromised package compromises everything.</div>
+</div>
+
+<div className="internals-card">
+  <h3>Checksum log — trust-on-first-use, permanently</h3>
+  <p>A lockfile can't protect the fetch that creates it. The first time a commit is seen, its hash is recorded forever in two logs — the project's committed <code>kora.sums</code> and a machine-wide log under the user's home directory — and every later fetch is checked against both.</p>
+  <div className="internals-why">Why: closes publish-a-backdoor-then-delete-it, which leaves no trace in a lockfile alone.</div>
+</div>
+
+</div>
+
+### Install flow, animated
+
+<div className="internals-diagram flow-diagram">
+<svg viewBox="0 0 640 650" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    {`.fn-tag{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:9px;letter-spacing:.05em;text-transform:uppercase;fill:var(--i-muted);}
+    .fn-name{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:13px;font-weight:700;fill:var(--i-accent);}
+    .fn-desc{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;fill:var(--i-muted);}
+    .fn-label{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px;}
+    .fn-box{fill:var(--i-card-bg);stroke:var(--i-line);stroke-width:1.4;}
+    .fn-box-check{stroke:var(--i-amber);}
+    .fn-box-end{stroke:var(--i-accent2);}
+    .fn-box-refuse{fill:var(--i-card-bg);stroke:var(--i-red);stroke-width:1.6;}
+    .flow-main-line{fill:none;stroke:var(--i-accent);stroke-width:2;stroke-dasharray:6 6;animation:flow-dash 1.4s linear infinite;}
+    .flow-cond-line{fill:none;stroke-width:1.6;stroke-dasharray:4 5;animation:flow-cond-pulse 3.2s ease-in-out infinite;}
+    .flow-yes-line{stroke:var(--i-amber);}
+    .flow-refuse-line{stroke:var(--i-red);}
+    .flow-node-g{animation:node-pulse 5.6s linear infinite;animation-delay:var(--d,0s);}
+    .flow-refuse-g{animation:refuse-pulse 3s ease-in-out infinite;}
+    @keyframes flow-dash{to{stroke-dashoffset:-24;}}
+    @keyframes flow-cond-pulse{0%,100%{opacity:.35;}50%{opacity:.95;}}
+    @keyframes node-pulse{0%,85%,100%{filter:none;}5%{filter:drop-shadow(0 0 6px var(--i-accent));}}
+    @keyframes refuse-pulse{0%,100%{filter:none;}50%{filter:drop-shadow(0 0 7px var(--i-red));}}
+    @media (prefers-reduced-motion: reduce){.flow-main-line,.flow-cond-line,.flow-node-g,.flow-refuse-g{animation:none !important;}}`}
+  </style>
+
+  <defs>
+    <marker id="arrow-accent" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--i-accent)" />
+    </marker>
+    <marker id="arrow-amber" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--i-amber)" />
+    </marker>
+    <marker id="arrow-red" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="var(--i-red)" />
+    </marker>
+  </defs>
+
+  {/* main success line, flowing */}
+  <path className="flow-main-line" markerEnd="url(#arrow-accent)" d="
+    M145,38 L145,68
+    M145,116 L145,148
+    M145,196 L145,228
+    M145,276 L145,308
+    M145,356 L145,388
+    M145,442 L145,472
+    M145,528 L145,558
+  " />
+
+  {/* "already cached" shortcut, conditional */}
+  <path className="flow-cond-line flow-yes-line" markerEnd="url(#arrow-amber)" d="M260,253 C335,253 335,499 258,499" />
+  <text x="345" y="372" className="fn-label" fill="var(--i-amber)">yes —</text>
+  <text x="345" y="386" className="fn-label" fill="var(--i-amber)">already locked</text>
+
+  {/* "no" label on the main branch out of fetch.rs */}
+  <text x="120" y="296" className="fn-label" textAnchor="end" fill="var(--i-muted)">no</text>
+
+  {/* refuse paths, conditional */}
+  <path className="flow-cond-line flow-refuse-line" markerEnd="url(#arrow-red)" d="M260,416 C345,416 345,448 428,452" />
+  <text x="345" y="408" className="fn-label" fill="var(--i-red)">hash mismatch</text>
+
+  <path className="flow-cond-line flow-refuse-line" markerEnd="url(#arrow-red)" d="M260,501 C345,501 345,472 428,468" />
+  <text x="345" y="519" className="fn-label" fill="var(--i-red)">tag/commit mismatch</text>
+
+  {/* nodes */}
+  <g className="flow-node-g" style={{'--d': '0s'}}>
+    <rect className="fn-box" x="30" y="8" width="230" height="30" rx="8" />
+    <text x="145" y="27" textAnchor="middle" className="fn-desc" fill="var(--i-text)">kora.toml [dependencies]</text>
+  </g>
+
+  <g className="flow-node-g" style={{'--d': '.7s'}}>
+    <rect className="fn-box" x="30" y="68" width="230" height="48" rx="10" />
+    <text x="42" y="83" className="fn-tag">kora-pkg</text>
+    <text x="42" y="98" className="fn-name">scan.rs</text>
+    <text x="42" y="111" className="fn-desc">find every "use"</text>
+  </g>
+
+  <g className="flow-node-g" style={{'--d': '1.4s'}}>
+    <rect className="fn-box" x="30" y="148" width="230" height="48" rx="10" />
+    <text x="42" y="163" className="fn-tag">kora-pkg</text>
+    <text x="42" y="178" className="fn-name">resolve.rs</text>
+    <text x="42" y="191" className="fn-desc">pick version → tag</text>
+  </g>
+
+  <g className="flow-node-g" style={{'--d': '2.1s'}}>
+    <rect className="fn-box" x="30" y="228" width="230" height="48" rx="10" />
+    <text x="42" y="243" className="fn-tag">kora-pkg</text>
+    <text x="42" y="258" className="fn-name">fetch.rs</text>
+    <text x="42" y="271" className="fn-desc">git clone at tag</text>
+  </g>
+
+  <g className="flow-node-g" style={{'--d': '2.8s'}}>
+    <rect className="fn-box" x="30" y="308" width="230" height="48" rx="10" />
+    <text x="42" y="323" className="fn-tag">kora-pkg</text>
+    <text x="42" y="338" className="fn-name">hash.rs</text>
+    <text x="42" y="351" className="fn-desc">hash contents, not tarball</text>
+  </g>
+
+  <g className="flow-node-g" style={{'--d': '3.5s'}}>
+    <rect className="fn-box fn-box-check" x="30" y="388" width="230" height="54" rx="10" />
+    <text x="42" y="403" className="fn-tag">kora-pkg</text>
+    <text x="42" y="418" className="fn-name">sumlog.rs</text>
+    <text x="42" y="431" className="fn-desc">seen this hash before?</text>
+  </g>
+
+  <g className="flow-node-g" style={{'--d': '4.2s'}}>
+    <rect className="fn-box fn-box-check" x="30" y="472" width="230" height="56" rx="10" />
+    <text x="42" y="487" className="fn-tag">kora-pkg</text>
+    <text x="42" y="502" className="fn-name">lock.rs</text>
+    <text x="42" y="515" className="fn-desc">tag + commit + hash</text>
+  </g>
+
+  <g className="flow-node-g" style={{'--d': '4.9s'}}>
+    <rect className="fn-box fn-box-end" x="30" y="558" width="230" height="50" rx="10" />
+    <text x="42" y="573" className="fn-tag">kora-runtime</text>
+    <text x="42" y="588" className="fn-name">grants.rs</text>
+    <text x="42" y="601" className="fn-desc">capabilities only</text>
+  </g>
+
+  <g className="flow-refuse-g">
+    <rect className="fn-box-refuse" x="428" y="430" width="160" height="60" rx="10" />
+    <text x="508" y="456" textAnchor="middle" className="fn-name" fill="var(--i-red)">REFUSE</text>
+    <text x="508" y="472" textAnchor="middle" className="fn-desc">install stops here</text>
+  </g>
+</svg>
+<div className="internals-legend">
+  <span><span className="dot" style={{background:'var(--i-accent)'}} />normal path (flowing)</span>
+  <span><span className="dot" style={{background:'var(--i-amber)'}} />shortcut when already verified</span>
+  <span><span className="dot" style={{background:'var(--i-red)'}} />refusal on mismatch</span>
+</div>
+<p className="flow-caption">A fresh install walks the teal path top to bottom. If the commit is already in <code>kora.lock</code>, <code>fetch.rs</code> takes the amber shortcut straight to <code>lock.rs</code>. Any hash or commit mismatch at <code>sumlog.rs</code> or <code>lock.rs</code> takes a red path and <strong>refuses the install</strong> — it never continues quietly on a changed tag or a rewritten repo.</p>
+</div>
+
+| Attack | Stopped by |
+| --- | --- |
+| Maintainer force-pushes a tag | `lock.rs`: commit/hash mismatch → refuse |
+| Repo history rewritten | `hash.rs`: content hash won't follow it |
+| Publish backdoor, then delete it | `sumlog.rs`: hash recorded permanently, deletion doesn't erase the record |
+| First-time fetch, nothing local to check against | `sumlog.rs` machine-wide log: another project already recorded this commit |
+| Compromised dep tries to phone home / read disk | `grants.rs`: no capability granted, no ambient authority |
+| Compromised dep re-exports secrets to its own deps | `grants.rs`: can't pass on more capability than it holds |
+
+## Editor tooling
+
+<div className="internals-crates">
+  <div className="internals-crate"><b>kora-types</b>one index answers diagnostics, hover, and go-to-definition — so they can't disagree. Not a full type checker; fast enough to run on every keystroke.</div>
+  <div className="internals-crate"><b>kora-lsp</b>language server built on that same index</div>
+  <div className="internals-crate"><b>kora-dap</b>debug adapter protocol; talks to the interpreter's <code>Debugger</code> hook only</div>
+</div>
+
+## Standard library surface
+
+<div className="internals-crates">
+  <div className="internals-crate"><b>fs</b> / <b>glob</b>files, paths, images</div>
+  <div className="internals-crate"><b>http</b> / <b>json</b> / <b>csv</b>network + structured data</div>
+  <div className="internals-crate"><b>sql</b>queries against a database</div>
+  <div className="internals-crate"><b>re</b> / <b>time</b> / <b>env</b>regex, clock, process env</div>
+  <div className="internals-crate"><b>notes</b>durable per-run scratch space</div>
+</div>
+
+## Journal replay, visually
+
+<div className="internals-diagram">
+<svg viewBox="0 0 760 190" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    {`.i-lbl{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;fill:var(--i-muted);}
+    .i-lbl-e{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;fill:var(--i-text);}
+    .i-track{stroke:var(--i-line);stroke-width:2;}`}
+  </style>
+  <line x1="40" y1="60" x2="720" y2="60" className="i-track" />
+  <line x1="40" y1="140" x2="720" y2="140" className="i-track" />
+  <text x="40" y="40" className="i-lbl">RUN 1 (crashes / pauses after step 3)</text>
+  <text x="40" y="120" className="i-lbl">RUN 2 (resume)</text>
+
+  <circle cx="120" cy="60" r="7" fill="var(--i-accent)" />
+  <text x="120" y="80" className="i-lbl-e" textAnchor="middle">model call</text>
+  <circle cx="280" cy="60" r="7" fill="var(--i-violet)" />
+  <text x="280" y="80" className="i-lbl-e" textAnchor="middle">tool result</text>
+  <circle cx="440" cy="60" r="7" fill="var(--i-amber)" />
+  <text x="440" y="80" className="i-lbl-e" textAnchor="middle">human answer</text>
+  <circle cx="440" cy="60" r="13" fill="none" stroke="var(--i-red)" strokeWidth="2" />
+  <text x="440" y="30" className="i-lbl" textAnchor="middle" fill="var(--i-red)">stop</text>
+
+  <rect x="90" y="95" width="390" height="20" rx="4" fill="var(--i-card-bg)" stroke="var(--i-line)" />
+  <text x="285" y="109" className="i-lbl" textAnchor="middle">journal.jsonl (on disk)</text>
+
+  <circle cx="120" cy="140" r="7" fill="var(--i-accent)" opacity="0.4" />
+  <text x="120" y="160" className="i-lbl" textAnchor="middle">replayed</text>
+  <circle cx="280" cy="140" r="7" fill="var(--i-violet)" opacity="0.4" />
+  <text x="280" y="160" className="i-lbl" textAnchor="middle">replayed</text>
+  <circle cx="440" cy="140" r="7" fill="var(--i-amber)" opacity="0.4" />
+  <text x="440" y="160" className="i-lbl" textAnchor="middle">replayed</text>
+  <circle cx="600" cy="140" r="7" fill="var(--i-accent)" />
+  <text x="600" y="160" className="i-lbl-e" textAnchor="middle">new work</text>
+
+  <line x1="120" y1="53" x2="120" y2="103" stroke="var(--i-line)" strokeDasharray="2 3" />
+  <line x1="280" y1="53" x2="280" y2="103" stroke="var(--i-line)" strokeDasharray="2 3" />
+  <line x1="440" y1="53" x2="440" y2="103" stroke="var(--i-line)" strokeDasharray="2 3" />
+  <line x1="120" y1="115" x2="120" y2="133" stroke="var(--i-line)" strokeDasharray="2 3" />
+  <line x1="280" y1="115" x2="280" y2="133" stroke="var(--i-line)" strokeDasharray="2 3" />
+  <line x1="440" y1="115" x2="440" y2="133" stroke="var(--i-line)" strokeDasharray="2 3" />
+</svg>
+<div className="internals-legend">
+  <span><span className="dot" style={{background:'var(--i-accent)'}} />model call</span>
+  <span><span className="dot" style={{background:'var(--i-violet)'}} />tool result</span>
+  <span><span className="dot" style={{background:'var(--i-amber)'}} />human answer</span>
+  <span>faded = served from journal, not re-executed</span>
+</div>
+</div>
+
+## Label flow, visually
+
+<div className="internals-diagram">
+<svg viewBox="0 0 760 150" xmlns="http://www.w3.org/2000/svg">
+  <style>
+    {`.i-lbl2{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;fill:var(--i-muted);}
+    .i-lbl2-e{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:11px;fill:var(--i-text);}`}
+  </style>
+  <rect x="20" y="50" width="130" height="46" rx="8" fill="var(--i-card-bg)" stroke="var(--i-red)" />
+  <text x="85" y="70" className="i-lbl2-e" textAnchor="middle">classified</text>
+  <text x="85" y="85" className="i-lbl2" textAnchor="middle">value</text>
+
+  <line x1="150" y1="73" x2="260" y2="73" stroke="var(--i-line)" strokeWidth="2" />
+  <text x="205" y="63" className="i-lbl2" textAnchor="middle">slice / format</text>
+  <text x="205" y="93" className="i-lbl2" textAnchor="middle">still classified</text>
+
+  <rect x="260" y="50" width="130" height="46" rx="8" fill="var(--i-card-bg)" stroke="var(--i-red)" />
+  <text x="325" y="70" className="i-lbl2-e" textAnchor="middle">classified</text>
+  <text x="325" y="85" className="i-lbl2" textAnchor="middle">value</text>
+
+  <line x1="390" y1="73" x2="470" y2="73" stroke="var(--i-amber)" strokeWidth="2" />
+  <text x="430" y="63" className="i-lbl2" textAnchor="middle" fill="var(--i-amber)">declassify</text>
+  <text x="430" y="93" className="i-lbl2" textAnchor="middle" fill="var(--i-amber)">for model:</text>
+
+  <rect x="470" y="50" width="130" height="46" rx="8" fill="var(--i-card-bg)" stroke="var(--i-accent)" />
+  <text x="535" y="70" className="i-lbl2-e" textAnchor="middle" fill="var(--i-accent)">public</text>
+  <text x="535" y="85" className="i-lbl2" textAnchor="middle">value</text>
+
+  <line x1="600" y1="73" x2="680" y2="73" stroke="var(--i-line)" strokeWidth="2" />
+  <rect x="680" y="50" width="60" height="46" rx="8" fill="var(--i-card-bg)" stroke="var(--i-line)" />
+  <text x="710" y="70" className="i-lbl2-e" textAnchor="middle">model</text>
+  <text x="710" y="85" className="i-lbl2" textAnchor="middle">/ sink</text>
+
+  <line x1="20" y1="120" x2="740" y2="120" stroke="var(--i-red)" strokeWidth="1" strokeDasharray="4 3" />
+  <text x="380" y="140" className="i-lbl2" textAnchor="middle" fill="var(--i-red)">any direct path from classified → sink is a compile-time error</text>
+</svg>
+</div>
+
+</div>

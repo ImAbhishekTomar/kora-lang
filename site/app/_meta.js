@@ -6,6 +6,7 @@ export default {
   'model-calls': 'Typed model calls',
   comparison: 'Comparison',
   reference: 'KORA Language Reference',
+  internals: 'Internals',
   ecosystem: 'Ecosystem',
   decisions: 'Decisions',
   releases: 'Releases',

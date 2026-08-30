@@ -111,3 +111,49 @@ section#community > div.landing-feature-list:nth-of-type(1) > article { padding:
   .landing-mascot-area { min-height:13rem; overflow:hidden; }
   .landing-mascot-area>img { position:static; display:block; width:min(25rem, 100%); margin:0 auto; }
 }
+
+/* Internals page */
+.internals-page {
+  --i-text: var(--kora-ink);
+  --i-muted: var(--kora-muted);
+  --i-accent: var(--kora-teal);
+  --i-accent2: var(--kora-lime);
+  --i-amber: #b8811f;
+  --i-violet: #7c5fd1;
+  --i-red: #c4483a;
+  --i-line: #dfe6df;
+  --i-card-bg: rgba(255,255,255,.55);
+}
+.dark .internals-page {
+  --i-text: #edf3e9;
+  --i-muted: #9db3a8;
+  --i-amber: #e0a24a;
+  --i-violet: #a78bfa;
+  --i-red: #f0776a;
+  --i-line: #2b3934;
+  --i-card-bg: rgba(255,255,255,.035);
+}
+.internals-pipeline { display:flex; gap:0; overflow-x:auto; padding-bottom:.4rem; margin:1.5rem 0 2.5rem; }
+.internals-stage { flex:1 0 150px; background:var(--i-card-bg); border:1px solid var(--i-line); border-radius:14px; padding:1rem .9rem; }
+.internals-stage .tag { font-size:.68rem; letter-spacing:.08em; text-transform:uppercase; color:var(--i-muted); }
+.internals-stage .name { font-family:ui-monospace,SFMono-Regular,Menlo,monospace; font-size:1rem; font-weight:700; color:var(--i-accent); margin:.3rem 0 .35rem; }
+.internals-stage .desc { font-size:.82rem; color:var(--i-muted); }
+.internals-arrow { flex:0 0 30px; display:flex; align-items:center; justify-content:center; color:var(--i-muted); font-family:ui-monospace,monospace; }
+.internals-crates { display:grid; grid-template-columns:repeat(auto-fit,minmax(190px,1fr)); gap:.7rem; margin:0 0 2.5rem; }
+.internals-crate { padding:.7rem .9rem; border-radius:10px; background:var(--i-card-bg); border:1px solid var(--i-line); font-size:.82rem; color:var(--i-text); }
+.internals-crate b { display:block; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--i-accent); font-size:.85rem; margin-bottom:.15rem; }
+.internals-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(250px,1fr)); gap:1rem; margin:0 0 2.5rem; }
+.internals-card { padding:1.1rem 1.2rem 1.3rem; border:1px solid var(--i-line); border-radius:16px; background:var(--i-card-bg); }
+.internals-card h3 { margin:0 0 .4rem; font-size:.98rem; font-family:ui-monospace,SFMono-Regular,Menlo,monospace; color:var(--i-text); }
+.internals-card p { margin:0; font-size:.85rem; color:var(--i-muted); line-height:1.5; }
+.internals-why { margin-top:.6rem; padding-left:.6rem; border-left:2px solid var(--i-accent); font-size:.78rem; color:var(--i-accent); }
+.internals-diagram { border:1px solid var(--i-line); border-radius:16px; background:var(--i-card-bg); padding:1.1rem; margin:0 0 2.5rem; overflow-x:auto; }
+.internals-diagram svg { display:block; max-width:100%; height:auto; }
+.internals-legend { display:flex; gap:1.1rem; flex-wrap:wrap; margin-top:.7rem; font-size:.78rem; color:var(--i-muted); }
+.internals-legend .dot { width:9px; height:9px; border-radius:2px; display:inline-block; margin-right:.35rem; }
+@media (max-width:700px) { .internals-pipeline { gap:.5rem; } }
+
+/* Internals: animated supply-chain flow (svg-driven; see inline <style> in the diagram) */
+.flow-diagram svg { min-width:560px; }
+.flow-caption { margin-top:.7rem; font-size:.8rem; color:var(--i-muted); }
+.flow-caption strong { color:var(--i-red); }
