@@ -158,5 +158,9 @@ fn a_plain_def_is_still_rejected_as_a_tool() {
     let program = kora_syntax::parse(DEF_STILL_REJECTED_PROGRAM).unwrap();
     let mut i = kora_runtime::Interpreter::new();
     let err = i.run(&program).unwrap_err();
-    assert!(err.message.contains("is not a tool"), "got: {}", err.message);
+    assert!(
+        err.message.contains("is not a tool"),
+        "got: {}",
+        err.message
+    );
 }

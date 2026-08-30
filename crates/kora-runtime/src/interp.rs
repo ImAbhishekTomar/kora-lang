@@ -2361,11 +2361,10 @@ impl Interpreter {
 
         // A tool-call handler has nothing to watch without tools to call.
         if on_tool_call.is_some() && !kwargs.iter().any(|(n, _)| n == "tools") {
-            return Err(RuntimeError::new(
-                "`on tool_call` needs `tools=[...]` on this call",
-                span,
-            )
-            .with_hint("add `tools=[...]`, or drop the handler if this call has none"));
+            return Err(
+                RuntimeError::new("`on tool_call` needs `tools=[...]` on this call", span)
+                    .with_hint("add `tools=[...]`, or drop the handler if this call has none"),
+            );
         }
 
         // A mock stands in for the whole call. It is checked against the
@@ -3347,9 +3346,9 @@ impl Interpreter {
                         arg.span,
                     )
                     .with_hint(format!(
-                        "declare it with `tool {}(...)` or `agent {}(...)` so the model may call it",
-                        def.name, def.name
-                    )))
+                    "declare it with `tool {}(...)` or `agent {}(...)` so the model may call it",
+                    def.name, def.name
+                )))
                 }
                 other => {
                     return Err(RuntimeError::new(
@@ -3578,8 +3577,15 @@ impl Interpreter {
                     // string back as its result.
                     let (ran_arguments_json, result_json) = match on_tool_call {
                         Some(handler) => {
-                            match self.run_tool_call_handler(handler, &name, &arguments_json, scope)? {
-                                ToolCallDecision::ShortCircuit(result) => (arguments_json.clone(), result),
+                            match self.run_tool_call_handler(
+                                handler,
+                                &name,
+                                &arguments_json,
+                                scope,
+                            )? {
+                                ToolCallDecision::ShortCircuit(result) => {
+                                    (arguments_json.clone(), result)
+                                }
                                 ToolCallDecision::Proceed(rewritten) => {
                                     // A server that never answered is the same
                                     // shape of failure as a provider that
@@ -3606,16 +3612,17 @@ impl Interpreter {
                             }
                         }
                         None => {
-                            let result = match self.run_tool(&name, &arguments_json, tool_funcs, span)? {
-                                ToolRun::Result(text) => text,
-                                ToolRun::Unavailable(reason) => {
-                                    return Ok(AnalyzeOutcome::Failed {
-                                        reason,
-                                        tokens_in: 0,
-                                        tokens_out: 0,
-                                    })
-                                }
-                            };
+                            let result =
+                                match self.run_tool(&name, &arguments_json, tool_funcs, span)? {
+                                    ToolRun::Result(text) => text,
+                                    ToolRun::Unavailable(reason) => {
+                                        return Ok(AnalyzeOutcome::Failed {
+                                            reason,
+                                            tokens_in: 0,
+                                            tokens_out: 0,
+                                        })
+                                    }
+                                };
                             (arguments_json.clone(), result)
                         }
                     };

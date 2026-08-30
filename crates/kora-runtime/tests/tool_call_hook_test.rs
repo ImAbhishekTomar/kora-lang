@@ -139,7 +139,11 @@ fn on_tool_call_sees_the_call_before_it_runs() {
     let out = run(&config(&endpoint), PROGRAM);
     // `args` is a `dict`, whose key order is not guaranteed, so check both
     // pairs are present rather than pinning one exact ordering.
-    assert!(out[0].starts_with("calling divide with {"), "got: {}", out[0]);
+    assert!(
+        out[0].starts_with("calling divide with {"),
+        "got: {}",
+        out[0]
+    );
     assert!(out[0].contains("\"a\": 10"), "got: {}", out[0]);
     assert!(out[0].contains("\"b\": 0"), "got: {}", out[0]);
 }

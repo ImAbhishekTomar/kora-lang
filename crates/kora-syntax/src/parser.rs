@@ -1100,7 +1100,10 @@ impl Parser {
         self.advance();
         self.expect(&TokenKind::LParen, "expected `(` after `on tool_call`")?;
         let name_var = self.expect_ident("a name for the tool's name")?;
-        self.expect(&TokenKind::Comma, "expected `,` after the tool-name variable")?;
+        self.expect(
+            &TokenKind::Comma,
+            "expected `,` after the tool-name variable",
+        )?;
         let args_var = self.expect_ident("a name for the tool's arguments")?;
         self.expect(&TokenKind::RParen, "expected `)` after the handler names")?;
         let body = self.block("the `on tool_call` handler")?;
