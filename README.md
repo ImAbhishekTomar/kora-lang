@@ -2,6 +2,9 @@
 
 [![CI](https://github.com/ImAbhishekTomar/kora-lang/actions/workflows/ci.yml/badge.svg)](https://github.com/ImAbhishekTomar/kora-lang/actions/workflows/ci.yml)
 
+> **Development status:** Kora is still under development and is not ready for
+> production agents.
+
 An agent-first programming language. Python-like syntax; agents, model calls,
 budgets, and data-flow security as native language constructs — not libraries.
 
