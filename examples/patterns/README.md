@@ -16,7 +16,7 @@ here are workflows; the last is an agent.
 | [04_routing.ko](04_routing.ko) | routing | a constrained route field, a `match`, and a guard that asks a person |
 | [05_orchestrator_worker.ko](05_orchestrator_worker.ko) | orchestrator-worker | a plan computed at runtime, fanned out one worker per subtask |
 | [06_evaluator_optimizer.ko](06_evaluator_optimizer.ko) | evaluator-optimizer | generate, grade, repeat — bounded by the budget rather than a hop count |
-| [07_agent.ko](07_agent.ko) | agent | a model looping over tools until it has an answer |
+| [07_agent.ko](07_agent.ko) | agent | a model looping over tools, watched one call at a time by `on tool_call(...)` |
 
 Every file runs its own tests with no model, no API key, and no cassette:
 
@@ -53,6 +53,13 @@ or `with budget(...)` around a fan-out, is one pot that concurrent work draws
 down together. Exhaustion arrives as a value, so partial work survives. There
 is no equivalent in the LangGraph versions at any price.
 
+**The tool loop is open at one point.** `analyze(..., tools=[...]) on
+tool_call(name, args):` runs before each call the model asks for — `07_agent.ko`
+logs there, but the same block can rewrite `args` in place or `return` a
+string to skip the tool and hand that back as its result instead. LangGraph
+needs a custom `ToolNode` for this; here it hangs off the same call, the way
+`on token(t):` does for a streamed answer.
+
 **The failure paths are tested.** Every file here forces `Uncertain`,
 `Exhausted`, and `Failed` with typed mocks — the paths that normally go
 untested because provoking them means making a real model misbehave.
@@ -61,9 +68,6 @@ untested because provoking them means making a real model misbehave.
 
 Reading these should show the rough edges as well as the good parts.
 
-- **The tool loop is closed.** `07_agent.ko` cannot approve, log, or rewrite
-  an individual tool call before it runs. LangGraph's `ToolNode` and its
-  `ToolRuntime` state injection have no equivalent yet.
 - **A mock is one value.** `mock analyze -> Ok(...)` is checked against every
   call site it reaches, so a flow calling `analyze` for two different types
   can only have its failure paths tested — see the note in

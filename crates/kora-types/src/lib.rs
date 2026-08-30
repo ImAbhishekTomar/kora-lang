@@ -585,6 +585,7 @@ impl Checker<'_> {
                 ty,
                 value,
                 on_token,
+                on_tool_call,
                 ..
             } => {
                 self.check_expr(value);
@@ -602,6 +603,11 @@ impl Checker<'_> {
                 // variable, since Kora scopes only at function boundaries.
                 if let Some(handler) = on_token {
                     self.declare(&handler.var);
+                    self.nested(&handler.body);
+                }
+                if let Some(handler) = on_tool_call {
+                    self.declare(&handler.name_var);
+                    self.declare(&handler.args_var);
                     self.nested(&handler.body);
                 }
             }

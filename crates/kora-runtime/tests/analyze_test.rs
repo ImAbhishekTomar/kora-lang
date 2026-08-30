@@ -600,3 +600,20 @@ def main():
     std::fs::remove_file(&data).ok();
     assert!(err.contains("came from outside"), "got: {err}");
 }
+
+#[test]
+fn on_tool_call_needs_tools_on_the_call() {
+    let src = "type T:\n    a: str\n\ndef main():\n    x: T = analyze(\"d\", \"p\") on tool_call(name, args):\n        print(name)\n";
+    let err = run_with_cassette("tool-call-no-tools", src, vec![]).unwrap_err();
+    assert!(err.contains("needs `tools=[...]`"), "got: {err}");
+}
+
+#[test]
+fn on_tool_call_cannot_watch_a_plain_assignment() {
+    let src = "def main():\n    x = 1 on tool_call(name, args):\n        print(name)\n";
+    let err = run_with_cassette("tool-call-not-analyze", src, vec![]);
+    // A plain `x = value` has no room for `on tool_call(...)` in its
+    // grammar at all -- `on` there is just the next statement's name -- so
+    // this is a parse error, not the runtime check the annotated form hits.
+    assert!(err.is_err(), "expected a parse or runtime error");
+}

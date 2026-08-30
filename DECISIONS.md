@@ -209,6 +209,23 @@ design changes and should be deliberate.
   vision model reading a 900px receipt runs minutes past what a text call
   needs, and a timeout that fires on ordinary work teaches people to disable
   it.
+- **`analyze(..., tools=[...]) on tool_call(name, args):`** watches one call
+  before it runs. It hangs off the assignment rather than becoming a separate
+  API, for the same reason as the streaming handler: the tool loop still
+  produces one outcome to match on, so the handler is a thing the call does,
+  not a second call. `args` is an ordinary mutable `dict`, so rewriting it is
+  ordinary index-assignment rather than new syntax. `return <str>` inside the
+  handler skips the tool and hands that string back as its result — the one
+  place a handler is allowed to `return`, where `on token`'s explicitly
+  isn't, because this handler watches a call that has not happened yet and
+  `return` is how it says "don't." Only one `on ...` block is accepted per
+  call: watching tokens and watching tool calls are two different calls'
+  concerns (`str` results don't take tools; typed results with tools don't
+  stream), not two things to attach to the same one.
+- A rewritten call's *actual* arguments, not the model's original ones, are
+  what the tool history records. The next turn, and any trace of the run,
+  should agree with what really happened rather than with what the model
+  asked for and didn't get.
 
 ## Security labels
 

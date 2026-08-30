@@ -83,9 +83,17 @@ fn walk(stmts: &[Stmt], include_tests: bool, out: &mut Imports) {
                 on_token: Some(handler),
                 ..
             } => walk(&handler.body, include_tests, out),
+            StmtKind::Assign {
+                on_tool_call: Some(handler),
+                ..
+            } => walk(&handler.body, include_tests, out),
 
             // Every other statement has no body and cannot hide an import.
-            StmtKind::Assign { on_token: None, .. }
+            StmtKind::Assign {
+                on_token: None,
+                on_tool_call: None,
+                ..
+            }
             | StmtKind::AugAssign { .. }
             | StmtKind::Expr(_)
             | StmtKind::TypeDef { .. }

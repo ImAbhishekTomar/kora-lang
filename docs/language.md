@@ -290,6 +290,33 @@ written first, so a call that declines produces `Uncertain` and the handler
 never runs. Recorded runs keep the piece boundaries, so `--replay` and a
 durable resume deliver the answer in the same pieces the live run did.
 
+### Watching tool calls
+
+A call with `tools=[...]` may watch each call the model makes before it runs:
+
+```python
+t: Ticket = analyze(raw, "classify this ticket", tools=[priority_for]) on tool_call(name, args):
+    print(f"calling {name}({args})")
+    if name == "priority_for" and args["severity"] not in ["low", "medium", "high"]:
+        return "unknown severity, treated as low"
+```
+
+`args` is a `dict` built from what the model sent. Editing it in place —
+`args["severity"] = "high"` — rewrites what actually reaches the tool. Falling
+off the end of the block lets the (possibly rewritten) call proceed;
+`return`ing a string instead skips the tool entirely and hands that string
+back to the model as the call's result, the same as if the tool itself had
+returned it.
+
+This is the one way `analyze` lets a program stand between the model and a
+call it is about to make, for approving, logging, or correcting a call before
+it has any effect.
+
+Like the streaming handler, it hangs off the assignment rather than replacing
+it — the call still produces an outcome to match on — and only one `on ...`
+block is allowed per call: watching tokens and watching tool calls are two
+different calls' concerns, not two handlers on the same one.
+
 ---
 
 ## Outcomes and `match`

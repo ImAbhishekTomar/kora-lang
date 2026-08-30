@@ -29,6 +29,15 @@ pub enum StmtKind {
         /// call still returns an outcome to match on. Watching a stream and
         /// getting an answer are two things one call does, not two calls.
         on_token: Option<TokenHandler>,
+        /// `result: T = analyze(..., tools=[...]) on tool_call(name, args):`
+        /// — a block run before each tool call the model asks for.
+        ///
+        /// The same reasoning as `on_token` applies: it hangs off the
+        /// assignment rather than becoming a separate call, because the
+        /// tool loop still produces one outcome to match on. Mutually
+        /// exclusive with `on_token` — a call streams prose or watches its
+        /// own tool calls, not both, so the parser accepts at most one.
+        on_tool_call: Option<ToolCallHandler>,
     },
     /// `x += expr` and friends (desugared op stored explicitly)
     AugAssign {
@@ -256,6 +265,20 @@ pub struct Param {
 pub struct TokenHandler {
     /// Name bound to each piece of the answer inside the block.
     pub var: String,
+    pub body: Vec<Stmt>,
+    pub span: Span,
+}
+
+/// The `on tool_call(name, args):` block of an `analyze(..., tools=[...])`
+/// call. Runs once before each tool the model asks for, with `name` bound
+/// to the tool's name and `args` to its arguments as a mutable `dict` --
+/// editing `args` in place rewrites what the tool actually receives. A
+/// `return <str>` inside the block skips running the tool and hands that
+/// string back to the model as the tool's result instead.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ToolCallHandler {
+    pub name_var: String,
+    pub args_var: String,
     pub body: Vec<Stmt>,
     pub span: Span,
 }

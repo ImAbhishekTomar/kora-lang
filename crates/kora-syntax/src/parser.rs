@@ -120,7 +120,12 @@ impl Parser {
                 return self.bind_or_else(name, Some(ty), value, false, span);
             }
             let on_token = self.token_handler()?;
-            if on_token.is_none() {
+            let on_tool_call = if on_token.is_none() {
+                self.tool_call_handler()?
+            } else {
+                None
+            };
+            if on_token.is_none() && on_tool_call.is_none() {
                 self.expect_newline("assignment")?;
             }
             return Ok(Stmt {
@@ -130,6 +135,7 @@ impl Parser {
                     value,
                     classified: false,
                     on_token,
+                    on_tool_call,
                 },
                 span,
             });
@@ -174,6 +180,7 @@ impl Parser {
                     value,
                     classified: false,
                     on_token: None,
+                    on_tool_call: None,
                 },
                 span,
             });
@@ -598,6 +605,7 @@ impl Parser {
                 value,
                 classified: true,
                 on_token: None,
+                on_tool_call: None,
             },
             span,
         })
@@ -1072,6 +1080,36 @@ impl Parser {
         self.expect(&TokenKind::RParen, "expected `)` after the handler name")?;
         let body = self.block("the `on token` handler")?;
         Ok(Some(TokenHandler { var, body, span }))
+    }
+
+    /// `on tool_call(name, args):` after an annotated assignment, if it is
+    /// there. `on` is contextual here exactly as it is for `on token`, only
+    /// a keyword directly before `tool_call`.
+    fn tool_call_handler(&mut self) -> Result<Option<ToolCallHandler>, SyntaxError> {
+        let is_on = matches!(self.peek_kind(), TokenKind::Ident(name) if name == "on");
+        if !is_on {
+            return Ok(None);
+        }
+        let span = self.peek_span();
+        let followed_by_tool_call =
+            matches!(self.peek_next_kind(), Some(TokenKind::Ident(n)) if n == "tool_call");
+        if !followed_by_tool_call {
+            return Ok(None);
+        }
+        self.advance();
+        self.advance();
+        self.expect(&TokenKind::LParen, "expected `(` after `on tool_call`")?;
+        let name_var = self.expect_ident("a name for the tool's name")?;
+        self.expect(&TokenKind::Comma, "expected `,` after the tool-name variable")?;
+        let args_var = self.expect_ident("a name for the tool's arguments")?;
+        self.expect(&TokenKind::RParen, "expected `)` after the handler names")?;
+        let body = self.block("the `on tool_call` handler")?;
+        Ok(Some(ToolCallHandler {
+            name_var,
+            args_var,
+            body,
+            span,
+        }))
     }
 
     fn block(&mut self, what: &str) -> Result<Vec<Stmt>, SyntaxError> {
@@ -1797,5 +1835,30 @@ mod tests {
     fn error_on_bad_assign_target() {
         let err = parse("1 + 2 = 3\n").unwrap_err();
         assert!(err.message.contains("cannot assign"));
+    }
+
+    #[test]
+    fn on_tool_call_handler_parses() {
+        let p = ok("x: T = analyze(d, p) on tool_call(name, args):\n    print(name)\n");
+        match &p.items[0].kind {
+            StmtKind::Assign {
+                on_token: None,
+                on_tool_call: Some(handler),
+                ..
+            } => {
+                assert_eq!(handler.name_var, "name");
+                assert_eq!(handler.args_var, "args");
+                assert_eq!(handler.body.len(), 1);
+            }
+            other => panic!("expected an `on tool_call` handler, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn tool_call_is_not_a_reserved_word() {
+        // `on` is only special directly before `tool_call`, so both stay
+        // usable as ordinary names everywhere else.
+        let p = ok("on = 1\ntool_call = 2\n");
+        assert_eq!(p.items.len(), 2);
     }
 }

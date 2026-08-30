@@ -226,6 +226,24 @@ The data argument may contain images. They are sent alongside the JSON, in the o
 
 See [Typed model calls](/model-calls) for provider setup and replay.
 
+A call with `tools=[...]` may watch each call before it runs, with `on tool_call(name, args):`:
+
+```kora
+type Ticket:
+    priority: int
+
+tool priority_for(severity: str) -> int:
+    "Map a severity label to the on-call priority number."
+    if severity == "high":
+        return 1
+    return 3
+
+t: Ticket = analyze(raw, "classify this ticket", tools=[priority_for]) on tool_call(name, args):
+    print(f"calling {name}({args})")
+```
+
+`args` is a mutable `dict`; editing it in place rewrites what actually reaches the tool. `return`ing a string from the block skips the tool and hands that string back to the model as the call's result instead.
+
 ### `redact(value)`
 
 Masks classified fields before data leaves a safe scope.

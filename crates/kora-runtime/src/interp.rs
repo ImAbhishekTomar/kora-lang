@@ -403,23 +403,40 @@ impl Interpreter {
                 value,
                 classified,
                 on_token,
+                on_tool_call,
             } => {
                 // `x: T = analyze(...)` is the one place the declared type is
                 // available, and analyze needs it to build the model schema.
                 let v = match (ty, analyze_args(value)) {
-                    (Some(t), Some((args, kwargs))) => {
-                        self.eval_analyze(t, args, kwargs, on_token.as_ref(), value.span, scope)?
-                    }
-                    // The handler is only meaningful on a call that streams,
-                    // and only `analyze` streams. Caught here rather than
-                    // ignored, because a block that silently never runs is
-                    // worse than one that never parsed.
+                    (Some(t), Some((args, kwargs))) => self.eval_analyze(
+                        t,
+                        args,
+                        kwargs,
+                        on_token.as_ref(),
+                        on_tool_call.as_ref(),
+                        value.span,
+                        scope,
+                    )?,
+                    // Both handlers are only meaningful on a call that
+                    // actually does the thing they watch, and only `analyze`
+                    // does either. Caught here rather than ignored, because a
+                    // block that silently never runs is worse than one that
+                    // never parsed.
                     (_, None) if on_token.is_some() => {
                         return Err(RuntimeError::new(
                             "`on token` can only watch an `analyze()` call",
                             value.span,
                         )
                         .with_hint("write `answer: str = analyze(data, \"...\") on token(t):`"))
+                    }
+                    (_, None) if on_tool_call.is_some() => {
+                        return Err(RuntimeError::new(
+                            "`on tool_call` can only watch an `analyze()` call",
+                            value.span,
+                        )
+                        .with_hint(
+                            "write `result: T = analyze(data, \"...\", tools=[...]) on tool_call(name, args):`",
+                        ))
                     }
                     _ => {
                         let v = self.eval(value, scope)?;
@@ -840,7 +857,7 @@ impl Interpreter {
                 // handed the declared type so it can build the model schema.
                 let outcome = match (ty, analyze_args(value)) {
                     (Some(t), Some((args, kwargs))) => {
-                        self.eval_analyze(t, args, kwargs, None, value.span, scope)?
+                        self.eval_analyze(t, args, kwargs, None, None, value.span, scope)?
                     }
                     _ => self.eval(value, scope)?,
                 };
@@ -2218,12 +2235,14 @@ impl Interpreter {
     ///
     /// The declared type becomes a JSON schema the model must satisfy, so the
     /// result is ordinary typed data the rest of the program can branch on.
+    #[allow(clippy::too_many_arguments)]
     fn eval_analyze(
         &mut self,
         ty: &TypeExpr,
         args: &[Expr],
         kwargs: &[(String, Expr)],
         on_token: Option<&TokenHandler>,
+        on_tool_call: Option<&ToolCallHandler>,
         span: Span,
         scope: &mut Scope,
     ) -> Result<Value, RuntimeError> {
@@ -2338,6 +2357,15 @@ impl Interpreter {
             .with_hint(
                 "a declared type arrives as JSON, so its pieces are syntax, not prose; annotate the call `: str` to stream an answer, or drop the handler to keep the typed result",
             ));
+        }
+
+        // A tool-call handler has nothing to watch without tools to call.
+        if on_tool_call.is_some() && !kwargs.iter().any(|(n, _)| n == "tools") {
+            return Err(RuntimeError::new(
+                "`on tool_call` needs `tools=[...]` on this call",
+                span,
+            )
+            .with_hint("add `tools=[...]`, or drop the handler if this call has none"));
         }
 
         // A mock stands in for the whole call. It is checked against the
@@ -2491,6 +2519,8 @@ impl Interpreter {
                     &schema,
                     &tools,
                     &tool_funcs,
+                    on_tool_call,
+                    scope,
                     span,
                 )?,
                 Vec::new(),
@@ -3458,6 +3488,8 @@ impl Interpreter {
         schema: &Schema,
         tools: &[ToolSpec],
         tool_funcs: &[ToolHandle],
+        on_tool_call: Option<&ToolCallHandler>,
+        scope: &mut Scope,
         span: Span,
     ) -> Result<AnalyzeOutcome, RuntimeError> {
         // A hard ceiling so a model that keeps asking for tools cannot spin
@@ -3525,27 +3557,59 @@ impl Interpreter {
                             span,
                         ));
                     }
-                    // A server that never answered is the same shape of
-                    // failure as a provider that never answered, and ends the
-                    // call the same way. Handing it back to the model instead
-                    // would invite it to call the wedged tool again, paying
-                    // the timeout on every remaining turn until the budget is
-                    // gone -- and then reporting `Exhausted`, which names the
-                    // wrong cause.
-                    let result_json =
-                        match self.run_tool(&name, &arguments_json, tool_funcs, span)? {
-                            ToolRun::Result(text) => text,
-                            ToolRun::Unavailable(reason) => {
-                                return Ok(AnalyzeOutcome::Failed {
-                                    reason,
-                                    tokens_in: 0,
-                                    tokens_out: 0,
-                                })
+                    // The handler runs before the tool does, so it can log
+                    // the call, rewrite `args` in place, or -- by returning a
+                    // string -- skip running the tool entirely and hand that
+                    // string back as its result.
+                    let (ran_arguments_json, result_json) = match on_tool_call {
+                        Some(handler) => {
+                            match self.run_tool_call_handler(handler, &name, &arguments_json, scope)? {
+                                ToolCallDecision::ShortCircuit(result) => (arguments_json.clone(), result),
+                                ToolCallDecision::Proceed(rewritten) => {
+                                    // A server that never answered is the same
+                                    // shape of failure as a provider that
+                                    // never answered, and ends the call the
+                                    // same way. Handing it back to the model
+                                    // instead would invite it to call the
+                                    // wedged tool again, paying the timeout on
+                                    // every remaining turn until the budget is
+                                    // gone -- and then reporting `Exhausted`,
+                                    // which names the wrong cause.
+                                    let result =
+                                        match self.run_tool(&name, &rewritten, tool_funcs, span)? {
+                                            ToolRun::Result(text) => text,
+                                            ToolRun::Unavailable(reason) => {
+                                                return Ok(AnalyzeOutcome::Failed {
+                                                    reason,
+                                                    tokens_in: 0,
+                                                    tokens_out: 0,
+                                                })
+                                            }
+                                        };
+                                    (rewritten, result)
+                                }
                             }
-                        };
+                        }
+                        None => {
+                            let result = match self.run_tool(&name, &arguments_json, tool_funcs, span)? {
+                                ToolRun::Result(text) => text,
+                                ToolRun::Unavailable(reason) => {
+                                    return Ok(AnalyzeOutcome::Failed {
+                                        reason,
+                                        tokens_in: 0,
+                                        tokens_out: 0,
+                                    })
+                                }
+                            };
+                            (arguments_json.clone(), result)
+                        }
+                    };
+                    // The history records what actually ran, not what the
+                    // model originally asked for -- a rewritten call is the
+                    // truth the next turn, and the trace, should agree on.
                     history.push(ToolExchange {
                         name,
-                        arguments_json,
+                        arguments_json: ran_arguments_json,
                         result_json,
                     });
                 }
@@ -3601,6 +3665,63 @@ impl Interpreter {
             serde_json::to_string(&value_to_json(&result)).unwrap_or_else(|_| "null".to_string()),
         ))
     }
+
+    /// Run one `on tool_call` handler body before the model-requested call
+    /// it watches.
+    ///
+    /// `args` is bound as a `dict` built from the arguments JSON, so
+    /// `args["b"] = 1` (ordinary index-assignment, nothing special) rewrites
+    /// what actually reaches the tool. `break` and `continue` are refused
+    /// like the `on token` handler's -- there is no loop here to leave --
+    /// but `return <str>` *is* accepted, unlike `on token`: this handler
+    /// watches a call that has not run yet, and returning is how it says
+    /// "don't run it, use this instead."
+    fn run_tool_call_handler(
+        &mut self,
+        handler: &ToolCallHandler,
+        name: &str,
+        arguments_json: &str,
+        scope: &mut Scope,
+    ) -> Result<ToolCallDecision, RuntimeError> {
+        let parsed: serde_json::Value =
+            serde_json::from_str(arguments_json).unwrap_or(serde_json::Value::Null);
+        let args_value = json_to_value(&parsed);
+        scope.insert(
+            handler.name_var.clone(),
+            Value::Str(Rc::new(name.to_string())),
+        );
+        scope.insert(handler.args_var.clone(), args_value.clone());
+        match self.exec_block(&handler.body, scope)? {
+            Flow::Normal => {
+                // Re-read rather than reuse `args_value`: a handler that
+                // rebinds `args = {...}` wholesale, instead of mutating it in
+                // place, should have that take effect too.
+                let rewritten = scope.get(&handler.args_var).cloned().unwrap_or(args_value);
+                let json = serde_json::to_string(&value_to_json(rewritten.unlabeled()))
+                    .unwrap_or_else(|_| arguments_json.to_string());
+                Ok(ToolCallDecision::Proceed(json))
+            }
+            Flow::Return(Value::Str(text)) => Ok(ToolCallDecision::ShortCircuit(
+                serde_json::to_string(&serde_json::Value::String(text.to_string()))
+                    .unwrap_or_else(|_| "null".to_string()),
+            )),
+            Flow::Return(other) => Err(RuntimeError::new(
+                format!(
+                    "`on tool_call` must `return` a string, got {}",
+                    other.type_name()
+                ),
+                handler.span,
+            )
+            .with_hint(
+                "return the text to hand back to the model in place of running the tool, or fall off the end of the block to let it run",
+            )),
+            Flow::Break | Flow::Continue => Err(RuntimeError::new(
+                "`break` and `continue` have nothing to leave inside an `on tool_call` handler",
+                handler.span,
+            )
+            .with_hint("the handler runs once per tool call, not in a loop")),
+        }
+    }
 }
 
 /// What running one model-requested tool produced.
@@ -3612,6 +3733,14 @@ enum ToolRun {
     /// The server did not answer at all. Not something the model can route
     /// around, so the `analyze` call ends as `Failed(reason)`.
     Unavailable(String),
+}
+
+/// What an `on tool_call` handler decided about the call it watched.
+enum ToolCallDecision {
+    /// Run the tool, with arguments JSON possibly rewritten by the handler.
+    Proceed(String),
+    /// Skip the tool; hand this text back to the model as its result.
+    ShortCircuit(String),
 }
 
 /// Map a Kora type annotation onto a model-visible field type.

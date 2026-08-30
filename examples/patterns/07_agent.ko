@@ -12,10 +12,10 @@
 # its docstring is the description, and the result is still a declared type
 # rather than a message list to pick through.
 #
-# What it costs, honestly: the loop is not open. There is no hook to approve,
-# log, or rewrite an individual tool call before it runs — LangGraph's
-# `ToolNode` and its `ToolRuntime` state injection have no equivalent here
-# yet. See README.md.
+# The loop is open at one point: `on tool_call(name, args):` runs before each
+# call the model asks for. It can log (as below), rewrite `args` in place, or
+# `return` a string to skip the tool and hand that back as its result
+# instead — the closest thing here to LangGraph's `ToolNode`/`ToolRuntime`.
 
 type Answer:
     result: str @description("The final numeric answer, as text")
@@ -42,7 +42,8 @@ agent calculator(question: str) -> str:
     # tools is stopped by a turn limit with a worse error.
     budget: max_tokens = 10000, max_steps = 8
 
-    a: Answer = analyze(question, "answer this using the arithmetic tools", tools=[add, multiply, divide])
+    a: Answer = analyze(question, "answer this using the arithmetic tools", tools=[add, multiply, divide]) on tool_call(name, args):
+        print(f"  calling {name}({args})")
     match a:
         case Ok(v):
             return f"{v.result}  ({v.working})"

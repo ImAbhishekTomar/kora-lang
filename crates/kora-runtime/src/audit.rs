@@ -153,15 +153,24 @@ fn walk_stmt(stmt: &Stmt, file: &str, out: &mut Vec<DeclassifySite>) {
         }
         StmtKind::BindOrElse { else_body, .. } => walk_stmts(else_body, file, out),
         StmtKind::FuncDef(f) => walk_stmts(&f.body, file, out),
-        // `on token(t):` carries a body of its own, streamed or not: a
-        // `declassify` inside it releases data the same as one anywhere
-        // else, and the exhaustiveness this module promises means it cannot
-        // hide there just because the block hangs off an assignment.
+        // `on token(t):` / `on tool_call(name, args):` each carry a body of
+        // their own: a `declassify` inside either releases data the same as
+        // one anywhere else, and the exhaustiveness this module promises
+        // means it cannot hide there just because the block hangs off an
+        // assignment.
         StmtKind::Assign {
             on_token: Some(handler),
             ..
         } => walk_stmts(&handler.body, file, out),
-        StmtKind::Assign { on_token: None, .. }
+        StmtKind::Assign {
+            on_tool_call: Some(handler),
+            ..
+        } => walk_stmts(&handler.body, file, out),
+        StmtKind::Assign {
+            on_token: None,
+            on_tool_call: None,
+            ..
+        }
         | StmtKind::AugAssign { .. }
         | StmtKind::Expr(_)
         | StmtKind::TypeDef { .. }

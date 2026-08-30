@@ -54,13 +54,22 @@ fn walk(stmts: &[Stmt], out: &mut BTreeSet<u32>) {
             }
             StmtKind::BindOrElse { else_body, .. } => walk(else_body, out),
             StmtKind::FuncDef(f) => walk(&f.body, out),
-            // `on token(t):` is a body of its own, so a breakpoint set
-            // inside it must snap to a real line the same as any other block.
+            // `on token(t):` / `on tool_call(name, args):` are bodies of
+            // their own, so a breakpoint set inside either must snap to a
+            // real line the same as any other block.
             StmtKind::Assign {
                 on_token: Some(handler),
                 ..
             } => walk(&handler.body, out),
-            StmtKind::Assign { on_token: None, .. }
+            StmtKind::Assign {
+                on_tool_call: Some(handler),
+                ..
+            } => walk(&handler.body, out),
+            StmtKind::Assign {
+                on_token: None,
+                on_tool_call: None,
+                ..
+            }
             | StmtKind::AugAssign { .. }
             | StmtKind::Expr(_)
             | StmtKind::TypeDef { .. }
