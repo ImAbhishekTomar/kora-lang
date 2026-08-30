@@ -109,10 +109,39 @@ model transport; the tool side of the same loop still had no timeout at all.
       that fanned out reached for a real model and failed in replay mode. The
       fan-out was the one path most worth testing and the one that could not
       be.
-- [x] `patterns/README.md` states what is *not* good yet — nested schemas, the
-      closed tool loop, single-valued mocks, agents not being tools, no
-      streaming — since the honest half of a comparison is the half that says
-      where it loses.
+- [x] `patterns/README.md` states what is *not* good yet, and is kept current
+      as each gap closes rather than left to describe an older version of the
+      language — see below.
+
+### The pattern set's remaining gaps, closed (shipped)
+
+Everything `patterns/README.md` originally listed under "what is not good
+yet" except streaming's own scope (see Language and runtime status) is now
+fixed:
+
+- [x] **`analyze` requests a nested declared type.** `list[Section]` reaches
+      the model directly; `05_orchestrator_worker.ko`'s parallel-array
+      workaround and its ragged-plan case are gone. (This had already shipped
+      on `main` before the pattern set called it out — the example just
+      hadn't been updated to use it yet.)
+- [x] **The tool loop is open at one point.** `analyze(..., tools=[...]) on
+      tool_call(name, args):` runs before each call the model asks for. `args`
+      is a mutable `dict`, so rewriting it is ordinary index-assignment;
+      `return`ing a string from the block skips the tool and hands that string
+      back as its result instead. Hangs off the assignment the same way
+      `on token(t):` does, for the same reason — the tool loop still produces
+      one outcome to match on. Only one `on ...` block per call.
+- [x] **An agent is a valid tool.** `tools=[specialist]` accepts an `agent`
+      the same as a `tool`, dispatched through the same `call_function` a
+      direct call would use — same heap, own `budget:` line honored. Not
+      given the isolated heap a `parallel for` worker gets: that isolation
+      exists to make concurrent threads safe, and a tool call is one more
+      synchronous step in the same loop, not a second thread.
+- [x] **A mock is no longer one value for the whole flow.** `with mock`
+      already nested; the fix was searching the mock stack innermost-first
+      for the one matching the call's declared type instead of erroring on
+      the first mismatch. A flow calling `analyze` for two different types
+      mocks each with its own nested block — no new syntax.
 
 ## Development
 

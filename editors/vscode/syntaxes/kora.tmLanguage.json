@@ -93,11 +93,11 @@
       ]
     },
     "keywords": {
-      "match": "\\b(def|if|elif|else|while|for|in|return|break|continue|pass|and|or|not|match|case|type)\\b",
+      "match": "\\b(def|if|elif|else|while|for|in|return|break|continue|pass|and|or|not|match|case|type|with)\\b",
       "name": "keyword.control.kora"
     },
     "kora-keywords": {
-      "match": "\\b(analyze|agent|tool|budget|parallel|classified|declassify|ask_human|test|mock|assert|use)\\b",
+      "match": "\\b(analyze|agent|tool|budget|parallel|classified|declassify|ask_human|test|mock|assert|use|on|token|tool_call)\\b",
       "name": "keyword.other.agent.kora"
     },
     "types": {

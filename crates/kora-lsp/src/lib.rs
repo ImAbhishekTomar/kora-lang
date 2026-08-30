@@ -456,6 +456,8 @@ const KEYWORDS: &[&str] = &[
     "assert",
     "with mock",
     "with budget",
+    "on token",
+    "on tool_call",
 ];
 
 fn cast<P: serde::de::DeserializeOwned>(request: &Request) -> Option<P> {

@@ -171,6 +171,20 @@ Each branch of `parallel for` runs on its own thread with its own heap, so
 there is no shared mutable state to guard. All branches draw from one token
 budget, and results come back in input order.
 
+An `agent` is a valid tool too, so a supervisor can delegate to specialists —
+each with its own `budget:` line — rather than wrapping every specialist in
+a function that cannot carry one: `tools=[triage, billing]`. And a call with
+`tools=[...]` can watch each call before it runs:
+
+```python
+t: Ticket = analyze(raw, "classify this ticket", tools=[priority_for]) on tool_call(name, args):
+    print(f"calling {name}({args})")
+```
+
+`args` is a mutable `dict` — editing it rewrites what the tool actually
+receives, and `return`ing a string skips the tool and hands that string back
+as its result instead.
+
 ## Images
 
 Most of what people hand a model is a picture — a receipt, a screenshot, a
@@ -420,6 +434,16 @@ An untyped mocking framework cannot catch that — it has no idea what the call
 site expected, so a mock that drifts from reality keeps passing. And the
 failure paths nobody tests today (`Uncertain`, `Exhausted`, `Failed`) are
 forceable, because they are ordinary values.
+
+A flow calling `analyze` for more than one type mocks each with its own
+nested block; each call site finds the one whose type it declares, searching
+outward past whichever nested mock doesn't match:
+
+```python
+with mock analyze -> Ok(Draft("a joke")):
+    with mock analyze -> Ok(Verdict("funny", "")):
+        assert optimize("cats") == "a joke"
+```
 
 ## Editor support
 
