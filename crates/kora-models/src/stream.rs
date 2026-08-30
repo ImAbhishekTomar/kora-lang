@@ -76,6 +76,10 @@ pub struct TextExtractor {
     expecting_value: bool,
     /// Holds a `\uXXXX` escape while its four digits are still arriving.
     pending_escape: String,
+    /// Holds the leading half of a `\uXXXX\uXXXX` surrogate pair while the
+    /// trailing half is still outstanding. Neither half is a character on
+    /// its own, so nothing can be emitted until the other one arrives.
+    pending_surrogate: Option<u32>,
 }
 
 #[derive(Debug, Default, PartialEq)]
@@ -105,6 +109,15 @@ impl TextExtractor {
     /// The complete response body seen so far.
     pub fn raw(&self) -> &str {
         &self.raw
+    }
+
+    /// Give up on a surrogate whose other half never came. Substituting is
+    /// preferred to dropping so that the loss shows in the output rather
+    /// than passing for text the model never wrote.
+    fn flush_surrogate(pending: &mut Option<u32>, out: &mut String) {
+        if pending.take().is_some() {
+            out.push(char::REPLACEMENT_CHARACTER);
+        }
     }
 
     /// Feed one fragment of the response; returns the characters of `answer`
@@ -139,12 +152,24 @@ impl TextExtractor {
                     }
                 }
                 State::Value => match ch {
-                    '"' => self.state = State::Done,
+                    '"' => {
+                        Self::flush_surrogate(&mut self.pending_surrogate, &mut out);
+                        self.state = State::Done;
+                    }
                     '\\' => self.state = State::Escape,
-                    _ => out.push(ch),
+                    _ => {
+                        Self::flush_surrogate(&mut self.pending_surrogate, &mut out);
+                        out.push(ch);
+                    }
                 },
                 State::Escape => {
                     self.state = State::Value;
+                    // A `\u` may be the trailing half of a pair, so the
+                    // pending half is only abandoned once this escape is
+                    // known to be something else.
+                    if ch != 'u' {
+                        Self::flush_surrogate(&mut self.pending_surrogate, &mut out);
+                    }
                     match ch {
                         'n' => out.push('\n'),
                         't' => out.push('\t'),
@@ -161,14 +186,43 @@ impl TextExtractor {
                 State::Unicode => {
                     self.pending_escape.push(ch);
                     if self.pending_escape.len() == 4 {
-                        if let Some(decoded) = u32::from_str_radix(&self.pending_escape, 16)
-                            .ok()
-                            .and_then(char::from_u32)
-                        {
-                            out.push(decoded);
-                        }
+                        let value = u32::from_str_radix(&self.pending_escape, 16).ok();
                         self.pending_escape.clear();
                         self.state = State::Value;
+                        match (self.pending_surrogate, value) {
+                            // The trailing half of a pair: combine into the
+                            // one character the two of them stand for.
+                            (Some(high), Some(low @ 0xDC00..=0xDFFF)) => {
+                                self.pending_surrogate = None;
+                                let combined = 0x1_0000 + ((high - 0xD800) << 10) + (low - 0xDC00);
+                                if let Some(decoded) = char::from_u32(combined) {
+                                    out.push(decoded);
+                                }
+                            }
+                            // A leading half: hold it back, since on its own
+                            // it names no character.
+                            (None, Some(high @ 0xD800..=0xDBFF)) => {
+                                self.pending_surrogate = Some(high)
+                            }
+                            (pending, value) => {
+                                if pending.is_some() {
+                                    self.pending_surrogate = None;
+                                    out.push(char::REPLACEMENT_CHARACTER);
+                                }
+                                match value {
+                                    // A second leading half in a row: the
+                                    // first is unpaired, this one still may
+                                    // not be.
+                                    Some(high @ 0xD800..=0xDBFF) => {
+                                        self.pending_surrogate = Some(high)
+                                    }
+                                    Some(v) => out.push(
+                                        char::from_u32(v).unwrap_or(char::REPLACEMENT_CHARACTER),
+                                    ),
+                                    None => out.push(char::REPLACEMENT_CHARACTER),
+                                }
+                            }
+                        }
                     }
                 }
                 State::Done => {}
@@ -429,6 +483,34 @@ mod tests {
         let mut extractor = TextExtractor::new();
         assert_eq!(extractor.push(r#"{"__uncertain__":"cannot comply","#), "");
         assert!(extractor.raw().contains("cannot comply"));
+    }
+
+    #[test]
+    fn decodes_a_surrogate_pair_into_one_character() {
+        // Providers encode anything outside the basic multilingual plane as
+        // a `\uXXXX\uXXXX` pair. Decoding the halves separately yields two
+        // values that are not characters at all, so the pair has to be
+        // recognised as one unit.
+        assert_eq!(drain(&[r#"{"answer":"hi \uD83D\uDE00"}"#]), "hi 😀");
+    }
+
+    #[test]
+    fn decodes_a_surrogate_pair_split_across_fragments() {
+        // The split lands between the two halves, which is where a provider
+        // is most likely to put it.
+        assert_eq!(drain(&[r#"{"answer":"\uD83D"#, r#"\uDE00"}"#]), "😀");
+    }
+
+    #[test]
+    fn a_lone_surrogate_becomes_the_replacement_character() {
+        // Nothing valid can be built from half a pair. Substituting keeps
+        // the loss visible rather than dropping the character silently.
+        assert_eq!(drain(&[r#"{"answer":"a\uD83Db"}"#]), "a\u{fffd}b");
+    }
+
+    #[test]
+    fn a_lone_surrogate_before_a_real_escape_loses_only_itself() {
+        assert_eq!(drain(&[r#"{"answer":"\uD83DA"}"#]), "\u{fffd}A");
     }
 
     #[test]
