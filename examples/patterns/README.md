@@ -61,11 +61,6 @@ untested because provoking them means making a real model misbehave.
 
 Reading these should show the rough edges as well as the good parts.
 
-- **`analyze` cannot request nested types.** Result fields are `str`, `int`,
-  `float`, `bool`, or `list[str]`. So `05_orchestrator_worker.ko` asks for two
-  parallel `list[str]` fields and zips them by index, where the LangGraph
-  version asks for `list[Section]` directly. It also means a ragged plan is
-  possible, which that file handles explicitly rather than hiding.
 - **The tool loop is closed.** `07_agent.ko` cannot approve, log, or rewrite
   an individual tool call before it runs. LangGraph's `ToolNode` and its
   `ToolRuntime` state injection have no equivalent yet.
