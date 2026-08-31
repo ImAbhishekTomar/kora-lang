@@ -212,6 +212,28 @@ fixed:
 - [ ] `network` — no dedicated stdlib module beyond `http`.
 - [ ] CLI beautification — no dedicated polish pass tracked yet.
 
+### Runtime robustness (stress-test pass, 2026-08-31)
+
+Found with `scripts/stress.py` (new — breaking-point probes under a memory-
+safe watchdog, separate from `scripts/bench.py`'s throughput numbers). Full
+writeup in [DECISIONS.md](DECISIONS.md), "Execution strategy".
+
+- [x] **Deep recursion crashed the process instead of erroring.** Past
+      ~1900 nested calls the host stack overflowed (SIGABRT, uncatchable).
+      Fixed: errors cleanly at 1000 nested calls (`call_depth` guard in
+      `interp.rs`).
+- [x] **`s = s + x` / `s += x` accumulation was O(n²).** Fixed for the plain
+      local-name case via an in-place append when nothing else references
+      the string (`try_inplace_str_concat`). 1M-char loop: 15s → 0.44s.
+      `strings` benchmark: 317ms → 67ms.
+- [ ] **The `--durable` journal is still O(n²).** Rewrites the whole run to
+      disk on every effect, by design, for crash-safety. 15K effects already
+      exceeds a 45s budget. Real fix is an append-only on-disk format
+      (JSONL, one effect per line) — deliberately not attempted in the same
+      pass as the two fixes above, since it touches the crash-safety
+      mechanism itself and the format `kora runs`/`kora answer`/resume read.
+      Needs its own review.
+
 ## Capability roadmap
 
 Status legend: **Have** means the capability is implemented and exercised;

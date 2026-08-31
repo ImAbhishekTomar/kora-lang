@@ -599,6 +599,11 @@ an unjournaled run. CI compares every pull request against its base commit on
 one runner and fails a benchmark more than 1.25x slower. Current numbers and
 how to read them: [benches/README.md](benches/README.md).
 
+```bash
+python3 scripts/bench.py --history --against-history
+python3 scripts/stress.py --history --against-history
+```
+
 ## License
 
 MIT

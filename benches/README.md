@@ -107,6 +107,28 @@ Three things worth saying out loud:
    per effect than a short one. Known, measured, and now visible when it is
    fixed.
 
+## Breaking points, not just throughput
+
+`scripts/bench.py` answers "how much does this cost". `scripts/stress.py`
+answers a different question: "at what size does this stop working" —
+deepest recursion before the interpreter gives up, largest string
+accumulation, most `--durable` effects, widest `parallel for` fan-out. Each
+probe runs under a watchdog (RSS cap, timeout, and a system-memory abort
+switch) so finding a real limit never means also hanging the machine it runs
+on.
+
+```bash
+python3 scripts/stress.py                  # every probe
+python3 scripts/stress.py --filter recur    # one probe
+python3 scripts/stress.py --history         # append to benches/stress_history.jsonl
+python3 scripts/stress.py --against-history # flag a probe that broke at a smaller N than last time
+```
+
+`scripts/bench.py --history` / `--against-history` do the same thing for the
+throughput numbers, appending to `benches/history.jsonl` — a running record
+to diff a change against, independent of the single committed
+`baseline.json` snapshot.
+
 ## In CI
 
 The `benchmarks` job runs on every pull request. It builds the base commit,

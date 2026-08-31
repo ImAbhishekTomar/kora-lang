@@ -793,6 +793,52 @@ security boundary.
 - The pairs in that set (`sequential`/`parallel`, `durable_off`/`durable_on`)
   are deliberate: the price of a guarantee is only legible next to a run
   without it.
+- **Breaking points, not just throughput.** `benches/` measures steady-state
+  cost; `scripts/stress.py` separately answers "how far before it stops
+  working", under a watchdog cage (RSS cap, timeout, system-memory abort) so
+  a probe that finds a real limit cannot take the host machine down with it.
+  `--history`/`--against-history` on both scripts append to
+  `benches/history.jsonl` / `benches/stress_history.jsonl` so a change's
+  effect is a diff against a recorded run, not a one-off number. Findings
+  from the first pass (2026-08-31, measured on a 10-CPU Apple Silicon
+  laptop):
+  - **Recursion depth.** A user function call recurses through the host Rust
+    stack (see the durability note above — no VM frame stack exists to
+    bound). Past ~1900 nested calls the OS stack overflowed and the process
+    SIGABRT'd — uncatchable, not a language-level error. Fixed:
+    `Interpreter::call_depth` now errors at 1000 nested calls (`interp.rs`,
+    `call_function`/`call_function_body`), comfortably under the real
+    overflow point. A future bytecode VM with an explicit frame stack should
+    revisit the constant, since it will not share the host stack's ceiling.
+  - **String accumulation was O(n²).** `s = s + x` in a loop reached
+    `binop`'s `Str(a), Str(b) => Rc::new(format!("{a}{b}"))`, which copies
+    both operands on every append. Fixed for the two idiomatic forms
+    (`x = x + y` and `x += y`, plain local names, no label/type/streaming
+    complications) via `Interpreter::try_inplace_str_concat`: the current
+    value is taken out of scope first, and if nothing else holds a reference
+    (`Rc::get_mut` succeeds), its buffer is grown and appended to in place —
+    the same refcount-checked trick CPython uses for the same pattern.
+    Measured: 1M-char accumulation went from 15s to 0.44s (34x); the
+    `strings` throughput benchmark from 317ms to 67ms. `s = "a" + s` (target
+    not on the left) and any aliased case still take the copying path —
+    correctness over completeness, and aliasing safety was verified directly
+    (`b = a; b = b + "x"` leaves `a` untouched).
+  - **The durable journal is still O(n²), unfixed.** `Journal::persist`
+    (`journal.rs`) serializes and rewrites the *entire* run to disk on every
+    single effect — by design, for crash-safety (atomic write-then-rename of
+    one file, so a crash mid-write can never leave a torn journal). That
+    design is exactly why this one was not patched alongside the two above:
+    it is the crash-safety mechanism itself, its on-disk format is read by
+    `kora runs` / `kora answer` / resume, and a subtle bug in a quick fix
+    would silently defeat the guarantee `--durable` exists to provide.
+    Measured: 1K effects/1s, 5K/4s, 15K exceeds a 45s budget — confirms the
+    quadratic shape `benches/README.md` already documented, now with real
+    numbers. The scoped fix, for whoever picks this up: move to an
+    append-only format (e.g. one JSON line per effect, opened in append
+    mode) for `record()`, keeping the current whole-file
+    write-temp-then-rename only for the rare `suspend()`/`finish()` calls —
+    but this is a persistence-format migration touching replay/resume, and
+    deserves its own review, not a same-sitting patch.
 
 ## Ecosystem strategy
 

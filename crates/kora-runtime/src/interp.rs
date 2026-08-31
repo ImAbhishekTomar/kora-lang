@@ -268,7 +268,20 @@ pub struct Interpreter {
     /// The checker rejects the obvious spelling; this catches the rest,
     /// including a guard that reaches `analyze` through a helper.
     in_guard: u32,
+    /// Nested user-function calls on the current Rust call stack.
+    ///
+    /// `call_function` recurses through the host stack, which overflows and
+    /// aborts the process (SIGABRT, uncatchable) well before any reasonable
+    /// program-level limit -- around 1900 frames on an 8MB stack, measured.
+    /// This counter turns that hard crash into a normal `RuntimeError` a
+    /// program can see and report.
+    call_depth: usize,
 }
+
+/// Recursion depth at which `call_function` errors instead of recursing
+/// further. Kept well under the ~1900-frame point where the host stack
+/// actually overflows, so the check always wins the race.
+const MAX_CALL_DEPTH: usize = 1000;
 
 /// Tags a program may construct directly: the outcomes of a model call and
 /// the stdlib's result shape.
@@ -390,6 +403,7 @@ impl Interpreter {
             debugger: Option::None,
             debug: debug::Session::default(),
             in_guard: 0,
+            call_depth: 0,
         }
     }
 
@@ -475,6 +489,35 @@ impl Interpreter {
                 on_tool_call,
                 stream,
             } => {
+                // `out = out + piece` is the idiomatic way to build a string
+                // in a loop, and the fast path below turns it from O(n) per
+                // append into amortized O(1) -- see `try_inplace_str_concat`.
+                // Only takes over the plain form: no declared type, no label,
+                // no streaming/tool-call handler, all of which the general
+                // path below still has to account for.
+                if ty.is_none()
+                    && !*classified
+                    && on_token.is_none()
+                    && on_tool_call.is_none()
+                    && !*stream
+                {
+                    if let ExprKind::Name(name) = &target.kind {
+                        if let ExprKind::Binary {
+                            op: BinOp::Add,
+                            left,
+                            right,
+                        } = &value.kind
+                        {
+                            if matches!(&left.kind, ExprKind::Name(n) if n == name)
+                                && self
+                                    .try_inplace_str_concat(name, right, scope, stmt.span)?
+                                    .is_some()
+                            {
+                                return Ok(Flow::Normal);
+                            }
+                        }
+                    }
+                }
                 // `x: T = analyze(...)` is the one place the declared type is
                 // available, and analyze needs it to build the model schema.
                 let v = match (ty, analyze_args(value)) {
@@ -526,6 +569,16 @@ impl Interpreter {
                 Ok(Flow::Normal)
             }
             StmtKind::AugAssign { target, op, value } => {
+                if *op == BinOp::Add {
+                    if let ExprKind::Name(name) = &target.kind {
+                        if self
+                            .try_inplace_str_concat(name, value, scope, stmt.span)?
+                            .is_some()
+                        {
+                            return Ok(Flow::Normal);
+                        }
+                    }
+                }
                 let current = self.eval(target, scope)?;
                 let rhs = self.eval(value, scope)?;
                 let result = self.binop(*op, current, rhs, stmt.span)?;
@@ -994,6 +1047,57 @@ impl Interpreter {
             }
         }
         Ok(Flow::Normal)
+    }
+
+    /// `name = name + <expr>` where `name` is a plain local string, appended
+    /// in place when nothing else holds a reference to its current value.
+    ///
+    /// String concatenation is otherwise O(n) per append -- `format!("{a}{b}")`
+    /// copies both operands into a fresh buffer -- so accumulating a string in
+    /// a loop the obvious way is O(n^2) (measured: 1M chars took 15s). This is
+    /// the same fast path CPython uses for `s = s + x`: after the current
+    /// value is taken out of scope, if its refcount is 1, its buffer can be
+    /// grown and appended to directly instead of copied. Returns `None` when
+    /// the pattern does not apply (not a plain local, not both strings), in
+    /// which case the caller must fall back to the general path -- nothing
+    /// has been evaluated or mutated yet at that point.
+    fn try_inplace_str_concat(
+        &mut self,
+        name: &str,
+        right: &Expr,
+        scope: &mut Scope,
+        span: Span,
+    ) -> Result<Option<Value>, RuntimeError> {
+        if !matches!(scope.get(name), Some(Value::Str(_))) {
+            return Ok(None);
+        }
+        // Committed from here: `right` is about to run, and if it has side
+        // effects there is no going back to the generic path without running
+        // them twice. Every exit below must produce a final value or error,
+        // never `Ok(None)`.
+        let rhs = self.eval(right, scope)?;
+        let Some(Value::Str(mut s)) = scope.remove(name) else {
+            unreachable!("checked Some(Value::Str(_)) above");
+        };
+        let Value::Str(rs) = &rhs else {
+            // Type mismatch (e.g. str + int): restore state and let `binop`
+            // produce the same error it always has.
+            scope.insert(name.to_string(), Value::Str(s.clone()));
+            let result = self.binop(BinOp::Add, Value::Str(s), rhs, span)?;
+            return Ok(Some(result));
+        };
+        match Rc::get_mut(&mut s) {
+            Some(buf) => buf.push_str(rs),
+            None => {
+                let mut buf = String::with_capacity(s.len() + rs.len());
+                buf.push_str(&s);
+                buf.push_str(rs);
+                s = Rc::new(buf);
+            }
+        }
+        let result = Value::Str(s);
+        scope.insert(name.to_string(), result.clone());
+        Ok(Some(result))
     }
 
     fn assign(
@@ -1633,6 +1737,29 @@ impl Interpreter {
                 span,
             ));
         }
+        if self.call_depth >= MAX_CALL_DEPTH {
+            return Err(RuntimeError::new(
+                format!(
+                    "recursion limit reached calling {}() ({MAX_CALL_DEPTH} nested calls)",
+                    f.name
+                ),
+                span,
+            )
+            .with_hint("check for a base case that never fires, or rewrite as a loop"));
+        }
+        self.call_depth += 1;
+        let result = self.call_function_body(f, home, args, span);
+        self.call_depth -= 1;
+        result
+    }
+
+    fn call_function_body(
+        &mut self,
+        f: &FuncDef,
+        home: ModuleId,
+        args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, RuntimeError> {
         // Agents are the unit of execution, so they are the unit of tracing.
         // An agent nested inside another must restore the outer span when it
         // finishes, or the trace loses its shape.
