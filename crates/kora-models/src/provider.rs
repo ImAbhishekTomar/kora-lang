@@ -411,9 +411,9 @@ pub(crate) fn stream_request(
 /// them, and treating an unrecognised line as a failure would make the
 /// stream break on the first thing either of them adds.
 pub(crate) fn parse_delta(provider: &Provider, payload: &str) -> Result<DeltaPart, ModelError> {
-    if payload == "[DONE]" {
-        return Ok(DeltaPart::default());
-    }
+    // Framing -- SSE `data:` prefixes, keep-alive comments, the `[DONE]`
+    // marker -- has already been stripped by `stream::frame`. What arrives
+    // here is one provider's JSON and nothing else.
     let value: Value = serde_json::from_str(payload).map_err(|e| {
         ModelError::new(format!(
             "streamed line was not JSON ({e}): {}",

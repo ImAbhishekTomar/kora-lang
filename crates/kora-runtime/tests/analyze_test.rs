@@ -159,6 +159,7 @@ fn analyze_uncertain_path_is_matchable() {
             reason: "not enough context".into(),
             tokens_in: 10,
             tokens_out: 5,
+            chunks: Vec::new(),
         },
     );
     let out = run_with_cassette("uncertain-path", ANALYZE_PROGRAM, vec![entry]).unwrap();

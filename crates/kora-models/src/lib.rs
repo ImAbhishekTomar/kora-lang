@@ -367,7 +367,9 @@ pub fn step(config: &ModelConfig, req: &AnalyzeRequest) -> Result<Step, ModelErr
 /// returning [`Flow::Stop`] ends the request without draining the rest.
 ///
 /// A stream that breaks after characters were already handed over is not
-/// retried: see [`stream`] for why.
+/// retried, because a second attempt would write the answer twice on top of
+/// output the program has already acted on. The `stream` module carries the
+/// full reasoning; it is private, so this is a reference rather than a link.
 pub fn analyze_streaming(
     config: &ModelConfig,
     req: &AnalyzeRequest,

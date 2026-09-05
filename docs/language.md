@@ -345,7 +345,26 @@ rather than silently dropped.
 Refusal still works: the answer travels as an object whose refusal field is
 written first, so a call that declines produces `Uncertain` and the handler
 never runs. Recorded runs keep the piece boundaries, so `--replay` and a
-durable resume deliver the answer in the same pieces the live run did.
+durable resume deliver the answer in the same pieces the live run did. That
+holds for a stream that broke, too: the pieces it did write are part of the
+run's history and replay in place, silently.
+
+#### A killed stream, in a durable run
+
+A stream is the one model call whose output exists before its outcome does,
+so `--durable` treats an interrupted one as a third ending:
+
+- **Killed after some of the answer was written** — the resume does not ask
+  the provider again. The pieces already on screen stay exactly as they were,
+  and the call returns `Failed` for the program to match on. This is the same
+  rule the transport applies live: once characters have reached the program,
+  a second attempt would write the answer twice on top of output that has
+  already been acted on.
+- **Killed before anything was written** — nothing observable happened, so
+  the resume sends the call again like any other unfinished work.
+
+A resume that hits an interrupted stream reaches the same answer every time,
+so a resume that is itself killed loses nothing.
 
 ### Watching tool calls
 
@@ -669,6 +688,23 @@ between effects must be deterministic.** Anything nondeterministic must go
 through the journal — `time.now()` already does.
 
 A killed process resumes with `kora run --durable --resume <run-id>`.
+
+Writes are part of that. `fs.write`, `fs.append` and `sql.execute` are
+journaled effects, so a resumed pipeline hands back what the write returned
+rather than performing it again — the rows it already wrote stay written
+once. A crash in the gap between the write and the line recording it is the
+one case nobody can resolve: the run stops on resume and names the call,
+rather than repeating it or assuming it worked.
+
+Reads are the other half, and are treated differently on purpose. `fs.read`,
+`fs.lines`, `fs.list`, `fs.glob` and `sql.query` run live on every attempt,
+with a digest of what they returned journaled. A pipeline's input does not
+belong in a log of decisions — but a resume that would read *different* data
+is a run silently mixing two inputs, so that stops with an error naming the
+read.
+
+A run is locked while a process holds it, so the same run cannot be resumed
+twice at once.
 
 ---
 

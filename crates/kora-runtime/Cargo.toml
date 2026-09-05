@@ -19,6 +19,12 @@ toml = { workspace = true }
 regex = { workspace = true }
 rusqlite = { workspace = true }
 ureq = { workspace = true }
+sha2 = { workspace = true }
+
+# Only for `flock`, so a durable run cannot be resumed twice at once. Windows
+# gets the same guarantee from an unshared file handle and needs nothing.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
 
 [dev-dependencies]
 kora-types.workspace = true

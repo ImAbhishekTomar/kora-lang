@@ -143,6 +143,41 @@ fixed:
       the first mismatch. A flow calling `analyze` for two different types
       mocks each with its own nested block — no new syntax.
 
+### Durable pipelines: writes are exactly-once (shipped)
+
+`--durable` covered model calls, tools, `ask_human`, output, the clock, HTTP
+and Python — everything except the call a data pipeline exists to make. A
+killed run re-ran its writes from the top, so the language delivered
+exactly-once for the model's tokens but not for the customer's rows.
+
+- [x] **`fs.write`, `fs.append` and `sql.execute` are journaled effects.** A
+      resume replays the recorded outcome instead of performing the write
+      again.
+- [x] **Recorded in two lines, not one.** The attempt is journaled and synced
+      before the call runs; its outcome supersedes it after. A resume that
+      finds an attempt with no outcome stops and names the call, rather than
+      repeating a write that may have landed — the rule the tool loop already
+      applies to a timed-out MCP call.
+- [x] **Reads are verified, not replayed.** `fs.read`, `fs.lines`, `fs.list`,
+      `fs.glob` and `sql.query` re-read live with a digest journaled
+      (`Effect::Input`). Input data does not belong in a log of decisions,
+      but a resume that reads *different* data stops instead of mixing two
+      inputs into one output.
+- [x] **Append-only journal, fsync policy, and run locking.** One line per
+      record; every record synced except output (a lost `print` repeats a
+      line, and syncing thousands of them costs more than the work it
+      protects); one process per run, held with an OS advisory lock that a
+      kill releases.
+- [x] **Crash-injection tests.** `crates/kora-cli/tests/durable_crash_test.rs`
+      kills a running pipeline against the real binary and resumes it: no row
+      written twice, a second resume of a live run refused, and a resume
+      against edited input stopped.
+- [x] Docs, site, `DECISIONS.md`, and `examples/19_durable_pipeline.ko`.
+
+Still open, and deliberately not in this pass: per-write cost is two fsyncs,
+capping pure-write throughput near a hundred rows a second. The fix is group
+commit across `parallel for` workers, not a weaker guarantee.
+
 ## Development
 
 - [x] Refresh the documentation welcome page with a more playful guided
@@ -212,6 +247,28 @@ fixed:
 - [ ] `network` — no dedicated stdlib module beyond `http`.
 - [ ] CLI beautification — no dedicated polish pass tracked yet.
 
+### Runtime robustness (stress-test pass, 2026-08-31)
+
+Found with `scripts/stress.py` (new — breaking-point probes under a memory-
+safe watchdog, separate from `scripts/bench.py`'s throughput numbers). Full
+writeup in [DECISIONS.md](DECISIONS.md), "Execution strategy".
+
+- [x] **Deep recursion crashed the process instead of erroring.** Past
+      ~1900 nested calls the host stack overflowed (SIGABRT, uncatchable).
+      Fixed: errors cleanly at 1000 nested calls (`call_depth` guard in
+      `interp.rs`).
+- [x] **`s = s + x` / `s += x` accumulation was O(n²).** Fixed for the plain
+      local-name case via an in-place append when nothing else references
+      the string (`try_inplace_str_concat`). 1M-char loop: 15s → 0.44s.
+      `strings` benchmark: 317ms → 67ms.
+- [x] **The `--durable` journal was O(n²).** Fixed: `.kora/runs/<id>.jsonl`
+      is append-only, one line per record, so an effect costs one write
+      instead of a rewrite of the whole run. 40K effects in 0.27s, against a
+      previous ceiling where 15K could not finish in 45s. A torn last line is
+      dropped on load (that effect's result reached nobody); a bad line
+      earlier is reported. Old `.json` runs are migrated the first time they
+      are resumed or answered.
+
 ## Capability roadmap
 
 Status legend: **Have** means the capability is implemented and exercised;
@@ -225,11 +282,11 @@ remain; **Build** means it is not implemented yet.
 | P0 | Typed tools | **Have** | Typed Kora tools and typed MCP tool schemas | Add richer parameter types, result schemas, validation, and tool cancellation |
 | P0 | Structured output | **Have** | Declared Kora types become validated model JSON schemas | Add schema evolution/versioning and better provider compatibility diagnostics |
 | P0 | Async/concurrency | **Partial** | Real OS-thread `parallel for` with isolated worker heaps | Add explicit cancellation, backpressure, bounded queues, fair scheduling, and a clear async/event model |
-| P0 | Streaming | **Partial** | `str` streaming with `on token`, replay chunks, and `write` | Fix budget accounting, crash-safe durable streaming, retry state, live transport tests, tool streaming, and parallel streaming |
+| P0 | Streaming | **Partial** | `str` streaming with `on token`, replay chunks, `write`, crash-safe durable resume, budget accounting, and retry state, all covered by live-transport tests | Tool streaming, parallel streaming, and per-token in-flight enforcement |
 | P0 | Timeouts + cancellation | **Partial** | Model, HTTP, and MCP timeouts; handler can stop reading | Add language-level cancellation tokens, cancellation propagation across workers/tools, and cleanup guarantees |
 | P0 | Retry/backoff | **Have** | Jittered model retries and HTTP retries; MCP handshake retries | Add shared retry policy, observability for attempts, and cancellation-aware backoff |
-| P1 | Durable execution | **Partial** | Replay journal for model calls, tools, human input, output, time, and Python | Define stream transactions, fsync guarantees, run locking, corruption recovery, and retention/compaction |
-| P1 | Checkpoint/resume | **Partial** | Replay-based resume and `ask_human` suspension | Add explicit checkpoints, resumable in-flight effects, versioned state migration, and crash-injection tests |
+| P1 | Durable execution | **Partial** | Append-only replay journal for model calls, tools, writes, human input, output, time, and Python; per-effect fsync, run locking, torn-tail recovery, interrupted-stream semantics | Group commit for write-heavy fan-out, and retention/compaction |
+| P1 | Checkpoint/resume | **Partial** | Replay-based resume, `ask_human` suspension, exactly-once writes, and crash-injection tests against the real binary | Add explicit checkpoints, resumable in-flight effects, and versioned state migration |
 | P1 | Human approval | **Have** | `ask_human`, durable suspension, classified-data checks | Add approval identity, expiry, denial/revocation, and audit metadata |
 | P1 | Guardrails | **Partial** | Labels, declassification, unverified data direction, schema validation, budgets | Complete `unverified` enforcement, policy composition, prompt/output controls, and configurable safety policies |
 | P1 | Tracing/metrics | **Partial** | OpenTelemetry spans and local trace output | Add a metrics pipeline, stream/token/tool counters, stable event IDs, and export backpressure |
@@ -248,10 +305,12 @@ remain; **Build** means it is not implemented yet.
 
 ### Suggested capability build order
 
-- [ ] **P0 correctness gate:** finish streaming accounting, cancellation
-      semantics, and live transport tests before expanding the streaming API.
-- [ ] **P1 reliability layer:** complete durable stream transactions,
-      checkpoints, fsync/run locking, and fault-injection tests.
+- [ ] **P0 correctness gate:** streaming accounting, retry state, durable
+      crash semantics, and live transport tests have shipped. Cancellation
+      semantics remain before expanding the streaming API.
+- [ ] **P1 reliability layer:** explicit checkpoints remain; fsync policy,
+      run locking, exactly-once writes, interrupted-stream semantics, and
+      fault-injection tests have shipped.
 - [ ] **P1 agent product layer:** add sessions/memory and context management
       before multi-agent handoffs; otherwise agents have no durable state to
       hand over safely. See "Context engineering, phase 2" immediately below
@@ -313,43 +372,188 @@ argued rather than assumed:
       primitives it composes with — the context fence and a memory store to
       search from — are both in place.
 
+## Test coverage
+
+Measured with `cargo llvm-cov --workspace --summary-only`.
+
+- Baseline before this pass: **78.44%** regions / 78.69% lines.
+- After: **82.92%** regions / 83.06% lines, with the largest single hole
+  closed --
+  `stdlib/notes.rs` was at **0.00%**: a shipped feature with a label rule, a
+  journal rule and a file outside the run, and not one test.
+- New suites: `notes_test.rs`, `http_test.rs`, `config_test.rs`,
+  `stdlib_paths_test.rs`, `durable_stream_test.rs` (kora-runtime);
+  `commands_test.rs` (kora-cli, every documented command against the real
+  binary); `rendering_test.rs` (kora-syntax, every `TokenKind` a diagnostic
+  can name); `diagnostics_test.rs` (kora-types).
+
+**99% workspace-wide is not the target, and chasing it would make the suite
+worse.** What is left uncovered is mostly code whose tests would assert
+nothing a person cares about: `Debug` impls, platform branches that cannot
+both run on one machine (the Windows file lock against the Unix `flock`),
+exhaustive `match` arms that exist so the compiler can prove a case is
+impossible, and the CLI's own failure-to-print-an-error paths. The honest
+target is high coverage of behaviour, and the gaps worth closing next are
+named by size rather than by percentage:
+
+- [ ] `interp.rs` — the biggest remaining absolute gap (~1500 regions). Needs
+      language-level tests for agents, `parallel for` edge cases, and the
+      mock/test machinery, not more unit tests.
+- [ ] `kora-pkg` `commands.rs` / `edit.rs` — dependency resolution and
+      manifest editing, ~470 regions between them.
+- [ ] `kora-lsp` and `kora-dap` — editor and debugger servers, exercised by
+      hand today.
+
 ## Audit follow-up
 
 Findings from [COMPILER_AUDIT.md](COMPILER_AUDIT.md) and
 [COMPILER_AUDIT.html](COMPILER_AUDIT.html). Prioritize the first two before
 extending streaming with tools or `parallel for`.
 
-- [ ] **Fix streaming budget accounting.** Charge `max_calls` and known token
-      usage through the shared `Budget`; update `tokens_spent()` and
-      `calls_spent()`; include failed streams and parallel workers.
-- [ ] **Define crash semantics for durable streaming.** Refuse durable
-      streaming until it is atomic, or journal stream start, chunks, terminal
-      outcome, and a resumable provider identity. Add a kill-and-resume test
-      proving no duplicate request or output.
-- [ ] **Correct streaming retry state.** Mark a stream observed only after a
-      meaningful answer fragment or an explicitly defined refusal boundary;
-      do not let `[DONE]`, usage frames, or keep-alives suppress retries.
-- [ ] **Add live transport end-to-end tests.** Use a deterministic local HTTP
-      fixture through the real `ureq` path for SSE, Ollama JSON lines, retries,
-      timeouts, provider errors, usage frames, and handler failures.
-- [ ] **Complete public streaming documentation.** Update
-      `site/app/language/page.mdx` and the public reference with `on token`,
-      `write`, failure behavior, durability limits, and current restrictions.
-- [ ] **Strengthen cassette identity.** Replace FNV-1a with a cryptographic
-      hash or verify the full key material; version the key algorithm if old
-      cassettes need migration.
-- [ ] **Separate provider framing from language semantics.** Introduce
-      provider-specific stream adapters that normalize SSE and JSON-lines into
-      one internal delta protocol.
-- [ ] **Specify effect state transitions.** Document prepared, sent, observed,
-      and terminal states with retry, budget, journal, cancellation, telemetry,
-      and resume rules.
-- [ ] **Introduce a typed effect-aware IR.** Lower checked AST into an IR with
-      explicit effect nodes and stable operation IDs before building streaming
-      tools or a bytecode VM.
-- [ ] **Define OS durability guarantees.** Decide whether journals promise
-      process-crash durability, machine-crash durability, and concurrent-resume
-      safety; add fsync and per-run locking where required.
+- [x] **Fix streaming budget accounting.** Done. `max_calls` and reported
+      token usage go through the shared `Budget` on every streamed ending,
+      including a `Failed` one. The hole that remained was a handler that
+      raises: the call had been made and the tokens spent, but the run
+      unwound before charging, which made raising in a handler the cheapest
+      way to reach a provider. It is charged on the way out now. Streaming
+      inside `parallel for` is still refused, so there is no worker case to
+      account for yet.
+- [x] **Define crash semantics for durable streaming.** Done. A streamed
+      call marks its journal slot before it is sent, so a resume can tell an
+      interrupted stream from one that never started. An interrupted stream
+      with output recorded under it returns `Failed` and is never sent again
+      (the live no-retry-after-emit rule, made durable); one that wrote
+      nothing is sent again like ordinary unfinished work. A broken stream's
+      pieces are now kept on the recorded outcome, so `Failed` and
+      `Uncertain` replay their output in place instead of diverging.
+      Covered by `kora-runtime/tests/durable_stream_test.rs` and a
+      kill-and-resume test against the real binary in
+      `kora-cli/tests/durable_crash_test.rs`.
+- [x] **Correct streaming retry state.** Done. `Observed::Text` was already
+      set only by a frame that yields characters of the answer, but the
+      read-error path defeated it: a body that broke mid-response was built
+      as unretryable on the assumption that characters had arrived, so a
+      stream that died after nothing but a keep-alive or a usage frame lost
+      its retry. The error kind is retryable now and `emitted` is the single
+      authority. Both directions are covered in
+      `kora-runtime/tests/stream_transport_test.rs`.
+- [x] **Add live transport end-to-end tests.** Done.
+      `kora-runtime/tests/stream_transport_test.rs` drives the real `ureq`
+      path against loopback fixtures for SSE framing and keep-alives, Ollama
+      JSON lines, chunked bodies, retries in both directions, deadlines,
+      provider errors delivered after a 200, usage frames, budget
+      accounting, and handler failures.
+- [x] **Complete public streaming documentation.** Done.
+      `site/app/model-calls/page.mdx` (the page that replaced
+      `language/page.mdx`) and `docs/language.md` now cover `stream`,
+      `on token`, `write`, what a broken stream does to output, the durable
+      resume rule, and the combinations that are refused.
+- [x] **Strengthen cassette identity.** Done. Keys are SHA-256 over the
+      length-prefixed key material, and image fingerprints are SHA-256 of the
+      bytes. The old FNV-1a algorithm is kept as a read-only lookup fallback
+      so committed cassettes -- including the image one, which cannot be
+      regenerated without the model that recorded it -- keep replaying;
+      nothing is written with it. Both algorithms are pinned by golden tests
+      against a real committed key.
+- [x] **Separate provider framing from language semantics.** Done.
+      `stream::frame` is the one place wire framing lives: it turns a raw
+      line -- SSE `data:` prefixes, keep-alive comments, the `[DONE]` marker,
+      or a bare JSON line -- into one internal payload protocol, and
+      `parse_delta` now sees only a provider's JSON shape. It normalizes both
+      wire forms rather than choosing by configured provider, deliberately:
+      an OpenAI-compatible proxy behind an `[models.local]` endpoint answers
+      a locally-configured model in SSE, and picking framing from the
+      provider would fail that deployment for a reason the user cannot see.
+- [x] **Specify effect state transitions.** Done, in
+      [DECISIONS.md](DECISIONS.md) under "The four states every effect passes
+      through": prepared, sent, observed, and terminal, with the retry,
+      budget, journal, telemetry, and resume rule for each and a table of what
+      a resume does with every shape of slot. Writing it down surfaced a real
+      hole and closed it: a tool-using `analyze()` was journaled as one effect
+      with the tools it ran leaving no trace, so a crash mid-loop silently
+      re-ran every tool. It now leaves a mark before it is sent, and a resume
+      that finds one stops and names the call in doubt -- the same answer
+      writes already give. Cancellation is the one column with nothing to
+      document yet; it is still only a handler returning `Stop` and the
+      configured deadlines, and remains open under the P0 gate.
+### Editor and documentation, checked against the code
+
+Walked the AGENTS.md list for this pass. What needed changing, and what did
+not and why:
+
+- [x] **Docs.** `docs/language.md` (streaming and the durable rule),
+      `docs/cli.md` and `site/app/cli/page.mdx` (the resume table, the
+      unknown-id refusal, the no-`main` refusal, and the fact that moving a
+      call's line invalidates its cassette entry), `site/app/model-calls`,
+      `site/app/roadmap`, `README.md`, `DECISIONS.md` (+ the generated
+      `/decisions`). `scripts/check_docs.py` passes clean, and the two pages
+      it was not checking are in its list now.
+- [x] **VS Code extension.** README corrected: it named the constructs the
+      grammar highlights incompletely, its install symlink used a version
+      that did not match `package.json`, and it did not say that a debug
+      session is never durable -- which is a deliberate limit, not a missing
+      feature, since stepping through a durable run would write the stepping
+      into the run's own record.
+- [x] **Grammar: verified, not assumed.** Every keyword in the lexer's table
+      is highlighted by `kora.tmLanguage.json`, plus the contextual words
+      (`analyze`, `ask_human`, `on`, `token`, `tool_call`, `stream`, `with`)
+      that are language surface rather than identifiers. Diffed mechanically
+      rather than read.
+- [x] **Checker and runtime agree on names.** Locked by two new tests: every
+      name in `builtin_names()` resolves at runtime, and every module in
+      `module_names()` can be imported. This is the drift that costs most --
+      a name the editor offers and `kora check` accepts, which fails when the
+      line runs.
+- **LSP and DAP needed nothing.** This pass added no construct, no keyword,
+      and no stdlib name; hover, completion, and go-to-definition all read the
+      same analysis, and the debug adapter's launch options are unchanged.
+      Said out loud rather than skipped, per the rule in AGENTS.md.
+- **CHANGELOG.md is generated** by release-please from commit history, so it
+      is not hand-edited here.
+
+### Found while raising coverage
+
+- [x] **`--resume <unknown-id>` silently started a brand-new run.** The run
+      was loaded with `unwrap_or_else(|_| Run::new(...))`, so a typo'd id did
+      not resume anything -- it began a fresh run under that name. For a
+      durable pipeline that is the exact failure `--durable` exists to
+      prevent: the user believes the work was picked up where it stopped, and
+      it is instead done a second time from the top. It now fails, naming the
+      id, and points at `kora runs`.
+- [x] **`kora run` on a file with no `main()` did nothing and said nothing.**
+      Exit code 0, no output -- indistinguishable from a program whose output
+      was swallowed. It now says so, unless the file has top-level statements
+      to execute, which is a real (if rare) way to write a script.
+- [ ] **Arity, unknown fields, and duplicate definitions are runtime errors,
+      not check-time ones.** `kora check` passes a program that builds a
+      2-field type with 1 argument; the message only arrives when the line
+      runs, which in an agent program can be minutes and several model calls
+      in. The messages themselves are good -- this is about *when* they
+      arrive. All three are statically decidable for declared types and
+      top-level functions. Pinned as the current boundary by
+      `kora-types/tests/diagnostics_test.rs::arity_and_fields_are_left_to_the_runtime`,
+      which is the test to convert when this moves.
+
+- [ ] **Introduce a typed effect-aware IR.** Not started, and deliberately
+      not part of the audit-closing pass: it is a new lowering stage and a
+      retarget of the tree-walking interpreter, not a change inside one. It
+      gates streaming-with-tools and the bytecode VM, neither of which is
+      being built yet, so landing half of it would leave a second
+      representation with no consumer.
+
+      The concrete complaint underneath it is worth separating, because it
+      bites today: an effect's identity is `file:line`. Adding a comment
+      above an `analyze()` moves it, which invalidates that call's committed
+      cassette and makes an in-flight durable run refuse to resume. (Hit
+      while editing `examples/14_streaming.ko` during this pass -- the
+      cassette went stale from a comment.) A structural operation ID --
+      function, effect kind, ordinal within the function -- fixes it without
+      an IR, and the cassette's legacy-key fallback is already the mechanism
+      for migrating to one without breaking committed files. Worth doing as
+      its own change, ahead of the IR.
+- [x] **Define OS durability guarantees.** Decided and documented: a killed
+      process loses nothing; a power cut can lose only unsynced output lines;
+      concurrent resume of one run is refused by an OS lock.
 ### Context engineering delivery order
 
 - [x] Bound short-term tool-loop context with a lexical policy, whole-exchange

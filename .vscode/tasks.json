@@ -1,0 +1,19 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "Rust: Run workspace coverage",
+      "type": "shell",
+      "command": "mkdir -p target/coverage && cargo llvm-cov --package kora-runtime --all-features --lcov --output-path target/coverage/lcov.info",
+      "problemMatcher": [
+        "$rustc"
+      ],
+      "group": "test",
+      "presentation": {
+        "reveal": "always",
+        "panel": "shared",
+        "clear": true
+      }
+    }
+  ]
+}

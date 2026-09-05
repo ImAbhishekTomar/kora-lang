@@ -47,8 +47,32 @@ match answer:
 ```
 
 `stream` is for the normal terminal-output case. Use `on token(piece):` only
-when each piece needs custom handling. Both forms require `str`; typed results
-arrive as JSON and cannot be usefully streamed as prose.
+when each piece needs custom handling, and `write` inside it — `print` without
+the newline — so one answer does not become as many lines as the model sent
+pieces:
+
+```kora
+answer: str = analyze(question, "answer in two sentences") on token(piece):
+    write(piece)
+print("")
+```
+
+Both forms require `str`; typed results arrive as JSON and cannot be usefully
+streamed as prose. `stream` and `on token` cannot be combined, and neither can
+be combined with tools or with `parallel for` — those are refused rather than
+silently degraded.
+
+A stream that breaks after writing is `Failed`, and the characters already
+written stay on screen — a program can print output and then take the failure
+arm. It is never retried either: once a piece has reached the program, a
+second attempt would write the answer twice over output that has already been
+acted on.
+
+Under `--durable`, a killed run follows the same rule. A stream interrupted
+after some of its answer was written is not sent to the provider again: the
+resume returns `Failed`, and the pieces on screen are not repeated. One
+interrupted before anything was written showed nobody anything, so the resume
+sends it again like any other unfinished work.
 
 ## Images
 

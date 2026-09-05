@@ -37,6 +37,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 BENCH_DIR = ROOT / "benches"
 BASELINE = BENCH_DIR / "baseline.json"
+HISTORY = BENCH_DIR / "history.jsonl"
 DEFAULT_BIN = ROOT / "target" / "release" / "kora"
 
 # name, file, extra flags, a string the output must contain, and what the
@@ -110,6 +111,12 @@ def run_set(binary, benchmarks, reps, warmup, label):
         results[bench[0]] = measure(binary, bench, reps, warmup)
         print(f"  {bench[0]:<12} {results[bench[0]]['min_ms']:>8.2f} ms", file=sys.stderr)
     return results
+
+
+def git_commit():
+    out = subprocess.run(["git", "rev-parse", "--short", "HEAD"],
+                         cwd=ROOT, capture_output=True, text=True)
+    return out.stdout.strip() if out.returncode == 0 else "unknown"
 
 
 def machine():
@@ -218,6 +225,10 @@ def main():
                    help="record this run as benches/baseline.json")
     p.add_argument("--compare", action="store_true",
                    help="compare against benches/baseline.json (same machine only)")
+    p.add_argument("--history", action="store_true",
+                   help="append this run to benches/history.jsonl (timestamp + git commit)")
+    p.add_argument("--against-history", action="store_true",
+                   help="compare this run against the last entry in benches/history.jsonl")
     p.add_argument("--against", default=None, metavar="REF",
                    help="build REF and A/B it against this working tree")
     p.add_argument("--tolerance", type=float, default=None,
@@ -276,6 +287,39 @@ def main():
     if args.save_baseline:
         BASELINE.write_text(json.dumps(payload, indent=2) + "\n")
         print(f"\nWrote {BASELINE.relative_to(ROOT)}.")
+
+    if args.against_history or args.history:
+        HISTORY.parent.mkdir(parents=True, exist_ok=True)
+        previous = None
+        if HISTORY.exists():
+            lines = HISTORY.read_text().strip().splitlines()
+            if lines:
+                previous = json.loads(lines[-1])
+
+    if args.against_history:
+        if not previous:
+            print("\nNo history yet: run with --history first.")
+        else:
+            merged = {name: {"baseline_ms": previous["results"][name]["min_ms"],
+                             "candidate_ms": r["min_ms"]}
+                      for name, r in results.items() if name in previous["results"]}
+            rendered, regressions = comparison_table(merged, args.tolerance or 1.5)
+            print(f"\n## Against history ({previous['timestamp']}, "
+                  f"commit {previous['git_commit']})\n")
+            print(rendered)
+            if regressions:
+                print("\nSlower than last recorded run:")
+                for name, before, after, ratio in regressions:
+                    print(f"  {name}: {before:.2f} ms -> {after:.2f} ms ({ratio:.2f}x)")
+
+    if args.history:
+        record = dict(payload)
+        record["timestamp"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        record["git_commit"] = git_commit()
+        with HISTORY.open("a") as f:
+            f.write(json.dumps(record) + "\n")
+        print(f"\nAppended to {HISTORY.relative_to(ROOT)} "
+              f"(commit {record['git_commit']}).")
 
     if args.compare:
         tolerance = args.tolerance if args.tolerance is not None else 1.5

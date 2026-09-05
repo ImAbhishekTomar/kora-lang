@@ -1,0 +1,65 @@
+# A durable data pipeline: every row's write happens exactly once.
+#
+# The interesting case is not the happy path -- it is the kill. Run it, kill
+# it partway through, and resume: the rows already written stay written, the
+# rest continue from where the run stopped, and no row is written twice.
+#
+#   kora run --durable examples/19_durable_pipeline.ko
+#   # ctrl-c partway through, then:
+#   kora runs examples/19_durable_pipeline.ko
+#   kora run --durable --resume <run-id> examples/19_durable_pipeline.ko
+#
+# What makes that true, and what a library on top of another language cannot
+# give you: `fs.append` and `sql.execute` are journaled effects. On a resume
+# they are not performed again -- their recorded outcome is handed back --
+# because a crash is exactly the moment when whether the write landed is
+# unknown to the program and known to the journal.
+#
+# Reads are the other half. `fs.read` is not replayed from the journal (a
+# pipeline's input is routinely bigger than every other effect put together),
+# but a digest of it is: change the input between the crash and the resume and
+# the run stops, naming the read, instead of quietly mixing two inputs into
+# one output.
+
+use fs
+
+type Row:
+    id: str
+    amount: int
+
+def classify(amount: int) -> str:
+    if amount > 1000:
+        return "review"
+    return "auto"
+
+def main():
+    out = "pipeline-out.csv"
+
+    # Start from an empty output on a fresh run. On a resume this write is
+    # replayed from the journal rather than performed, so it cannot truncate
+    # the rows the first attempt already wrote.
+    match fs.write(out, "id,amount,decision\n"):
+        case Ok(_):
+            print(f"writing to {out}")
+        case Err(why):
+            print(f"could not start: {why}")
+
+    rows = [
+        Row("inv-01", 240),
+        Row("inv-02", 4200),
+        Row("inv-03", 90),
+        Row("inv-04", 1800),
+        Row("inv-05", 15),
+    ]
+
+    written = 0
+    for row in rows:
+        decision = classify(row.amount)
+        match fs.append(out, f"{row.id},{row.amount},{decision}\n"):
+            case Ok(_):
+                written = written + 1
+                print(f"{row.id}: {decision}")
+            case Err(why):
+                print(f"{row.id}: could not write: {why}")
+
+    print(f"{written} rows written, each exactly once")

@@ -27,5 +27,7 @@ def main():
         case Failed(why):
             # Characters may already be on screen. A stream that broke after
             # writing is not a call that never happened, and the program says
-            # so rather than pretending the answer was complete.
+            # so rather than pretending the answer was complete. A durable
+            # run that was killed mid-answer arrives here too, for the same
+            # reason.
             print(f"-- the stream broke: {why}")

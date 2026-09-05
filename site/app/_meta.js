@@ -2,6 +2,7 @@ export default {
   index: 'Welcome',
   installation: 'Installation',
   'start-here': 'Getting started',
+  cli: 'CLI',
   language: 'Language',
   'model-calls': 'Typed model calls',
   comparison: 'Comparison',

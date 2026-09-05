@@ -29,13 +29,21 @@ pub const EXPORTS: super::Exports = &[("query", query), ("execute", execute)];
 /// `sql.query(db_path, "select ... where id = ?", [id]) -> Ok(rows) | Err(reason)`
 fn query(interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
     let (path, statement, params) = prepare(interp, &args, "sql.query", span)?;
-    let connection = match rusqlite::Connection::open(&path) {
+    super::journaled_read(interp, "sql.query", span, move |_| {
+        run_query(&path, &statement, &params)
+    })
+}
+
+/// The query itself, separated so the durable-run bookkeeping around it reads
+/// as one line.
+fn run_query(path: &str, statement: &str, params: &[SqlParam]) -> Value {
+    let connection = match rusqlite::Connection::open(path) {
         Ok(c) => c,
-        Err(e) => return Ok(err(format!("could not open {path}: {e}"))),
+        Err(e) => return err(format!("could not open {path}: {e}")),
     };
-    let mut prepared = match connection.prepare(&statement) {
+    let mut prepared = match connection.prepare(statement) {
         Ok(p) => p,
-        Err(e) => return Ok(err(describe(&statement, &e))),
+        Err(e) => return err(describe(statement, &e)),
     };
     let column_names: Vec<String> = prepared
         .column_names()
@@ -46,7 +54,7 @@ fn query(interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Value
     let bound = rusqlite::params_from_iter(params.iter());
     let mut rows = match prepared.query(bound) {
         Ok(r) => r,
-        Err(e) => return Ok(err(describe(&statement, &e))),
+        Err(e) => return err(describe(statement, &e)),
     };
 
     let mut out = Vec::new();
@@ -60,27 +68,27 @@ fn query(interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Value
                 out.push(Value::Dict(Rc::new(RefCell::new(entries))));
             }
             Ok(None) => break,
-            Err(e) => return Ok(err(describe(&statement, &e))),
+            Err(e) => return err(describe(statement, &e)),
         }
     }
     // Rows are data from outside the program.
-    Ok(ok(
-        Value::List(Rc::new(RefCell::new(out))).with_label(Label::UNVERIFIED)
-    ))
+    ok(Value::List(Rc::new(RefCell::new(out))).with_label(Label::UNVERIFIED))
 }
 
 /// `sql.execute(db_path, "insert ...", [params]) -> Ok(count) | Err(reason)`
 fn execute(interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
     let (path, statement, params) = prepare(interp, &args, "sql.execute", span)?;
-    let connection = match rusqlite::Connection::open(&path) {
-        Ok(c) => c,
-        Err(e) => return Ok(err(format!("could not open {path}: {e}"))),
-    };
-    let bound = rusqlite::params_from_iter(params.iter());
-    match connection.execute(&statement, bound) {
-        Ok(count) => Ok(ok(Value::Int(count as i64))),
-        Err(e) => Ok(err(describe(&statement, &e))),
-    }
+    super::journaled_write(interp, "sql.execute", span, move |_| {
+        let connection = match rusqlite::Connection::open(&path) {
+            Ok(c) => c,
+            Err(e) => return err(format!("could not open {path}: {e}")),
+        };
+        let bound = rusqlite::params_from_iter(params.iter());
+        match connection.execute(&statement, bound) {
+            Ok(count) => ok(Value::Int(count as i64)),
+            Err(e) => err(describe(&statement, &e)),
+        }
+    })
 }
 
 /// Validate the arguments common to both entry points.
