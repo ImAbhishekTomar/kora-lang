@@ -638,7 +638,18 @@ mod lock {
             .open(path)
         {
             Ok(file) => Ok(Some(RunLock { _file: Some(file) })),
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => Ok(None),
+            // A sharing violation *is* the lock working: another process
+            // holds the handle. Windows reports it as raw error 32 (and 33
+            // for a byte-range conflict), neither of which Rust maps to
+            // `PermissionDenied` — so matching only on the kind let the
+            // refusal surface as "journal io error: ... (os error 32)"
+            // instead of the sentence naming what happened.
+            Err(e)
+                if e.kind() == std::io::ErrorKind::PermissionDenied
+                    || matches!(e.raw_os_error(), Some(32) | Some(33)) =>
+            {
+                Ok(None)
+            }
             Err(e) => Err(e),
         }
     }
