@@ -173,6 +173,17 @@ impl ContextPolicy {
     }
 }
 
+/// Where a world-changing stdlib call stands in a durable run.
+pub enum WriteSlot {
+    /// Performed on an earlier attempt; here is the outcome it returned.
+    Done(String),
+    /// Started on an earlier attempt and never finished — the process died
+    /// between the call and the line recording what it returned.
+    Interrupted(String),
+    /// Not started yet.
+    Fresh,
+}
+
 pub struct Interpreter {
     /// Top-level names of the module currently executing. Swapped out with
     /// `modules[current_module].names` whenever execution crosses a file
@@ -2705,12 +2716,12 @@ impl Interpreter {
         // different picture is a different call.
         let mut images = Vec::new();
         collect_images(&data, &mut images);
-        let media_key = cassette::media_key(
-            &images
-                .iter()
-                .map(|i| (i.mime.as_str(), i.bytes.as_slice()))
-                .collect::<Vec<_>>(),
-        );
+        let image_parts: Vec<(&str, &[u8])> = images
+            .iter()
+            .map(|i| (i.mime.as_str(), i.bytes.as_slice()))
+            .collect();
+        let media_key = cassette::media_key(&image_parts);
+        let legacy_media_key = cassette::legacy_media_key(&image_parts);
 
         let model = match kwargs.iter().find(|(n, _)| n == "model") {
             Some((_, arg)) => self.named_model(arg, scope)?,
@@ -2722,6 +2733,13 @@ impl Interpreter {
         let model_label = format!("{:?}:{}", model.provider, model.model).to_lowercase();
         let site = format!("{}:{}", self.program_name, span.line);
         let key = cassette::key_for(&site, &model_label, &prompt, &data_text, &media_key);
+        // Cassettes are committed files, and an image one cannot be
+        // regenerated without the model that recorded it. A miss on the
+        // current key is checked against the one the older algorithm would
+        // have produced, so an existing cassette keeps replaying while
+        // everything recorded from now on carries the stronger key.
+        let legacy_key =
+            cassette::legacy_key_for(&site, &model_label, &prompt, &data_text, &legacy_media_key);
 
         // Budget check before spending: an exhausted budget stops the call
         // rather than discovering the overrun afterwards. Exhaustion is a
@@ -2742,17 +2760,60 @@ impl Interpreter {
         // A durable run replays its own journal first: resuming must return
         // exactly what the earlier attempt returned.
         let journal_site = format!("{site}#model");
-        if let Some((outcome, chunks)) = self.journal_model_call(&journal_site, span)? {
-            self.trace_replayed_call(&type_name, "journal");
-            self.replay_chunks(on_token, stream, &chunks, scope, span)?;
-            return self.outcome_to_value(outcome, &type_name, span);
+        let at_risk = if on_token.is_some() || stream {
+            AtRisk::StreamedOutput
+        } else if tools.is_empty() {
+            AtRisk::Nothing
+        } else {
+            AtRisk::ToolCalls
+        };
+        match self.journal_model_call(&journal_site, at_risk, span)? {
+            ModelSlot::Replayed(outcome, chunks) => {
+                self.trace_replayed_call(&type_name, "journal");
+                self.replay_chunks(on_token, stream, &chunks, scope, span)?;
+                return self.outcome_to_value(outcome, &type_name, span);
+            }
+            // The stream broke where "did it happen" stops being knowable,
+            // which is the same place the transport already refuses to retry
+            // a stream that has emitted. Sending it again would write the
+            // answer twice over output the program has acted on, so the
+            // resumed run gets the failure to match on instead.
+            ModelSlot::InterruptedStream => {
+                self.trace_replayed_call(&type_name, "journal");
+                return self.outcome_to_value(
+                    AnalyzeOutcome::Failed {
+                        reason: INTERRUPTED_STREAM.to_string(),
+                        tokens_in: 0,
+                        tokens_out: 0,
+                    },
+                    &type_name,
+                    span,
+                );
+            }
+            // The same answer the tool loop already gives a timed-out tool
+            // call, and writes give an interrupted one: stop, and say which
+            // call is in doubt. Running the loop again would re-ask the
+            // model and re-run whatever tools it asks for a second time,
+            // and a tool that opened an issue or charged a card has no
+            // second time that is free.
+            ModelSlot::InterruptedTools => {
+                return Err(RuntimeError::new(
+                    "a tool-using analyze() was interrupted, and whether its tools ran is unknown"
+                        .to_string(),
+                    span,
+                )
+                .with_hint(
+                    "check what the tools it was given did, then start a new run rather than resuming this one",
+                ));
+            }
+            ModelSlot::Fresh => {}
         }
 
         // Replay next: a cassette hit costs nothing and keeps CI deterministic.
         let recorded = self.cassette.as_ref().and_then(|c| {
-            c.lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .get(&key)
+            let c = c.lock().unwrap_or_else(|e| e.into_inner());
+            c.get(&key)
+                .or_else(|| c.get(&legacy_key))
                 .map(|e| e.outcome.clone())
         });
         if let Some(outcome) = recorded {
@@ -3086,11 +3147,81 @@ impl Interpreter {
     }
 }
 
+/// What the journal holds for a model call the program has just reached.
+enum ModelSlot {
+    /// The call already completed on an earlier attempt: its outcome, and
+    /// the pieces it was written in.
+    Replayed(AnalyzeOutcome, Vec<String>),
+    /// A streamed call was sent, wrote some of its answer, and never came
+    /// back. Its slot is not replayable -- there is no outcome -- and it is
+    /// not repeatable either, because the pieces are already output.
+    InterruptedStream,
+    /// A tool-using call was sent and never came back. Whether the model
+    /// asked for a tool, and whether that tool ran, is not knowable from
+    /// the journal.
+    InterruptedTools,
+    /// Not done yet.
+    Fresh,
+}
+
+/// Why a model call is not free to repeat, and so leaves a mark before it is
+/// sent.
+///
+/// A plain call leaves none: repeating it costs tokens and changes nothing
+/// outside the process, which is the same trade the transport already makes
+/// when it retries.
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum AtRisk {
+    /// Nothing escapes before the outcome. Safe to send again.
+    Nothing,
+    /// The answer is written as it arrives, so a repeat writes it twice.
+    StreamedOutput,
+    /// The model may call a tool, and a tool may change the world.
+    ToolCalls,
+}
+
+impl AtRisk {
+    /// The name written into the journal mark, and read back on resume.
+    fn mark(&self) -> &'static str {
+        match self {
+            AtRisk::Nothing => "",
+            AtRisk::StreamedOutput => "a streamed analyze()",
+            AtRisk::ToolCalls => "a tool-using analyze()",
+        }
+    }
+}
+
+/// What an interrupted stream returns to the resumed run.
+const INTERRUPTED_STREAM: &str =
+    "the stream was interrupted before it finished, and part of the answer had already been written";
+
+/// What a provider reported spending on one call.
+fn usage_of(outcome: &AnalyzeOutcome) -> (u64, u64) {
+    match outcome {
+        AnalyzeOutcome::Ok {
+            tokens_in,
+            tokens_out,
+            ..
+        }
+        | AnalyzeOutcome::Uncertain {
+            tokens_in,
+            tokens_out,
+            ..
+        }
+        | AnalyzeOutcome::Failed {
+            tokens_in,
+            tokens_out,
+            ..
+        } => (*tokens_in, *tokens_out),
+    }
+}
+
 /// The pieces a recorded outcome was written in, if it was streamed.
 fn chunks_of(outcome: &RecordedOutcome) -> Vec<String> {
     match outcome {
-        RecordedOutcome::Ok { chunks, .. } => chunks.clone(),
-        _ => Vec::new(),
+        RecordedOutcome::Ok { chunks, .. }
+        | RecordedOutcome::Uncertain { chunks, .. }
+        | RecordedOutcome::Failed { chunks, .. } => chunks.clone(),
     }
 }
 
@@ -3114,6 +3245,7 @@ fn record_from_outcome_with(outcome: &AnalyzeOutcome, chunks: &[String]) -> Reco
             reason: reason.clone(),
             tokens_in: *tokens_in,
             tokens_out: *tokens_out,
+            chunks: chunks.to_vec(),
         },
         AnalyzeOutcome::Failed {
             reason,
@@ -3123,6 +3255,7 @@ fn record_from_outcome_with(outcome: &AnalyzeOutcome, chunks: &[String]) -> Reco
             reason: reason.clone(),
             tokens_in: *tokens_in,
             tokens_out: *tokens_out,
+            chunks: chunks.to_vec(),
         },
     }
 }
@@ -3143,6 +3276,7 @@ fn outcome_from_record(record: RecordedOutcome) -> AnalyzeOutcome {
             reason,
             tokens_in,
             tokens_out,
+            ..
         } => AnalyzeOutcome::Uncertain {
             reason,
             tokens_in,
@@ -3152,6 +3286,7 @@ fn outcome_from_record(record: RecordedOutcome) -> AnalyzeOutcome {
             reason,
             tokens_in,
             tokens_out,
+            ..
         } => AnalyzeOutcome::Failed {
             reason,
             tokens_in,
@@ -3806,6 +3941,20 @@ impl Interpreter {
         self.model_calls += 1;
 
         if let Some(e) = handler_error {
+            // The handler failing ends the program, but the call still
+            // happened. Charging it on the way out is what keeps a budget
+            // honest: otherwise raising inside a handler is the cheapest way
+            // to reach a provider, and the meter reads zero for work that
+            // really was done. Whatever usage the provider had already
+            // reported is charged with it; a stream stopped early often has
+            // none, and one call is still one call.
+            let (tokens_in, tokens_out) = match &result {
+                Ok(outcome) => usage_of(outcome),
+                Err(_) => (0, 0),
+            };
+            self.tokens_in += tokens_in;
+            self.tokens_out += tokens_out;
+            self.budget.charge_call(tokens_in, tokens_out);
             return Err(e);
         }
         match result {
@@ -4437,14 +4586,23 @@ impl Interpreter {
 
     /// Route a model call through the journal so a resumed run does not pay
     /// for work already done.
+    ///
+    /// A *streamed* call also leaves a mark before it is sent. Streaming is
+    /// the one model call whose pieces are already output by the time the
+    /// call has an outcome, so a process that dies mid-answer leaves the run
+    /// holding half a story. Without the mark, a resume cannot tell that
+    /// slot apart from a call that never started, and would ask the provider
+    /// again and write the rest of the answer underneath the half already on
+    /// screen. See [`ModelSlot::Interrupted`].
     fn journal_model_call(
         &mut self,
         site: &str,
+        at_risk: AtRisk,
         span: Span,
-    ) -> Result<Option<(AnalyzeOutcome, Vec<String>)>, RuntimeError> {
+    ) -> Result<ModelSlot, RuntimeError> {
         let mut journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
         if !journal.is_durable() {
-            return Ok(None);
+            return Ok(ModelSlot::Fresh);
         }
         match journal
             .next(&self.scope, site)
@@ -4452,15 +4610,50 @@ impl Interpreter {
         {
             Lookup::Replayed(Effect::Model { outcome }) => {
                 let chunks = chunks_of(&outcome);
-                Ok(Some((outcome_from_record(outcome), chunks)))
+                Ok(ModelSlot::Replayed(outcome_from_record(outcome), chunks))
+            }
+            // A streamed call that was sent and never came back. Everything
+            // recorded after it in this scope is fallout from its pieces --
+            // nothing else can be under an effect that never returned -- so
+            // consuming those slots leaves the rest of the scope's numbering
+            // exactly where the resumed program will look for it.
+            Lookup::Replayed(Effect::Attempted { name }) => {
+                // A tool-using call leaves no trace of the tools it ran --
+                // they are the model's decisions, made inside one call --
+                // so there is nothing to inspect and nothing safe to assume.
+                if name == AtRisk::ToolCalls.mark() {
+                    return Ok(ModelSlot::InterruptedTools);
+                }
+                let seq = journal.cursor(&self.scope).saturating_sub(1);
+                let escaped = journal.skip_after_cursor(&self.scope);
+                if escaped == 0 {
+                    // Nothing the stream did was ever written down, so
+                    // nothing observable happened: the call is as safe to
+                    // send again as one that never started.
+                    self.pending_slot = Some((self.scope.clone(), seq));
+                    return Ok(ModelSlot::Fresh);
+                }
+                Ok(ModelSlot::InterruptedStream)
             }
             Lookup::Replayed(other) => Err(RuntimeError::new(
                 format!("journal step is {other:?}, but the program reached a model call"),
                 span,
             )),
             Lookup::Fresh { scope, seq } => {
+                if at_risk != AtRisk::Nothing {
+                    journal
+                        .record(
+                            scope.clone(),
+                            seq,
+                            site,
+                            Effect::Attempted {
+                                name: at_risk.mark().to_string(),
+                            },
+                        )
+                        .map_err(|e| RuntimeError::new(e.to_string(), span))?;
+                }
                 self.pending_slot = Some((scope, seq));
-                Ok(None)
+                Ok(ModelSlot::Fresh)
             }
         }
     }
@@ -5339,6 +5532,51 @@ impl Interpreter {
         self.declassified_for.iter().any(|s| s == sink)
     }
 
+    /// Claim the slot for a world-changing stdlib call, marking it as
+    /// attempted before it runs.
+    ///
+    /// Two lines rather than one, because the gap between them is the whole
+    /// problem: a process killed after the write landed but before the
+    /// journal knew about it would repeat that write on resume. Recording
+    /// the attempt first turns that silent duplicate into a run that stops
+    /// and names the call whose fate is unknown.
+    pub fn journal_write_start(
+        &mut self,
+        site: &str,
+        name: &str,
+        span: Span,
+    ) -> Result<WriteSlot, RuntimeError> {
+        let mut journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
+        if !journal.is_durable() {
+            return Ok(WriteSlot::Fresh);
+        }
+        match journal
+            .next(&self.scope, site)
+            .map_err(|e| RuntimeError::new(e.to_string(), span))?
+        {
+            Lookup::Replayed(Effect::Tool { result_json, .. }) => Ok(WriteSlot::Done(result_json)),
+            Lookup::Replayed(Effect::Attempted { name }) => Ok(WriteSlot::Interrupted(name)),
+            Lookup::Replayed(other) => Err(RuntimeError::new(
+                format!("journal step is {other:?}, but the program reached {name}"),
+                span,
+            )),
+            Lookup::Fresh { scope, seq } => {
+                journal
+                    .record(
+                        scope.clone(),
+                        seq,
+                        site,
+                        Effect::Attempted {
+                            name: name.to_string(),
+                        },
+                    )
+                    .map_err(|e| RuntimeError::new(e.to_string(), span))?;
+                self.pending_slot = Some((scope, seq));
+                Ok(WriteSlot::Fresh)
+            }
+        }
+    }
+
     /// Replay a recorded effect for a stdlib call, if a durable run already
     /// performed it. Network calls and clocks must not happen twice.
     pub fn journal_lookup(
@@ -5363,6 +5601,62 @@ impl Interpreter {
                 self.pending_slot = Some((scope, seq));
                 Ok(None)
             }
+        }
+    }
+
+    /// Check one read of the outside world against what the run first saw.
+    ///
+    /// Returns an error when this resume read something different. Reads are
+    /// not replayed from the journal — see `Effect::Input` for why the
+    /// content is not in there — so the guarantee is not "the same bytes come
+    /// back" but "a run never silently continues against data it did not
+    /// start from".
+    pub fn journal_input(
+        &mut self,
+        site: &str,
+        name: &str,
+        digest: &str,
+        span: Span,
+    ) -> Result<(), RuntimeError> {
+        let mut journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
+        if !journal.is_durable() {
+            return Ok(());
+        }
+        match journal
+            .next(&self.scope, site)
+            .map_err(|e| RuntimeError::new(e.to_string(), span))?
+        {
+            Lookup::Replayed(Effect::Input {
+                digest: recorded, ..
+            }) => {
+                if recorded == digest {
+                    return Ok(());
+                }
+                Err(RuntimeError::new(
+                    format!(
+                        "{name} returns different data than when this run first read it"
+                    ),
+                    span,
+                )
+                .with_hint(
+                    "a resumed run continues the run it was, so its inputs have to be the ones it started from; start a new run instead of resuming, or put the original data back",
+                ))
+            }
+            Lookup::Replayed(other) => Err(RuntimeError::new(
+                format!("journal step is {other:?}, but the program reached {name}"),
+                span,
+            )),
+            Lookup::Fresh { scope, seq } => journal
+                .record(
+                    scope,
+                    seq,
+                    site,
+                    Effect::Input {
+                        name: name.to_string(),
+                        digest: digest.to_string(),
+                    },
+                )
+                .map_err(|e| RuntimeError::new(e.to_string(), span)),
         }
     }
 
