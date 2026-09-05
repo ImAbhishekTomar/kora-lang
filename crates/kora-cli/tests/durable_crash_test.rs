@@ -51,6 +51,16 @@ def main():
     print("done")
 "#;
 
+/// A path as a Kora string literal.
+///
+/// Windows separators are backslashes, and a backslash in Kora source starts
+/// an escape — `C:\Users\...` is `\U`, which is not one. Forward slashes are
+/// accepted by the Windows APIs underneath, so this is a change of spelling
+/// rather than of meaning.
+fn ko_path(path: &Path) -> String {
+    path.to_str().expect("a UTF-8 path").replace('\\', "/")
+}
+
 fn lines(path: &Path) -> Vec<String> {
     std::fs::read_to_string(path)
         .unwrap_or_default()
@@ -81,10 +91,7 @@ fn only_run_id(program: &Path) -> String {
 fn a_killed_pipeline_resumes_without_writing_any_row_twice() {
     let scratch = Scratch::new("resume");
     let out = scratch.0.join("out.txt");
-    let program = scratch.write(
-        "pipeline.ko",
-        &PIPELINE.replace("OUT", out.to_str().unwrap()),
-    );
+    let program = scratch.write("pipeline.ko", &PIPELINE.replace("OUT", &ko_path(&out)));
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_kora"))
         .arg("run")
@@ -161,10 +168,7 @@ fn a_killed_pipeline_resumes_without_writing_any_row_twice() {
 fn a_run_cannot_be_resumed_twice_at_once() {
     let scratch = Scratch::new("lock");
     let out = scratch.0.join("out.txt");
-    let program = scratch.write(
-        "pipeline.ko",
-        &PIPELINE.replace("OUT", out.to_str().unwrap()),
-    );
+    let program = scratch.write("pipeline.ko", &PIPELINE.replace("OUT", &ko_path(&out)));
 
     let mut first = Command::new(env!("CARGO_BIN_EXE_kora"))
         .arg("run")
@@ -236,8 +240,8 @@ fn a_resume_refuses_input_that_changed_since_the_run_started() {
     let program = scratch.write(
         "reader.ko",
         &READER
-            .replace("IN", input.to_str().unwrap())
-            .replace("OUT", out.to_str().unwrap()),
+            .replace("IN", &ko_path(&input))
+            .replace("OUT", &ko_path(&out)),
     );
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_kora"))
@@ -397,10 +401,7 @@ fn a_killed_stream_resumes_without_a_second_request_or_a_second_piece() {
         ),
     );
     let out = scratch.0.join("out.txt");
-    let program = scratch.write(
-        "stream.ko",
-        &STREAM_PROGRAM.replace("OUT", out.to_str().unwrap()),
-    );
+    let program = scratch.write("stream.ko", &STREAM_PROGRAM.replace("OUT", &ko_path(&out)));
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_kora"))
         .arg("run")

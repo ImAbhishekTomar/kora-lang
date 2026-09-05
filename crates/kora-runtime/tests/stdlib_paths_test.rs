@@ -21,6 +21,16 @@ fn run(src: &str) -> Vec<String> {
     i.output
 }
 
+/// A path as a Kora string literal.
+///
+/// Windows separators are backslashes, and a backslash in Kora source starts
+/// an escape — `C:\Users\...` is `\U`, which is not one. Forward slashes are
+/// accepted by the Windows APIs underneath, so this is a change of spelling
+/// rather than of meaning.
+fn ko_path(path: &std::path::Path) -> String {
+    path.to_str().expect("a UTF-8 path").replace('\\', "/")
+}
+
 fn run_err(src: &str) -> String {
     let program = parse(src).unwrap_or_else(|e| panic!("parse error: {e}\n{src}"));
     let mut i = Interpreter::new();
@@ -381,7 +391,7 @@ def main():
         case Err(why):
             print(why)
 "#,
-        p = path.to_str().unwrap()
+        p = ko_path(&path)
     ));
     assert_eq!(out, vec!["wrote", "appended", "8"]);
     std::fs::remove_dir_all(&dir).ok();
@@ -412,7 +422,7 @@ def main():
         case Err(why):
             print("outer err")
 "#,
-        p = path.to_str().unwrap()
+        p = ko_path(&path)
     ));
     std::fs::remove_dir_all(&dir).ok();
     assert!(err.contains("came from outside the program"), "got: {err}");
