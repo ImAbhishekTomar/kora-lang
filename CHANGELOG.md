@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.3.0](https://github.com/ImAbhishekTomar/kora-lang/compare/v0.2.0...v0.3.0) (2026-09-05)
+
+
+### Features
+
+* added docs internals ([a177d11](https://github.com/ImAbhishekTomar/kora-lang/commit/a177d1149d812b9ab39ed443daf27b0c0ad3307d))
+* an effect is identified by which call it is, not which line ([#37](https://github.com/ImAbhishekTomar/kora-lang/issues/37)) ([5e867e9](https://github.com/ImAbhishekTomar/kora-lang/commit/5e867e99e56fb1681aa809c5f49c27534aab9fe0))
+* **analyze:** document and demonstrate streamed answers ([fb1169a](https://github.com/ImAbhishekTomar/kora-lang/commit/fb1169addcd4dd1097aa9431dd6e97169fc61fa8))
+* **analyze:** stream a str result token by token ([a355cbd](https://github.com/ImAbhishekTomar/kora-lang/commit/a355cbd0a5f048cb711a63f4e8ee4952284193ea))
+* **analyze:** token-by-token streaming for str results ([7379455](https://github.com/ImAbhishekTomar/kora-lang/commit/73794555500a1aaa2dcebcbc97dec13681df0f4c))
+* **examples:** the orchestrator-worker pattern uses list[Section] directly ([513949e](https://github.com/ImAbhishekTomar/kora-lang/commit/513949e85056c8fedefabe35b3d0ee8b3e114a28))
+* **lang:** accept an agent as a tool target ([4f406bd](https://github.com/ImAbhishekTomar/kora-lang/commit/4f406bd747de08420db7be221f17a13599acc0f9))
+* **lang:** budget: max_seconds — a scope that runs out of time ([#38](https://github.com/ImAbhishekTomar/kora-lang/issues/38)) ([543bbd2](https://github.com/ImAbhishekTomar/kora-lang/commit/543bbd2df2d6c8f51ddaacbf9c4048e1ac889cf7))
+* **lang:** else (why, kind), or-patterns, and a stream shortcut ([ac14aef](https://github.com/ImAbhishekTomar/kora-lang/commit/ac14aef6cd261d88786e442a43027bd72a5b5eef))
+* **lang:** open the tool loop with on tool_call(name, args) ([a2cd792](https://github.com/ImAbhishekTomar/kora-lang/commit/a2cd792f2432febbb400be8a6844de45d9abc654))
+* **lang:** with context(...) — a lexical fence on request material ([a7fa938](https://github.com/ImAbhishekTomar/kora-lang/commit/a7fa938b545a1443e2009b0f778af669f5305e39))
+* **runtime:** interactive input(), and notes — a durable run's own scratch space ([3ff689b](https://github.com/ImAbhishekTomar/kora-lang/commit/3ff689bad03bc0d4c35239dcd6350b01f78ed7ce))
+* **runtime:** journal the with-context pruning decision per turn ([ba67a63](https://github.com/ImAbhishekTomar/kora-lang/commit/ba67a6384c663ee8f5b8e6252b9f1196569f4848))
+* **testing:** mocks fall through to the one that matches the call ([7f5c24a](https://github.com/ImAbhishekTomar/kora-lang/commit/7f5c24a150d29f82338d7b3638b02c03e753a223))
+* **vscode:** add Kora light and dark themes with low-noise syntax highlighting ([ba6d6f1](https://github.com/ImAbhishekTomar/kora-lang/commit/ba6d6f1a5a8dffed77ce16a23d30d9cc7ba5538b))
+
+
+### Fixes
+
+* **check:** catch Python-method-call and kwargs mistakes at check time ([fccbfbc](https://github.com/ImAbhishekTomar/kora-lang/commit/fccbfbc0a0095123b7fdadc14dc392ae726b88d8))
+* **ci:** publish package crate before types ([34cca2c](https://github.com/ImAbhishekTomar/kora-lang/commit/34cca2c612733672802b89fa1bc52f89c59b5cbe))
+* **models:** decode surrogate pairs in streamed answers ([3cbfc38](https://github.com/ImAbhishekTomar/kora-lang/commit/3cbfc3831fda1cc282d8cb7edf7608be1212140a))
+* **models:** do not fail a stream over an SSE keep-alive ([3ddf8ee](https://github.com/ImAbhishekTomar/kora-lang/commit/3ddf8ee1665372ea2c682aad685a279d723a7810))
+* **runtime:** report the declassified value, not its local alias ([0515d0b](https://github.com/ImAbhishekTomar/kora-lang/commit/0515d0be789d58370aa3c89f5c6f5e6fe5272432))
+* **test:** stop pinning dict key order in the tool-call-hook test ([2215e6c](https://github.com/ImAbhishekTomar/kora-lang/commit/2215e6cc9b19d8293c5ab70da2ffe1cc020940f1))
+
+
+### Documentation
+
+* **agents:** add guidelines for using git worktree in feature development ([cc7018c](https://github.com/ImAbhishekTomar/kora-lang/commit/cc7018c76464402356c9df9882839660bf933b20))
+* catch up README, TODO, and the editor to the last four features ([001d1e5](https://github.com/ImAbhishekTomar/kora-lang/commit/001d1e501a86c3837d518254f7fb512d4ac1cc68))
+* **decisions:** design the next context-engineering phase ([c11c29a](https://github.com/ImAbhishekTomar/kora-lang/commit/c11c29a326f796da11305d8b4ef18d75e4bc5713))
+* **decisions:** mark unimplemented phase-2 syntax as illustrative ([fc0e8ef](https://github.com/ImAbhishekTomar/kora-lang/commit/fc0e8ef44cdb235386ebeeb2cac35724d03d18ec))
+* update AGENTS.md and TODO.md with feature development guidelines and capability roadmap ([600e1ea](https://github.com/ImAbhishekTomar/kora-lang/commit/600e1eaffb3b3cc1ac0e95ebd9f6e7cce72b2c13))
+
 ## [0.2.0](https://github.com/ImAbhishekTomar/kora-lang/compare/v0.1.0...v0.2.0) (2026-08-29)
 
 
