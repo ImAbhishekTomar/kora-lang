@@ -424,10 +424,12 @@ dependencies = [
  "kora-python",
  "kora-syntax",
  "kora-types",
+ "libc",
  "regex",
  "rusqlite",
  "serde",
  "serde_json",
+ "sha2",
  "toml",
  "ureq",
 ]

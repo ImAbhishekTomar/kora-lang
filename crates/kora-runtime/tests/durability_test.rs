@@ -25,7 +25,7 @@ impl Scratch {
     }
 
     fn run_path(&self, id: &str) -> PathBuf {
-        self.0.join(format!("{id}.json"))
+        self.0.join(format!("{id}.jsonl"))
     }
 }
 
@@ -43,7 +43,7 @@ fn run_durable(src: &str, run: Run, path: PathBuf) -> (Vec<String>, Run, Option<
     let mut interp = Interpreter::new();
     interp.config = Config::parse(CONFIG).unwrap();
     interp.program_name = "test.ko".into();
-    interp.journal = Arc::new(Mutex::new(Journal::open(run, path)));
+    interp.journal = Arc::new(Mutex::new(Journal::open(run, path).unwrap()));
 
     let error = match interp.run(&program) {
         Ok(()) => {
@@ -288,4 +288,67 @@ fn a_plain_run_journals_nothing() {
     interp.run(&program).unwrap();
     assert_eq!(interp.output, vec!["hi"]);
     assert!(!interp.journal.lock().unwrap().is_durable());
+}
+
+const WRITE_PROGRAM: &str = r#"use fs
+
+def main():
+    match fs.append("OUT", "row\n"):
+        case Ok(_):
+            print("wrote")
+        case Err(why):
+            print(why)
+"#;
+
+#[test]
+fn a_write_replays_from_the_journal_instead_of_happening_twice() {
+    let scratch = Scratch::new("write-once");
+    let path = scratch.run_path("r1");
+    let out = scratch.0.join("out.txt");
+    let src = WRITE_PROGRAM.replace("OUT", out.to_str().unwrap());
+
+    let (_, run, err) = run_durable(&src, Run::new("r1".into(), "test.ko".into()), path.clone());
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!(std::fs::read_to_string(&out).unwrap(), "row\n");
+
+    // The same run again — what a resume does — must not append a second row.
+    let (_, _, err) = run_durable(&src, run, path);
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!(
+        std::fs::read_to_string(&out).unwrap(),
+        "row\n",
+        "a replayed write is served from the journal, not performed again"
+    );
+}
+
+#[test]
+fn a_write_interrupted_before_its_outcome_was_recorded_stops_the_resume() {
+    // The one gap two-phase recording exists to close: the process died
+    // after the write ran and before the journal learned what it returned.
+    // Neither repeating it nor skipping it is honest, so the run stops.
+    let scratch = Scratch::new("write-unknown");
+    let path = scratch.run_path("r1");
+    let out = scratch.0.join("out.txt");
+    let src = WRITE_PROGRAM.replace("OUT", out.to_str().unwrap());
+
+    let mut run = Run::new("r1".into(), "test.ko".into());
+    run.entries.push(journal::Entry {
+        scope: Scope::root(),
+        seq: 0,
+        site: "test.ko:4#fs.append".into(),
+        effect: Effect::Attempted {
+            name: "fs.append".into(),
+        },
+    });
+
+    let (_, _, err) = run_durable(&src, run, path);
+    let message = err.expect("an interrupted write must stop the resume");
+    assert!(
+        message.contains("whether it finished is unknown"),
+        "the error should say what is unknown: {message}"
+    );
+    assert!(
+        !out.exists(),
+        "the interrupted write must not be attempted again"
+    );
 }

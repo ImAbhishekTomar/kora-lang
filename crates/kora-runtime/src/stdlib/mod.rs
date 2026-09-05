@@ -17,7 +17,7 @@ use std::collections::HashMap;
 
 use kora_syntax::token::Span;
 
-use crate::interp::{Interpreter, RuntimeError};
+use crate::interp::{Interpreter, RuntimeError, WriteSlot};
 use crate::value::Value;
 
 pub mod csv;
@@ -89,6 +89,100 @@ pub(crate) fn err(reason: impl Into<String>) -> Value {
     Value::Variant {
         tag: std::rc::Rc::new("Err".to_string()),
         payload: vec![Value::Str(std::rc::Rc::new(reason.into()))],
+    }
+}
+
+/// Perform a world-changing stdlib call exactly once across a durable run.
+///
+/// A replay must not repeat it. Re-generating a model answer costs tokens;
+/// re-running a write appends the same rows twice, moves a file that is
+/// already gone, or charges the same invoice again — and a crash is exactly
+/// the moment when whether the effect landed is unknown to the program but
+/// known to the journal. So the outcome is recorded when it happens, and
+/// handed back on replay without touching the world a second time.
+///
+/// Validation stays outside this: argument shapes and label rules are pure
+/// checks on the program, and a resumed run should reach the same verdict on
+/// them as the original did.
+pub(crate) fn journaled_write(
+    interp: &mut Interpreter,
+    func: &str,
+    span: Span,
+    perform: impl FnOnce(&mut Interpreter) -> Value,
+) -> Result<Value, RuntimeError> {
+    let site = format!("{}:{}#{func}", interp.program_name, span.line);
+    match interp.journal_write_start(&site, func, span)? {
+        WriteSlot::Done(recorded) => return Ok(decode_outcome(&recorded)),
+        WriteSlot::Interrupted(name) => {
+            return Err(RuntimeError::new(
+                format!("this run was killed while {name} was running, so whether it finished is unknown"),
+                span,
+            )
+            .with_hint(
+                "resuming would either repeat the write or skip it, and the journal cannot tell which; check what the call left behind, then start a new run",
+            ))
+        }
+        WriteSlot::Fresh => {}
+    }
+    let outcome = perform(interp);
+    interp.journal_record(&site, func, &encode_outcome(&outcome), span)?;
+    Ok(outcome)
+}
+
+/// Check one read of the outside world against the run's first attempt.
+///
+/// The read happens live on every attempt — a file's contents are not worth
+/// putting in a journal, and mostly do not change. What is recorded is a
+/// digest, so a resume that reads something else stops with a sentence about
+/// the file rather than continuing against data the run it is continuing
+/// never saw.
+pub(crate) fn journaled_read(
+    interp: &mut Interpreter,
+    func: &str,
+    span: Span,
+    perform: impl FnOnce(&mut Interpreter) -> Value,
+) -> Result<Value, RuntimeError> {
+    let outcome = perform(interp);
+    let site = format!("{}:{}#{func}", interp.program_name, span.line);
+    interp.journal_input(&site, func, &digest(&outcome), span)?;
+    Ok(outcome)
+}
+
+/// A stable fingerprint of what a read returned.
+fn digest(value: &Value) -> String {
+    use sha2::{Digest, Sha256};
+    let mut hasher = Sha256::new();
+    hasher.update(value.to_string().as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+/// The `Ok(...)`/`Err(reason)` shapes a journaled write can produce, as JSON.
+fn encode_outcome(value: &Value) -> String {
+    let json = match value {
+        Value::Variant { tag, payload } if tag.as_str() == "Err" => {
+            serde_json::json!({ "error": payload.first().map(|v| v.to_string()).unwrap_or_default() })
+        }
+        Value::Variant { tag, payload } if tag.as_str() == "Ok" => match payload.first() {
+            Some(Value::Int(n)) => serde_json::json!({ "ok": n }),
+            Some(Value::Str(s)) => serde_json::json!({ "ok": s.as_str() }),
+            _ => serde_json::json!({ "ok": serde_json::Value::Null }),
+        },
+        other => serde_json::json!({ "ok": other.to_string() }),
+    };
+    json.to_string()
+}
+
+fn decode_outcome(text: &str) -> Value {
+    let Ok(json) = serde_json::from_str::<serde_json::Value>(text) else {
+        return ok(Value::None);
+    };
+    if let Some(reason) = json.get("error").and_then(|v| v.as_str()) {
+        return err(reason);
+    }
+    match json.get("ok") {
+        Some(serde_json::Value::Number(n)) => ok(Value::Int(n.as_i64().unwrap_or_default())),
+        Some(serde_json::Value::String(s)) => ok(Value::Str(std::rc::Rc::new(s.clone()))),
+        _ => ok(Value::None),
     }
 }
 

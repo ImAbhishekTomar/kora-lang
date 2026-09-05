@@ -47,29 +47,38 @@ pub const EXPORTS: super::Exports = &[
 /// `fs.read(path) -> Ok(text) | Err(reason)`
 ///
 /// The contents are `unverified`: a file is outside the program.
-fn read(_interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
+fn read(interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
     let path = checked_path(&args, "fs.read", span)?;
-    match std::fs::read_to_string(&path) {
-        Ok(text) => Ok(ok(Value::Str(Rc::new(text)).with_label(Label::UNVERIFIED))),
-        Err(e) => Ok(err(describe_io(&path, &e))),
-    }
+    super::journaled_read(
+        interp,
+        "fs.read",
+        span,
+        move |_| match std::fs::read_to_string(&path) {
+            Ok(text) => ok(Value::Str(Rc::new(text)).with_label(Label::UNVERIFIED)),
+            Err(e) => err(describe_io(&path, &e)),
+        },
+    )
 }
 
 /// `fs.lines(path) -> Ok(list) | Err(reason)`
-fn lines(_interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
+fn lines(interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
     let path = checked_path(&args, "fs.lines", span)?;
-    match std::fs::read_to_string(&path) {
-        Ok(text) => {
-            let items: Vec<Value> = text
-                .lines()
-                .map(|l| Value::Str(Rc::new(l.to_string())))
-                .collect();
-            Ok(ok(
-                Value::List(Rc::new(std::cell::RefCell::new(items))).with_label(Label::UNVERIFIED)
-            ))
-        }
-        Err(e) => Ok(err(describe_io(&path, &e))),
-    }
+    super::journaled_read(
+        interp,
+        "fs.lines",
+        span,
+        move |_| match std::fs::read_to_string(&path) {
+            Ok(text) => {
+                let items: Vec<Value> = text
+                    .lines()
+                    .map(|l| Value::Str(Rc::new(l.to_string())))
+                    .collect();
+                ok(Value::List(Rc::new(std::cell::RefCell::new(items)))
+                    .with_label(Label::UNVERIFIED))
+            }
+            Err(e) => err(describe_io(&path, &e)),
+        },
+    )
 }
 
 /// `fs.write(path, text) -> Ok(None) | Err(reason)`
@@ -83,24 +92,26 @@ fn write(interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Value
         require_not_classified(interp, value, "fs.write", span)?;
     }
 
-    let target = Path::new(&path);
-    let tmp = target.with_extension(format!(
-        "{}.kora-tmp",
-        target
-            .extension()
-            .map(|e| e.to_string_lossy().to_string())
-            .unwrap_or_default()
-    ));
-    if let Err(e) = std::fs::write(&tmp, contents) {
-        return Ok(err(describe_io(&path, &e)));
-    }
-    match std::fs::rename(&tmp, target) {
-        Ok(()) => Ok(ok(Value::None)),
-        Err(e) => {
-            std::fs::remove_file(&tmp).ok();
-            Ok(err(describe_io(&path, &e)))
+    super::journaled_write(interp, "fs.write", span, move |_| {
+        let target = Path::new(&path);
+        let tmp = target.with_extension(format!(
+            "{}.kora-tmp",
+            target
+                .extension()
+                .map(|e| e.to_string_lossy().to_string())
+                .unwrap_or_default()
+        ));
+        if let Err(e) = std::fs::write(&tmp, contents) {
+            return err(describe_io(&path, &e));
         }
-    }
+        match std::fs::rename(&tmp, target) {
+            Ok(()) => ok(Value::None),
+            Err(e) => {
+                std::fs::remove_file(&tmp).ok();
+                err(describe_io(&path, &e))
+            }
+        }
+    })
 }
 
 /// `fs.append(path, text) -> Ok(None) | Err(reason)`
@@ -111,17 +122,19 @@ fn append(interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Valu
     if let Some(value) = args.get(1) {
         require_not_classified(interp, value, "fs.append", span)?;
     }
-    let opened = std::fs::OpenOptions::new()
-        .create(true)
-        .append(true)
-        .open(&path);
-    match opened {
-        Ok(mut file) => match file.write_all(contents.as_bytes()) {
-            Ok(()) => Ok(ok(Value::None)),
-            Err(e) => Ok(err(describe_io(&path, &e))),
-        },
-        Err(e) => Ok(err(describe_io(&path, &e))),
-    }
+    super::journaled_write(interp, "fs.append", span, move |_| {
+        let opened = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&path);
+        match opened {
+            Ok(mut file) => match file.write_all(contents.as_bytes()) {
+                Ok(()) => ok(Value::None),
+                Err(e) => err(describe_io(&path, &e)),
+            },
+            Err(e) => err(describe_io(&path, &e)),
+        }
+    })
 }
 
 /// `fs.image(path) -> Ok(image) | Err(reason)`
@@ -146,35 +159,39 @@ fn image(_interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Valu
 ///
 /// Full paths, not bare names: a name alone has to be re-joined by hand, and
 /// forgetting to is how a listing loop ends up reading the wrong directory.
-fn list(_interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
+fn list(interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
     let dir = checked_path(&args, "fs.list", span)?;
-    let entries = match std::fs::read_dir(&dir) {
-        Ok(entries) => entries,
-        Err(e) => return Ok(err(describe_io(&dir, &e))),
-    };
-    let mut names: Vec<String> = Vec::new();
-    for entry in entries.flatten() {
-        // A name that is not valid UTF-8 is skipped rather than mangled: a
-        // lossy name would not open again.
-        if let Some(name) = entry.file_name().to_str() {
-            names.push(format!("{}/{name}", dir.trim_end_matches('/')));
+    super::journaled_read(interp, "fs.list", span, move |_| {
+        let entries = match std::fs::read_dir(&dir) {
+            Ok(entries) => entries,
+            Err(e) => return err(describe_io(&dir, &e)),
+        };
+        let mut names: Vec<String> = Vec::new();
+        for entry in entries.flatten() {
+            // A name that is not valid UTF-8 is skipped rather than mangled: a
+            // lossy name would not open again.
+            if let Some(name) = entry.file_name().to_str() {
+                names.push(format!("{}/{name}", dir.trim_end_matches('/')));
+            }
         }
-    }
-    names.sort();
-    Ok(ok(paths_value(names)))
+        names.sort();
+        ok(paths_value(names))
+    })
 }
 
 /// `fs.glob(pattern) -> Ok(list of paths) | Err(reason)`
 fn glob_files(
-    _interp: &mut Interpreter,
+    interp: &mut Interpreter,
     args: Vec<Value>,
     span: Span,
 ) -> Result<Value, RuntimeError> {
     let pattern = checked_path(&args, "fs.glob", span)?;
-    match glob::expand(&pattern) {
-        Ok(paths) => Ok(ok(paths_value(paths))),
-        Err(reason) => Ok(err(format!("fs.glob({pattern}): {reason}"))),
-    }
+    super::journaled_read(interp, "fs.glob", span, move |_| {
+        match glob::expand(&pattern) {
+            Ok(paths) => ok(paths_value(paths)),
+            Err(reason) => err(format!("fs.glob({pattern}): {reason}")),
+        }
+    })
 }
 
 /// Paths the runtime produced from a program-supplied pattern.
