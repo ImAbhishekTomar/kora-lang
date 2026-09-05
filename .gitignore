@@ -18,6 +18,8 @@
 # Runtime-generated artifacts
 /cassettes/
 *.trace
+# What examples/19_durable_pipeline.ko writes when it is run.
+/pipeline-out.csv
 
 # Python bytecode cache
 __pycache__/

@@ -149,6 +149,8 @@ jobs:
           set -euo pipefail
           ./target/debug/kora run examples/00_basics.ko
           ./target/debug/kora run examples/05_stdlib.ko
+          ./target/debug/kora run --durable examples/19_durable_pipeline.ko
+          rm -f pipeline-out.csv
           ./target/debug/kora run examples/10_modules.ko
           ./target/debug/kora run examples/13_packages.ko
           ./target/debug/kora tree examples/13_packages.ko
