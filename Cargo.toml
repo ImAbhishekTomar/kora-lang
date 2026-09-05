@@ -39,13 +39,13 @@ kora-mcp = { path = "crates/kora-mcp", version = "0.2.0" } # x-release-please-ve
 kora-python = { path = "crates/kora-python", version = "0.2.0" } # x-release-please-version
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
-ureq = { version = "2", features = ["json"] }
-toml = "0.8"
+ureq = { version = "3", features = ["json"] }
+toml = "1.1"
 # Format-preserving, for editing a human-authored kora.toml. Same version
 # `toml` already pulls in, so it is not a second copy in the tree.
-toml_edit = "0.22"
+toml_edit = "0.25"
 regex = "1"
-sha2 = "0.10"
-lsp-server = "0.7"
-lsp-types = "0.95"
-rusqlite = { version = "0.32", features = ["bundled"] }
+sha2 = "0.11"
+lsp-server = "0.10"
+lsp-types = "0.97"
+rusqlite = { version = "0.40", features = ["bundled"] }
