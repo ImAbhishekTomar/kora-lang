@@ -8,6 +8,8 @@ use std::process::ExitCode;
 
 use kora_runtime::{Cassette, Config, Interpreter, Mode};
 
+mod ui;
+
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 
 const USAGE: &str = "\
@@ -52,7 +54,7 @@ fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     match args.first().map(String::as_str) {
         Some("--version") | Some("-V") | Some("version") => {
-            println!("kora {VERSION}");
+            ui::banner(VERSION);
             ExitCode::SUCCESS
         }
         Some("run") => run_args(&args[1..]),
@@ -180,12 +182,12 @@ fn main() -> ExitCode {
         },
         Some(first) if first.ends_with(".ko") => run_args(&args),
         Some(other) => {
-            eprintln!("kora: unknown command `{other}`");
+            eprintln!("{} kora: unknown command `{other}`", ui::err());
             eprintln!("{USAGE}");
             ExitCode::from(2)
         }
         None => {
-            println!("Kora — an agent-first programming language");
+            ui::banner(VERSION);
             println!("{USAGE}");
             ExitCode::SUCCESS
         }
@@ -219,7 +221,7 @@ fn run_args(args: &[String]) -> ExitCode {
             "--durable" => durable = true,
             "--trace" => trace = true,
             other if other.starts_with("--") => {
-                eprintln!("kora: unknown flag `{other}`");
+                eprintln!("{} kora: unknown flag `{other}`", ui::err());
                 eprintln!("{USAGE}");
                 return ExitCode::from(2);
             }
@@ -268,7 +270,7 @@ fn project_root(program: &Path) -> PathBuf {
 fn add_dependency(path: &str, name: &str, source: &str, args: &[String]) -> ExitCode {
     let program = Path::new(path);
     if !program.is_file() {
-        eprintln!("error: cannot read `{path}`");
+        eprintln!("{} cannot read `{path}`", ui::err());
         return ExitCode::from(1);
     }
     let root = project_root(program);
@@ -287,15 +289,15 @@ fn add_dependency(path: &str, name: &str, source: &str, args: &[String]) -> Exit
 
     match kora_pkg::add(&root, name, &spec) {
         Err(why) => {
-            eprintln!("error: {why}");
+            eprintln!("{} {why}", ui::err());
             ExitCode::from(1)
         }
         Ok(change) => {
             match change {
-                kora_pkg::Change::Added => println!("  added     {name}"),
-                kora_pkg::Change::Unchanged => println!("  unchanged {name}"),
+                kora_pkg::Change::Added => ui::status("added", name),
+                kora_pkg::Change::Unchanged => ui::status("unchanged", name),
                 kora_pkg::Change::Replaced { previous } => {
-                    println!("  repointed {name} (was {previous})")
+                    ui::status("repointed", &format!("{name} (was {previous})"))
                 }
                 _ => {}
             }
@@ -310,20 +312,20 @@ fn add_dependency(path: &str, name: &str, source: &str, args: &[String]) -> Exit
 fn remove_dependency(path: &str, name: &str) -> ExitCode {
     let program = Path::new(path);
     if !program.is_file() {
-        eprintln!("error: cannot read `{path}`");
+        eprintln!("{} cannot read `{path}`", ui::err());
         return ExitCode::from(1);
     }
     match kora_pkg::remove(&project_root(program), name) {
         Err(why) => {
-            eprintln!("error: {why}");
+            eprintln!("{} {why}", ui::err());
             ExitCode::from(1)
         }
         Ok(kora_pkg::Change::Absent) => {
-            eprintln!("error: `{name}` is not declared in kora.toml");
+            eprintln!("{} `{name}` is not declared in kora.toml", ui::err());
             ExitCode::from(1)
         }
         Ok(_) => {
-            println!("  removed  {name}");
+            ui::status("removed", name);
             ExitCode::SUCCESS
         }
     }
@@ -339,7 +341,7 @@ fn remove_dependency(path: &str, name: &str) -> ExitCode {
 fn update_dependency(path: &str, name: &str, args: &[String]) -> ExitCode {
     let program = Path::new(path);
     if !program.is_file() {
-        eprintln!("error: cannot read `{path}`");
+        eprintln!("{} cannot read `{path}`", ui::err());
         return ExitCode::from(1);
     }
     let root = project_root(program);
@@ -350,12 +352,15 @@ fn update_dependency(path: &str, name: &str, args: &[String]) -> ExitCode {
         .iter()
         .find(|p| p.name.as_deref() == Some(name))
     else {
-        eprintln!("error: `{name}` is not a package this program uses");
+        eprintln!("{} `{name}` is not a package this program uses", ui::err());
         return ExitCode::from(1);
     };
     let Some(url) = package.git.clone() else {
-        eprintln!("error: `{name}` is a path dependency; there is nothing to update");
-        eprintln!("   = hint: edit its `path` in kora.toml");
+        eprintln!(
+            "{} `{name}` is a path dependency; there is nothing to update",
+            ui::err()
+        );
+        eprintln!("   {}", ui::dim("= hint: edit its `path` in kora.toml"));
         return ExitCode::from(1);
     };
 
@@ -376,25 +381,25 @@ fn update_dependency(path: &str, name: &str, args: &[String]) -> ExitCode {
         match kora_pkg::set_revision(&root, name, &reference) {
             Ok(true) => {}
             Ok(false) => {
-                eprintln!("error: `{name}` is not declared in kora.toml");
+                eprintln!("{} `{name}` is not declared in kora.toml", ui::err());
                 return ExitCode::from(1);
             }
             Err(why) => {
-                eprintln!("error: {why}");
+                eprintln!("{} {why}", ui::err());
                 return ExitCode::from(1);
             }
         }
     }
 
     if let Err(why) = kora_pkg::unlock(&root, &url) {
-        eprintln!("error: {why}");
+        eprintln!("{} {why}", ui::err());
         return ExitCode::from(1);
     }
 
     let config = Config::discover(program);
     let outcome = kora_pkg::install(program, config.install_jobs, true);
     for (failed_url, why) in &outcome.failed {
-        eprintln!("error: cannot fetch {failed_url}");
+        eprintln!("{} cannot fetch {failed_url}", ui::err());
         for line in why.lines().take(4) {
             eprintln!("   {}", line.trim());
         }
@@ -440,8 +445,16 @@ fn update_dependency(path: &str, name: &str, args: &[String]) -> ExitCode {
         return ExitCode::SUCCESS;
     }
     eprintln!("kora.toml and kora.lock have been updated, but review this before shipping it.");
-    eprintln!("   = hint: `kora audit {path}` lists every declassification site");
-    eprintln!("   = hint: re-run with --accept-new-authority once you have looked");
+    eprintln!(
+        "   {}",
+        ui::dim(&format!(
+            "= hint: `kora audit {path}` lists every declassification site"
+        ))
+    );
+    eprintln!(
+        "   {}",
+        ui::dim("= hint: re-run with --accept-new-authority once you have looked")
+    );
     ExitCode::from(1)
 }
 
@@ -468,7 +481,7 @@ fn copy_tree(from: &Path, to: &Path) -> std::io::Result<()> {
 fn install_packages(path: &str, jobs: Option<usize>) -> ExitCode {
     let program_path = Path::new(path);
     if !program_path.is_file() {
-        eprintln!("error: cannot read `{path}`");
+        eprintln!("{} cannot read `{path}`", ui::err());
         return ExitCode::from(1);
     }
     let config = Config::discover(program_path);
@@ -476,17 +489,17 @@ fn install_packages(path: &str, jobs: Option<usize>) -> ExitCode {
 
     let outcome = kora_pkg::install(program_path, jobs, true);
     for url in &outcome.fetched {
-        println!("  fetched  {url}");
+        ui::status("fetched", &url.to_string());
     }
     for (url, why) in &outcome.failed {
-        eprintln!("error: cannot fetch {url}");
+        eprintln!("{} cannot fetch {url}", ui::err());
         for line in why.lines().take(4) {
             eprintln!("   {}", line.trim());
         }
         eprintln!();
     }
     if outcome.lock_changed {
-        println!("  updated  {}", kora_pkg::Lock::FILE);
+        ui::status("updated", kora_pkg::Lock::FILE);
     }
     if outcome.newly_recorded > 0 {
         println!(
@@ -499,7 +512,10 @@ fn install_packages(path: &str, jobs: Option<usize>) -> ExitCode {
 
     let used = outcome.resolution.needed().len();
     if outcome.failed.is_empty() {
-        println!("{used} package{} in use", if used == 1 { "" } else { "s" });
+        ui::done(&format!(
+            "{used} package{} in use",
+            if used == 1 { "" } else { "s" }
+        ));
     }
 
     let problems = report_package_problems(&outcome.resolution);
@@ -573,7 +589,7 @@ fn print_audit_by_package(
 fn vendor_packages(path: &str, include_tests: bool) -> ExitCode {
     let program = Path::new(path);
     if !program.is_file() {
-        eprintln!("error: cannot read `{path}`");
+        eprintln!("{} cannot read `{path}`", ui::err());
         return ExitCode::from(1);
     }
     let resolution = kora_pkg::resolve(program);
@@ -583,18 +599,18 @@ fn vendor_packages(path: &str, include_tests: bool) -> ExitCode {
     }
     match kora_pkg::vendor(program, include_tests) {
         Err(why) => {
-            eprintln!("error: {why}");
+            eprintln!("{} {why}", ui::err());
             ExitCode::from(1)
         }
         Ok(copied) => {
             for name in &copied {
-                println!("  vendored  {name}");
+                ui::status("vendored", &name.to_string());
             }
-            println!(
+            ui::done(&format!(
                 "{} package{} in vendor/",
                 copied.len(),
                 if copied.len() == 1 { "" } else { "s" }
-            );
+            ));
             ExitCode::SUCCESS
         }
     }
@@ -611,12 +627,12 @@ fn vendor_packages(path: &str, include_tests: bool) -> ExitCode {
 fn package_tree(path: &str) -> ExitCode {
     let program_path = Path::new(path);
     if !program_path.is_file() {
-        eprintln!("error: cannot read `{path}`");
+        eprintln!("{} cannot read `{path}`", ui::err());
         return ExitCode::from(1);
     }
     let resolution = kora_pkg::resolve(program_path);
 
-    println!("{path}");
+    println!("{}", ui::cyan(path));
     let needed = resolution.needed();
     if needed.is_empty() {
         println!("  (no packages used)");
@@ -647,7 +663,7 @@ fn package_tree(path: &str) -> ExitCode {
     }
 
     for (file, why) in &resolution.unreadable {
-        eprintln!("warning: skipped {}: {why}", file.display());
+        eprintln!("{} skipped {}: {why}", ui::warn(), file.display());
     }
 
     let mut failed = false;
@@ -681,10 +697,13 @@ fn report_package_problems(resolution: &kora_pkg::Resolution) -> bool {
 
     for unfetched in &resolution.unfetched {
         eprintln!(
-            "error: package `{}` ({} at {}) is not fetched",
-            unfetched.name, unfetched.url, unfetched.reference
+            "{} package `{}` ({} at {}) is not fetched",
+            ui::err(),
+            unfetched.name,
+            unfetched.url,
+            unfetched.reference
         );
-        eprintln!("   = hint: run `kora install <file.ko>`");
+        eprintln!("   {}", ui::dim("= hint: run `kora install <file.ko>`"));
         eprintln!();
         failed = true;
     }
@@ -693,10 +712,13 @@ fn report_package_problems(resolution: &kora_pkg::Resolution) -> bool {
         // The lockfile is what the bytes were when they were fetched and
         // verified. Different bytes under the same name is the shape of a
         // moved tag, a rewritten repository, or an edited cache.
-        eprintln!("error: {url} does not match the lockfile");
+        eprintln!("{} {url} does not match the lockfile", ui::err());
         eprintln!("   expected {expected}");
         eprintln!("   found    {actual}");
-        eprintln!("   = hint: re-fetch with `kora install`, or restore the checkout");
+        eprintln!(
+            "   {}",
+            ui::dim("= hint: re-fetch with `kora install`, or restore the checkout")
+        );
         eprintln!();
         failed = true;
     }
@@ -704,7 +726,7 @@ fn report_package_problems(resolution: &kora_pkg::Resolution) -> bool {
     for (path, why) in &resolution.unverifiable {
         // Silently treating this as an empty manifest would read as "this
         // package has no dependencies and asked for nothing".
-        eprintln!("error: cannot read {}: {why}", path.display());
+        eprintln!("{} cannot read {}: {why}", ui::err(), path.display());
         failed = true;
     }
 
@@ -728,7 +750,10 @@ fn report_package_problems(resolution: &kora_pkg::Resolution) -> bool {
             "error: {} is required at two revisions: {} and {}",
             conflict.url, conflict.first, conflict.second
         );
-        eprintln!("   = hint: a repository has one entry in the lockfile; pin one revision");
+        eprintln!(
+            "   {}",
+            ui::dim("= hint: a repository has one entry in the lockfile; pin one revision")
+        );
         eprintln!();
         failed = true;
     }
@@ -738,7 +763,10 @@ fn report_package_problems(resolution: &kora_pkg::Resolution) -> bool {
             "error: package `{}` is granted two different ways: {} and {}",
             conflict.package, conflict.first, conflict.second
         );
-        eprintln!("   = hint: grant it the same way everywhere that depends on it");
+        eprintln!(
+            "   {}",
+            ui::dim("= hint: grant it the same way everywhere that depends on it")
+        );
         eprintln!();
         failed = true;
     }
@@ -757,7 +785,7 @@ fn check_files(paths: &[String], syntax_only: bool) -> ExitCode {
 
     for path in paths {
         let Ok(source) = std::fs::read_to_string(path) else {
-            eprintln!("error: cannot read `{path}`");
+            eprintln!("{} cannot read `{path}`", ui::err());
             problems += 1;
             continue;
         };
@@ -777,12 +805,12 @@ fn check_files(paths: &[String], syntax_only: bool) -> ExitCode {
                 for d in kora_types::analyze_file(&program, Path::new(path)).diagnostics {
                     let line = d.span.line as usize;
                     let src_line = source.lines().nth(line.saturating_sub(1)).unwrap_or("");
-                    eprintln!("error: {}", d.message);
+                    eprintln!("{} {}", ui::err(), d.message);
                     eprintln!("  --> {path}:{line}:{}", d.span.col);
                     eprintln!("   |");
                     eprintln!(" {line} | {src_line}");
                     if let Some(hint) = &d.hint {
-                        eprintln!("   = hint: {hint}");
+                        eprintln!("   {}", ui::dim(&format!("= hint: {hint}")));
                     }
                     eprintln!();
                     problems += 1;
@@ -816,14 +844,17 @@ fn check_files(paths: &[String], syntax_only: bool) -> ExitCode {
                     problems += 1;
                 }
                 for missing in &resolution.missing {
-                    eprintln!("error: no package named `{}`", missing.name);
+                    eprintln!("{} no package named `{}`", ui::err(), missing.name);
                     eprintln!(
                         "  --> {}:{}:{}",
                         missing.file.display(),
                         missing.span.line,
                         missing.span.col
                     );
-                    eprintln!("   = hint: declare it under `[dependencies]` in kora.toml");
+                    eprintln!(
+                        "   {}",
+                        ui::dim("= hint: declare it under `[dependencies]` in kora.toml")
+                    );
                     eprintln!();
                     problems += 1;
                 }
@@ -837,17 +868,25 @@ fn check_files(paths: &[String], syntax_only: bool) -> ExitCode {
     for (name, unused) in dependency_use.values() {
         let who = name.as_deref().unwrap_or("this program");
         for dep in unused {
-            eprintln!("warning: `{dep}` is declared by {who} but never imported");
-            eprintln!("   = hint: remove it from kora.toml, or write `use pkg {dep}`");
+            eprintln!(
+                "{} `{dep}` is declared by {who} but never imported",
+                ui::warn()
+            );
+            eprintln!(
+                "   {}",
+                ui::dim(&format!(
+                    "= hint: remove it from kora.toml, or write `use pkg {dep}`"
+                ))
+            );
             eprintln!();
         }
     }
 
     if problems == 0 {
-        println!(
+        ui::done(&format!(
             "checked {checked} file{}: no problems",
             if checked == 1 { "" } else { "s" }
-        );
+        ));
         ExitCode::SUCCESS
     } else {
         eprintln!(
@@ -868,7 +907,7 @@ fn test_file(path: &str) -> ExitCode {
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("error: cannot read `{path}`: {e}");
+            eprintln!("{} cannot read `{path}`: {e}", ui::err());
             return ExitCode::from(1);
         }
     };
@@ -929,11 +968,11 @@ fn test_file(path: &str) -> ExitCode {
 
         match outcome {
             Ok(()) => {
-                println!("  pass  {name}");
+                ui::status("pass", &name.to_string());
                 passed += 1;
             }
             Err(e) => {
-                println!("  FAIL  {name}");
+                ui::status("FAIL", &name.to_string());
                 println!("        {}", e.message);
                 failed.push((name.clone(), e));
             }
@@ -942,7 +981,7 @@ fn test_file(path: &str) -> ExitCode {
 
     println!();
     if failed.is_empty() {
-        println!("{passed} passed");
+        ui::done(&format!("{passed} passed"));
         ExitCode::SUCCESS
     } else {
         println!("{passed} passed, {} failed", failed.len());
@@ -958,7 +997,7 @@ fn audit_file(path: &str, by_package: bool) -> ExitCode {
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("error: cannot read `{path}`: {e}");
+            eprintln!("{} cannot read `{path}`: {e}", ui::err());
             return ExitCode::from(1);
         }
     };
@@ -1017,7 +1056,7 @@ fn show_trace(path: &str) -> ExitCode {
         return ExitCode::SUCCESS;
     };
     let Ok(payload) = serde_json::from_str::<serde_json::Value>(&text) else {
-        eprintln!("error: {file} is not readable as a trace");
+        eprintln!("{} {file} is not readable as a trace", ui::err());
         return ExitCode::from(1);
     };
     let spans = &payload["resourceSpans"][0]["scopeSpans"][0]["spans"];
@@ -1066,7 +1105,11 @@ fn list_runs(path: &str) -> ExitCode {
     };
     let mut runs: Vec<kora_runtime::Run> = entries
         .filter_map(|e| e.ok())
-        .filter(|e| e.path().extension().is_some_and(|x| x == "json"))
+        .filter(|e| {
+            e.path()
+                .extension()
+                .is_some_and(|x| x == "jsonl" || x == "json")
+        })
         .filter_map(|e| kora_runtime::journal::load_run(&e.path()).ok())
         .collect();
     runs.sort_by(|a, b| b.updated.cmp(&a.updated));
@@ -1093,38 +1136,29 @@ fn list_runs(path: &str) -> ExitCode {
 
 /// `kora answer` — record a human answer and continue the run.
 fn answer_run(path: &str, id: &str, text: &str) -> ExitCode {
-    let run_path = kora_runtime::journal::run_path(Path::new(path), id);
-    let mut run = match kora_runtime::journal::load_run(&run_path) {
+    let program_path = Path::new(path);
+    if let Err(e) = kora_runtime::journal::migrate_legacy(program_path, id) {
+        eprintln!("{} cannot read run `{id}`: {e}", ui::err());
+        return ExitCode::from(1);
+    }
+    let run_path = kora_runtime::journal::run_path(program_path, id);
+    let run = match kora_runtime::journal::load_run(&run_path) {
         Ok(r) => r,
         Err(e) => {
-            eprintln!("error: cannot read run `{id}`: {e}");
+            eprintln!("{} cannot read run `{id}`: {e}", ui::err());
             return ExitCode::from(1);
         }
     };
-    let Some(pending) = run.pending.clone() else {
-        eprintln!("run `{id}` is not waiting for an answer");
-        return ExitCode::from(1);
-    };
 
-    // Append the answer as the effect the suspended step was waiting for,
-    // then let the program replay up to that point and carry on.
-    run.entries.push(kora_runtime::journal::Entry {
-        scope: pending.scope.clone(),
-        seq: pending.seq,
-        site: pending.site.clone(),
-        effect: kora_runtime::journal::Effect::Human {
-            question: pending.question.clone(),
-            answer: text.to_string(),
-        },
+    // The answer is appended as the effect the suspended step was waiting
+    // for, through the journal rather than around it, so it is fsynced and
+    // the run's lock is held while it happens.
+    let appended = kora_runtime::Journal::open(run, run_path).and_then(|mut journal| {
+        journal.answer(text)?;
+        Ok(())
     });
-    run.pending = None;
-    run.status = kora_runtime::RunStatus::Running;
-
-    if let Err(e) = std::fs::write(
-        &run_path,
-        format!("{}\n", serde_json::to_string_pretty(&run).unwrap()),
-    ) {
-        eprintln!("error: cannot update run `{id}`: {e}");
+    if let Err(e) = appended {
+        eprintln!("{} cannot update run `{id}`: {e}", ui::err());
         return ExitCode::from(1);
     }
 
@@ -1143,7 +1177,7 @@ fn run_file(
     let source = match std::fs::read_to_string(path) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("error: cannot read `{path}`: {e}");
+            eprintln!("{} cannot read `{path}`: {e}", ui::err());
             return ExitCode::from(1);
         }
     };
@@ -1179,6 +1213,19 @@ fn run_file(
     if trace && telemetry.exporter == kora_runtime::telemetry::Exporter::None {
         telemetry.exporter = kora_runtime::telemetry::Exporter::File(trace_path(program_path));
     }
+    // A file with no `main` and nothing to execute at the top level is a
+    // library or a test file reached by mistake. Running it did nothing and
+    // said nothing, which reads exactly like a program whose output was
+    // swallowed.
+    if !has_anything_to_run(&program) {
+        eprintln!("{} {path} has no `main()` to run", ui::err());
+        eprintln!(
+            "   {}",
+            ui::dim("= hint: add `def main():`, or use `kora test` for a file of test blocks")
+        );
+        return ExitCode::from(1);
+    }
+
     interp.tracer = std::sync::Arc::new(kora_runtime::Tracer::new(telemetry));
     interp.cassette = Some(std::sync::Arc::new(std::sync::Mutex::new(Cassette::open(
         mode,
@@ -1187,14 +1234,37 @@ fn run_file(
 
     // A durable run journals every effect, so it survives being killed and
     // can park on `ask_human` for as long as the answer takes.
+    let resuming = resume_id.is_some();
     let run_id = resume_id.unwrap_or_else(kora_runtime::journal::new_run_id);
     if durable {
+        if let Err(e) = kora_runtime::journal::migrate_legacy(program_path, &run_id) {
+            eprintln!("{} cannot read run `{run_id}`: {e}", ui::err());
+            return ExitCode::from(1);
+        }
         let run_path = kora_runtime::journal::run_path(program_path, &run_id);
+        // A run id that names nothing is a typo, and starting a fresh run
+        // under it is the one outcome a durable pipeline cannot afford: the
+        // user believes the work was picked up where it stopped, and it is
+        // instead done a second time from the top.
+        if resuming && !run_path.exists() {
+            eprintln!("{} no run `{run_id}` for {path}", ui::err());
+            eprintln!(
+                "   {}",
+                ui::dim("= hint: `kora runs <file.ko>` lists the runs there are")
+            );
+            return ExitCode::from(1);
+        }
         let run = kora_runtime::journal::load_run(&run_path)
             .unwrap_or_else(|_| kora_runtime::Run::new(run_id.clone(), path.to_string()));
-        interp.journal = std::sync::Arc::new(std::sync::Mutex::new(kora_runtime::Journal::open(
-            run, run_path,
-        )));
+        match kora_runtime::Journal::open(run, run_path) {
+            Ok(journal) => {
+                interp.journal = std::sync::Arc::new(std::sync::Mutex::new(journal));
+            }
+            Err(e) => {
+                eprintln!("{} {e}", ui::err());
+                return ExitCode::from(1);
+            }
+        }
     }
 
     let result = interp.run(&program);
@@ -1202,12 +1272,12 @@ fn run_file(
     if let Some(cassette) = &interp.cassette {
         let cassette = cassette.lock().unwrap_or_else(|e| e.into_inner());
         if let Err(e) = cassette.save() {
-            eprintln!("warning: could not write cassette: {e}");
+            eprintln!("{} could not write cassette: {e}", ui::warn());
         }
     }
 
     if let Err(e) = interp.tracer.flush() {
-        eprintln!("warning: {e}");
+        eprintln!("{} {e}", ui::warn());
     }
 
     if report {
@@ -1248,4 +1318,26 @@ fn run_file(
             ExitCode::from(1)
         }
     }
+}
+
+/// Whether `kora run` has anything to do with this program.
+///
+/// Definitions alone are not a program: `def`, `type`, `test`, and the `use`
+/// forms describe what exists, and running a file of them executes nothing.
+/// Anything else at the top level is a statement that does something, so a
+/// script with no `main()` still runs.
+fn has_anything_to_run(program: &kora_syntax::ast::Program) -> bool {
+    use kora_syntax::ast::StmtKind;
+    program.items.iter().any(|item| match &item.kind {
+        StmtKind::FuncDef(def) => def.name == "main",
+        StmtKind::TypeDef { .. }
+        | StmtKind::Test { .. }
+        | StmtKind::Use { .. }
+        | StmtKind::UseFile { .. }
+        | StmtKind::UsePython { .. }
+        | StmtKind::UsePkg { .. }
+        | StmtKind::UseMcp { .. }
+        | StmtKind::Pass => false,
+        _ => true,
+    })
 }
