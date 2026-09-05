@@ -30,7 +30,8 @@ def main():
 **The agent is the unit of execution.**
 
 - **Durable by default** — programs checkpoint at every model call, tool call,
-  and `ask_human`. Kill the process; it resumes where it stopped.
+  write, and `ask_human`. Kill the process; it resumes where it stopped, and
+  the rows it already wrote stay written exactly once.
 - **Real parallelism** — no GIL, no async/await coloring. `parallel for`
   fans out across all cores. Safe because agents share nothing.
 - **`classified` / `declassify`** — sensitive data cannot reach a model
@@ -291,6 +292,23 @@ already saw. Kill the process with `SIGKILL` mid-run and
 Durability is replay-based: every effect is journaled, and a resumed run
 re-executes with those effects served from the journal. The contract is that
 code between effects is deterministic — the same one Temporal makes.
+
+That covers writes, which is what makes a durable *pipeline* possible rather
+than only a durable conversation. `fs.write`, `fs.append` and `sql.execute`
+are journaled effects: a resume hands back what the write returned instead of
+performing it again. Reads (`fs.read`, `sql.query`, and the listings) run live
+with a digest journaled, so a resume against changed input stops instead of
+mixing two inputs into one run. The journal itself is append-only, one line
+per effect, so a long pipeline costs no more per effect than a short one.
+
+An effect that cannot be repeated safely leaves a mark before it is sent, so a
+resume can tell "never started" from "started, outcome unknown". A streamed
+`analyze()` killed after part of its answer was written is never sent again
+and never writes those pieces twice — the resume returns `Failed` for the
+program to match on. One killed before it wrote anything is sent again like
+ordinary unfinished work. A call given tools, and a write, stop the resume
+instead: whether their side effects happened is not knowable, and guessing is
+the one thing a durable run must not do.
 
 ## Standard library
 

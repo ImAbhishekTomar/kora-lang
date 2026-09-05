@@ -36,8 +36,11 @@ extension at the one you just built rather than reordering your `PATH`:
 "kora.serverPath": "/absolute/path/to/.cargo/bin/kora"
 ```
 
-The grammar recognizes agent constructs including `with context(...)`, so a
-context policy is highlighted alongside `budget`, `analyze`, and tools.
+The grammar recognizes every keyword the lexer does, plus the contextual
+words that are language surface rather than identifiers: `analyze`,
+`ask_human`, and the handler forms `on token(...)`, `on tool_call(...)`, and
+`stream`. A context policy, a budget, a streamed answer and a tool loop are
+all highlighted alike.
 
 ## Settings
 
@@ -79,6 +82,12 @@ A breakpoint on a blank line or a comment moves to the next statement, and the
 gutter marker moves with it. Breakpoints inside a `parallel for` body do not
 fire: its branches run on worker threads with no debugger attached.
 
+A debug session is never durable. There is no `durable` option and no way to
+resume a run under the debugger, which is deliberate rather than missing: a
+durable run's journal is a record of what really happened, and stepping
+through one would write stepping into that record. Debug against `replay`
+instead, then run the real thing with `kora run --durable`.
+
 ## Troubleshooting
 
 **"You don't have an extension for debugging Kora"**, or the gutter refuses a
@@ -102,7 +111,7 @@ the version in its `package.json`, so VS Code's extension scanner does not
 serve a manifest it cached under an older version:
 
 ```bash
-ln -s "$PWD/editors/vscode" ~/.vscode/extensions/kora-lang.kora-lang-0.3.1
+ln -s "$PWD/editors/vscode" ~/.vscode/extensions/kora-lang.kora-lang-0.2.0
 ```
 
 Restart VS Code after linking, and again after any change to `package.json`.

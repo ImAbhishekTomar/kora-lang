@@ -48,8 +48,10 @@ DOCS = [
     ("docs/stdlib.md", MARKDOWN),
     ("docs/cli.md", MARKDOWN),
     ("examples/README.md", MARKDOWN),
+    ("site/app/cli/page.mdx", SITE),
     ("site/app/comparison/page.mdx", SITE),
     ("site/app/ecosystem/page.mdx", SITE),
+    ("site/app/internals/page.mdx", SITE),
     ("site/app/installation/page.mdx", SITE),
     ("site/app/language/page.mdx", SITE),
     ("site/app/model-calls/page.mdx", SITE),
@@ -141,6 +143,14 @@ def check_code_blocks(kora: str) -> None:
     print(f"  {checked} checked, {skipped} skipped as fragments")
 
 
+def strip_frontmatter(text: str) -> str:
+    """Drop a leading `---` fenced block, as MDX pages carry."""
+    if not text.startswith("---\n"):
+        return text
+    end = text.find("\n---", 4)
+    return text if end == -1 else text[end + 4 :]
+
+
 def check_commands(kora: str) -> None:
     """Every command and flag the docs mention should exist."""
     print("Documented commands and flags")
@@ -151,7 +161,11 @@ def check_commands(kora: str) -> None:
     real_commands |= {"run"}
 
     for doc, _kind in DOCS:
-        text = read(doc)
+        # Frontmatter is metadata, not prose about the CLI. A page whose
+        # `description:` says "every kora command" is describing itself, and
+        # reading that as a claim about a subcommand named `command` fails a
+        # page for its own summary line.
+        text = strip_frontmatter(read(doc))
         for command in set(re.findall(r"`?kora ([a-z]+)", text)):
             if command in real_commands:
                 continue

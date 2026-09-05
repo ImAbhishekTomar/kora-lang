@@ -65,7 +65,8 @@ pipeline from source text to a running agent, then the runtime mechanisms behind
 
 <div className="internals-card">
   <h3>Journal — durable execution by replay</h3>
-  <p>No stack snapshot. Every effect (model call, tool result, human answer, clock read) is appended to a journal on disk. Resuming = re-running from the top, effects served from the journal instead of re-executed, fast-forwarding to where it stopped.</p>
+  <p>No stack snapshot. Every effect (model call, tool result, write, human answer, clock read) is appended to <code>.kora/runs/&lt;id&gt;.jsonl</code>, one line each. Resuming = re-running from the top, effects served from the journal instead of re-executed, fast-forwarding to where it stopped.</p>
+  <p>Writes are recorded twice on purpose: an attempt before the call, its outcome after. A resume that finds an attempt with no outcome stops and names the call, because a process killed in that gap leaves nobody able to say whether the row was written.</p>
   <div className="internals-why">Why: a Rust call stack can't be serialized — Temporal / Restate solve durability the same way.</div>
 </div>
 

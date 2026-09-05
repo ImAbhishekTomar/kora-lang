@@ -153,6 +153,13 @@ match sql.query(db, "select name from t where id = ?", [user_input]):
 Splicing outside data into a statement is refused, and the hint points at the
 safe path. Rows come back `unverified`.
 
+In a durable run, `sql.execute` is journaled: a resume replays its recorded
+outcome instead of running the statement again, so a killed pipeline does not
+insert the same rows twice. `sql.query` is not replayed — rows can be larger
+than every other effect in a run put together — but a digest of what it
+returned is, so a resume whose query answers differently stops rather than
+continuing against data the run it is continuing never saw.
+
 ---
 
 ## `fs`
@@ -179,6 +186,17 @@ Writes go to a temporary file and are renamed, so a reader sees the old
 contents or the new ones, never a half-written mix. Paths containing `..` are
 refused rather than normalised, and a path from outside the program is refused
 outright. Errors name the path: `no such file: config.txt`.
+
+In a durable run, `fs.write` and `fs.append` happen **exactly once** across a
+crash: the outcome is journaled, and a resume hands it back rather than
+writing again. The narrow case in between — the process died after the write
+ran and before the journal learned what it returned — is recorded as an
+attempt, and a resume that reaches it stops and names the call rather than
+guessing. Repeating it could double a row; assuming it worked could drop one.
+
+`fs.read`, `fs.lines`, `fs.list` and `fs.glob` are read live on every attempt,
+with a digest journaled: a resume that would read different data stops instead
+of mixing two inputs into one run.
 
 ```python
 match fs.glob("dataset/*.png"):

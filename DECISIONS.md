@@ -145,6 +145,30 @@ design changes and should be deliberate.
   while preserving the same outcome that an ordinary call returns. A custom
   `on token(piece):` handler remains for work beyond printing; a loop over
   pieces still cannot replace matching the terminal outcome.
+- **Whether a stream may be retried is decided by what the program saw, in
+  one place.** The transport asks a single question — has a character of the
+  answer been handed over — and every failure kind defers to it. Encoding the
+  answer into the error type instead was wrong in the case that matters: a
+  body can break after nothing but a keep-alive, a role-only delta, or a usage
+  frame, and a run that forfeited its retry over one of those lost an answer
+  it could have had for free.
+- **An interrupted stream is a terminal outcome, not work to redo.** Every
+  other model call in a durable run can be sent again after a crash: nothing
+  outside the process saw it, so the only cost of repeating it is tokens. A
+  stream is the exception, because its pieces are output — the answer is on
+  the user's screen before the call has a result. So a streamed call marks
+  its journal slot *before* it is sent, and a resume that finds that mark
+  with output recorded under it returns `Failed` instead of asking the
+  provider again. This is the live rule made durable: the transport already
+  refuses to retry a stream that has emitted, for the same reason, and a
+  crash is only a longer gap in the same stream. The mark also carries the
+  other half of the rule — a stream that died before writing anything showed
+  nobody anything, so it is sent again like ordinary unfinished work.
+  Draining what the interrupted stream left behind is exact rather than
+  heuristic: an effect that never returned can have nothing underneath it,
+  so everything recorded after that slot in the same branch is the stream's
+  own fallout, and consuming it keeps the branch's numbering where the
+  resumed program will look for it.
 - **Destructuring reads through a label and re-applies it.** `match` on a
   classified outcome used to skip every `Ok(...)` arm, so a classified value
   silently took a different branch than the same value unclassified. Reading
@@ -734,6 +758,18 @@ security boundary.
 
 - Record/replay cassettes native, from Phase 2. Replay is CI default;
   `(live)` tests opt-in. Cassette format: human-readable JSON on disk.
+- **A cassette key is a cryptographic digest, because a cassette is not a
+  cache.** SHA-256 over the length-prefixed key material — call site, model,
+  prompt, resolved data, image fingerprints. A 64-bit mix was enough while
+  the worst case was a slow run; it is not enough for a file that is
+  committed, diffed, and replayed in CI, where a collision is a test passing
+  against an answer recorded for a different question. The length prefixes
+  do the same job the old separator byte did, more strictly: no split of the
+  same bytes across two fields can produce one key. The previous algorithm
+  survives as a read-only fallback, never a write path — an image cassette
+  cannot be regenerated without the model that recorded it, and breaking
+  every committed one to change a hash would be a worse trade than carrying
+  sixty lines that only ever answer "is this an old file".
 - `mock analyze -> ...` is a typed language construct, checked at compile time.
 - Runtime is an OTel producer: agents and model calls are spans following the
   GenAI semantic conventions, declassifications are spans of their own, and
@@ -823,22 +859,142 @@ security boundary.
     not on the left) and any aliased case still take the copying path —
     correctness over completeness, and aliasing safety was verified directly
     (`b = a; b = b + "x"` leaves `a` untouched).
-  - **The durable journal is still O(n²), unfixed.** `Journal::persist`
-    (`journal.rs`) serializes and rewrites the *entire* run to disk on every
-    single effect — by design, for crash-safety (atomic write-then-rename of
-    one file, so a crash mid-write can never leave a torn journal). That
-    design is exactly why this one was not patched alongside the two above:
-    it is the crash-safety mechanism itself, its on-disk format is read by
-    `kora runs` / `kora answer` / resume, and a subtle bug in a quick fix
-    would silently defeat the guarantee `--durable` exists to provide.
-    Measured: 1K effects/1s, 5K/4s, 15K exceeds a 45s budget — confirms the
-    quadratic shape `benches/README.md` already documented, now with real
-    numbers. The scoped fix, for whoever picks this up: move to an
-    append-only format (e.g. one JSON line per effect, opened in append
-    mode) for `record()`, keeping the current whole-file
-    write-temp-then-rename only for the rare `suspend()`/`finish()` calls —
-    but this is a persistence-format migration touching replay/resume, and
-    deserves its own review, not a same-sitting patch.
+  - **The durable journal was O(n²). Fixed by making the file append-only.**
+    `Journal::persist` serialized and rewrote the *entire* run on every
+    effect. The file is now one JSON line per record — a header, one line per
+    effect, one line per status change — and `record()` appends a single
+    line. Measured on the same probe shape: 40,000 effects in 0.27s, against
+    a previous ceiling where 15,000 could not finish inside 45 seconds.
+    `Run` is what you get by folding the lines back together, which is also
+    what made two-phase write records (below) cheap: a slot written twice is
+    an attempt superseded by its outcome, and the later line wins.
+
+    Three things came with it, none optional once the format changed:
+
+    - **A torn last line is dropped, not refused.** `fsync` cannot prevent a
+      machine dying mid-write; it can only bound what a crash costs. A
+      half-written final line describes an effect whose result nobody saw, so
+      loading discards it. A bad line anywhere *earlier* is real corruption
+      and is reported.
+    - **`fsync` per effect, except output.** A killed process loses nothing
+      without it — the bytes are in the page cache, which outlives the
+      process — so the question `fsync` answers is the power cut, where a
+      lost tail makes a resume repeat something. For a model call that is
+      money; for a write it is a duplicated row; for a human answer it is
+      asking a person twice. For a `print` it is a repeated line, and a
+      chatty program produces thousands of those: syncing them made
+      `--durable` cost more than the work it protects (1,000 printed steps
+      went from 0.8s to 12s). So output is written and left to the operating
+      system, and that is documented rather than implied.
+    - **One process per run, enforced by the OS.** Two `--resume`s of the
+      same id would each replay to a different point and then record effects
+      the other never saw. The lock is an advisory lock on a sidecar file
+      (`flock` on Unix, an unshared handle on Windows), *not* a flag written
+      into a file: a durable run's normal ending is being killed, and only a
+      lock the kernel releases on process death avoids leaving every crashed
+      run to be unstuck by hand.
+
+    Still open: the per-write cost is two `fsync`s (attempt, then outcome),
+    which caps pure-write throughput at roughly a hundred rows a second on a
+    laptop SSD. The fix is group commit across `parallel for` workers —
+    amortizing one sync over many branches, the way a database does — not a
+    weaker guarantee.
+
+  - **Writes are journaled effects, so a durable pipeline is exactly-once.**
+    Before this, `--durable` covered model calls, tools, `ask_human`, output,
+    the clock, HTTP and Python — everything except the call a data pipeline
+    exists to make. A killed run re-executed `fs.write`, `fs.append` and
+    `sql.execute` from the top: the language promised exactly-once and
+    delivered it for the model's tokens but not for the customer's rows.
+    They are journaled now, and a resume replays the recorded outcome
+    instead of performing the call again.
+
+    Recorded in **two** lines, not one, and this is the whole subtlety: a
+    process killed after the write landed but before the journal knew about
+    it would otherwise repeat that write. So the attempt is recorded and
+    synced *before* the call runs, and its outcome supersedes it after. A
+    resume that finds an attempt with no outcome stops and names the call —
+    the same rule the tool loop already applies to a timed-out MCP call, and
+    for the same reason: a timeout is precisely when whether it ran is
+    unknown. Repeating it could double a row, and assuming it succeeded could
+    drop one; only stopping is honest.
+
+  - **Reads are verified by digest, not replayed.** The symmetric choice, made
+    the other way. A pipeline's input is routinely larger than every other
+    effect in its run put together, and a journal that must hold it stops
+    being a log of decisions. But a resume that re-reads live and gets
+    different data is a run silently mixing two inputs into one output. So
+    `fs.read`, `fs.lines`, `fs.list`, `fs.glob` and `sql.query` re-read on
+    every attempt, with a digest of what came back journaled
+    (`Effect::Input`): same data, carry on; different data, stop with an
+    error naming the read. The guarantee is deliberately not "the same bytes
+    come back" — it is "a run never silently continues against data it did
+    not start from".
+
+  - **Why it was left standing for a pass.** The old `Journal::persist` wrote
+    the whole run with an atomic write-temp-then-rename, which *was* the
+    crash-safety mechanism, and its format was read by `kora runs`,
+    `kora answer` and resume. Measured then: 1K effects/1s, 5K/4s, 15K past a
+    45s budget. Fixing it in the same sitting as the recursion guard and the
+    string-concat fix would have put a persistence-format migration inside a
+    performance pass, where a subtle bug defeats the guarantee `--durable`
+    exists to provide silently. It got its own change instead, with the
+    crash-injection tests it needed
+    (`crates/kora-cli/tests/durable_crash_test.rs` kills a running pipeline
+    and resumes it).
+
+### The four states every effect passes through
+
+Retry, budget, journal, telemetry, and resume are five rules that used to be
+written five times, once per effect, and drift between them was where the
+exactly-once bugs lived. They are one rule with four states.
+
+**Prepared.** Arguments are resolved, the budget has been asked whether there
+is room, the journal slot is claimed, and the telemetry span is open. Nothing
+has left the process. A crash here costs nothing: the resume re-executes and
+arrives in the same state.
+
+**Sent.** The request is in flight. This is the state where "did it happen"
+stops being knowable, so an effect that is not free to repeat writes a mark
+into its journal slot *before* entering it. Three kinds do: a world-changing
+call (`fs.write`, `fs.append`, `sql.execute`), a streamed model call, and a
+model call given tools. A plain model call writes no mark, because repeating
+one costs tokens and changes nothing outside the process — the same trade the
+transport already makes when it retries.
+
+**Observed.** A result has reached the program: characters handed to a token
+handler, rows appended, a tool's answer returned. Retry ends here and not a
+moment earlier. The question is always "has the program seen anything", never
+"did a frame arrive" — a stream opens with keep-alives, role-only deltas and
+usage totals that show nothing, and forfeiting a retry over one of those loses
+an answer for free.
+
+**Terminal.** An outcome exists and is recorded. The journal entry replaces
+the mark, the budget is charged, and the span closes. From here the effect is
+replayed, never re-performed.
+
+What a resume does with a slot follows from which state it stopped in:
+
+| Slot holds | Meaning | Resume |
+|---|---|---|
+| nothing | Prepared, or an unmarked call | re-execute |
+| a mark, nothing under it | Sent, nothing observed | re-execute |
+| a mark on a write | Sent, outcome unknown | stop, naming the call in doubt |
+| a mark on a tool-using call | Sent, tools may have run | stop, naming the call in doubt |
+| a mark on a stream, output under it | Observed | return `Failed`; never re-send |
+| an outcome | Terminal | replay it, including the pieces it was written in |
+
+The two "stop" rows are the same answer to the same question, and they are
+deliberately not `Failed`: a program cannot recover from a tool that may or
+may not have charged a card, so the run ends where a person can look rather
+than branching on a value that would be a guess. The stream row can be a value
+because the loss is bounded and visible — the half-written answer is on
+screen, and the program taking its failure arm is the honest shape of that.
+
+Budget is charged at Terminal, including on the paths that do not return an
+outcome. A handler that raises still charges the call it was watching:
+otherwise raising inside `on token` is the cheapest way to reach a provider,
+and the meter reads zero for work that really happened.
 
 ## Ecosystem strategy
 

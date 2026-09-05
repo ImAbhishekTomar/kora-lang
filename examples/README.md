@@ -27,6 +27,7 @@ no API key and no model installed.
 | [16_context_policy.ko](16_context_policy.ko) | bounded tool-loop context, separate from the spend budget | `kora run` |
 | [17_qa_agent.ko](17_qa_agent.ko) | the smallest agent, in a loop: ask, get an answer, `exit`/`bye`/`close` to quit | `kora run` |
 | [18_notes.ko](18_notes.ko) | a durable run's own scratch space, journaled reads and all | `kora run --durable` |
+| [19_durable_pipeline.ko](19_durable_pipeline.ko) | a pipeline you can kill: every row's write happens exactly once | `kora run --durable` |
 
 ## The pattern set
 
@@ -77,6 +78,19 @@ anywhere: the path is resolved against the importing file, not the working
 directory.
 
 ## The durable one
+
+`19_durable_pipeline.ko` is the one to interrupt. Run it, kill it partway
+through, then resume it:
+
+```bash
+kora run --durable examples/19_durable_pipeline.ko
+kora runs examples/19_durable_pipeline.ko
+kora run --durable --resume <run-id> examples/19_durable_pipeline.ko
+```
+
+The rows written before the kill stay written, once each: `fs.append` is a
+journaled effect, so the resume hands back what it returned rather than
+appending again.
 
 `04_durable_approval.ko` is the only one that does not simply run to
 completion — it stops and waits for a person, which is the point:

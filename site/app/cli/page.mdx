@@ -1,3 +1,8 @@
+---
+title: CLI
+description: Every kora command, its flags, and the config file it reads.
+---
+
 # The `kora` command
 
 ```bash
@@ -54,11 +59,6 @@ Checking follows `use "./lib.ko"` imports, so a name that only exists in an
 imported file resolves here, and a name no imported file defines is reported.
 Problems *inside* an imported file belong to that file: check it directly.
 
-It also catches Python habits that would otherwise only surface when the file
-runs: `xs.append(v)` (Kora has no methods) and keyword arguments on a
-user-defined function (only `analyze()` takes them) are both reported here,
-not just at `kora run`.
-
 Exits non-zero if anything fails to parse or resolve.
 
 ### `kora test <file.ko>`
@@ -109,8 +109,9 @@ kora install --jobs 4 program.ko
 
 Sources land in `.kora/deps/<repository>@<commit>/`, `kora.lock` records what
 was resolved, and `kora.sums` records what each commit contained the first
-time it was seen. Both files are committed; `.kora/` is not. Fetching is IO-bound, so the default width is not the core
-count; `[install] jobs` sets it.
+time it was seen. Both files are committed; `.kora/` is not. Fetching is
+IO-bound, so the default width is not the core count; `[install] jobs` sets
+it.
 
 Cold resolution is wave-shaped — what a package depends on is unknowable
 until it is on disk — but once the lockfile exists the whole graph is known,
@@ -205,10 +206,9 @@ kora run --durable --resume <run-id> program.ko   # resume after a crash
 ```
 
 Journals live in `.kora/runs/<run-id>.jsonl` beside the program and are
-git-ignored. One line per effect, appended and flushed as the run goes, so
-the cost of `--durable` stays flat as a run gets long. A run written by an
-older Kora, as one `.json` object, is converted the first time it is resumed
-or answered.
+git-ignored. One line per effect, appended as the run goes, so the cost of
+`--durable` stays flat as a run gets long. A run written by an older Kora, as
+one `.json` object, is converted the first time it is resumed or answered.
 
 A run is locked while a process holds it: a second `--resume` of the same id
 is refused rather than queued, since two processes appending to one journal
@@ -216,8 +216,8 @@ would each replay to a different point. The lock is released by the operating
 system when the process ends, so a killed run is immediately resumable.
 
 `--resume` with an id that names no run fails rather than starting a new one
-under that name — a typo must not turn "continue where it stopped" into
-"do the whole thing again". `kora runs <file.ko>` lists the ids there are.
+under that name — a typo must not turn "continue where it stopped" into "do
+the whole thing again". `kora runs <file.ko>` lists the ids there are.
 
 Effects that cost money or change the world — model calls, tool calls, writes,
 a person's answer — are `fsync`ed before the program continues, so a power cut
@@ -226,8 +226,8 @@ cannot make a resume repeat them. Output lines are not: a lost one repeats a
 protects.
 
 An effect that is not free to repeat also leaves a mark *before* it is sent,
-so a resume can tell "never started" from "started, outcome unknown". What a
-resume does with one depends on what was at stake:
+so a resume can tell "never started" from "started, outcome unknown". What
+happens next depends on what was at stake:
 
 | Interrupted | On resume |
 |---|---|
@@ -238,8 +238,8 @@ resume does with one depends on what was at stake:
 | `fs.write` / `fs.append` / `sql.execute` | the run stops, naming the call |
 
 The two that stop are the cases where continuing would mean guessing whether
-something outside the program already happened. Start a new run once you have
-checked, rather than resuming that one.
+something outside the program already happened. Check, then start a new run
+rather than resuming that one.
 
 ### `kora trace <file.ko>`
 
@@ -289,15 +289,16 @@ drive it. What it supports:
 | Output | `print` reaches the debug console as it happens |
 
 The launch configuration takes `program` (required), `stopOnEntry`, and
-`replay` or `record`, which do what the same flags do on `kora run`. Debugging
-with `replay` costs nothing and gives the same answer every time, which is
-usually what you want when stepping through code that calls a model.
+`replay` or `record`, which do what the same flags do on `kora run`.
+Debugging with `replay` costs nothing and gives the same answer every time,
+which is usually what you want when stepping through code that calls a
+model.
 
 Two limits worth knowing. A `parallel for` body runs on worker threads that
-have no debugger attached, so breakpoints inside one do not fire — its output
-arrives when the run ends. And a watch expression is a lookup, not an
-evaluation: a debugger that could call a model or write a file while you hover
-over a variable is not inspecting the program, it is changing it.
+have no debugger attached, so breakpoints inside one do not fire — its
+output arrives when the run ends. And a watch expression is a lookup, not an
+evaluation: a debugger that could call a model or write a file while you
+hover over a variable is not inspecting the program, it is changing it.
 
 ---
 
@@ -391,14 +392,15 @@ Two things catch people out, both of them VS Code's rules rather than Kora's:
 
 - **Quit and reopen VS Code after installing or updating the extension.**
   Contributions are read once, at startup. Until that happens the gutter
-  refuses breakpoints on `.ko` files and F5 offers to find a Kora extension in
-  the Marketplace.
+  refuses breakpoints on `.ko` files and F5 offers to find a Kora extension
+  in the Marketplace.
 - **Check the binary the editor will use has a `dap` subcommand.** Run
   `kora | grep "kora dap"`. If it prints nothing, the `kora` first on your
   `PATH` predates the debugger; set `kora.serverPath` to an absolute path
   rather than reordering `PATH`.
 
-No `launch.json` is needed for the common case; write one to pin the options:
+No `launch.json` is needed for the common case; write one to pin the
+options:
 
 ```json
 {
@@ -445,9 +447,6 @@ warning: `greet` is declared by this program but never imported
 ✓ checked 1 file: no problems
 ```
 
-A live, annotated look at this — the banner, the color legend, real captured
-runs — is at [Kora CLI, Dressed](https://claude.ai/code/artifact/41e03bfc-33f2-4f91-a35b-130e6ccecc7b).
-
 ---
 
 ## Exit codes
@@ -458,3 +457,9 @@ runs — is at [Kora CLI, Dressed](https://claude.ai/code/artifact/41e03bfc-33f2
 | `1` | the program failed, or a test failed |
 | `2` | the command line was wrong |
 | `3` | a durable run suspended, waiting on a person |
+
+---
+
+Read [Installation](/installation) for the routes into getting `kora` on
+your machine, or the [KORA Language Reference](/reference) for the language
+itself.

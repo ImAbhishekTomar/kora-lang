@@ -90,7 +90,7 @@ Recorded with `--save-baseline` on an Apple M-series laptop, 10 CPUs, Kora
 | `sequential` | 426 ms |
 | `parallel` | 118 ms |
 | `durable_off` | 6.4 ms |
-| `durable_on` | 200 ms |
+| `durable_on` | 22 ms |
 
 Three things worth saying out loud:
 
@@ -102,10 +102,14 @@ Three things worth saying out loud:
    iterations of a three-operation expression in 220 ms; `csv` parses 200,000
    rows in 172 ms. Work that reaches Rust is fast, work that stays in the tree
    walker is not. This is the exact gap a bytecode VM closes.
-3. **Durability costs about 0.4 ms per effect here**, and it grows with the
-   run: the journal is rewritten whole on each effect, so a long run pays more
-   per effect than a short one. Known, measured, and now visible when it is
-   fixed.
+3. **Durability costs about 0.03 ms per effect here, and stays flat.** The
+   journal is append-only — one line per effect — so a long run pays the same
+   per effect as a short one; it was 0.4 ms and rising when the whole run was
+   rewritten on every effect. These 500 effects are `print`s, which are
+   written but not `fsync`ed (a lost output line repeats a `print`, nothing
+   more). An effect that costs money or changes the world is synced, and pays
+   a disk round trip for it: writes are the expensive case, at two syncs
+   each.
 
 ## Breaking points, not just throughput
 

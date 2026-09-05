@@ -18,7 +18,21 @@ The current codebase includes:
   and per-call model selection.
 - Record and replay cassettes for deterministic tests without model costs.
 - Agents, parallel work, lexical budgets, human pauses, and resumable runs.
+- Durable pipelines: `fs.write`, `fs.append`, and `sql.execute` are journaled
+  effects, so a killed run resumes without writing any row twice, and reads
+  are digest-checked so a resume against changed input stops rather than
+  mixing two inputs into one run. The journal is append-only, one line per
+  effect, and a run is locked to one process while it is open.
 - Concise workflow composition: `stream` for a prose answer, `else (why, kind)` for flat outcome handling with a recorded status, and `case A(x) | B(x)` for shared branches.
+- Crash-safe streaming inside a durable run. A stream killed after part of its
+  answer was written is never sent to the provider again and never writes those
+  pieces twice: the resume returns `Failed` for the program to match on. One
+  killed before it wrote anything is sent again like ordinary unfinished work.
+- One effect lifecycle across model calls, tools, and writes. An effect that
+  cannot be repeated safely leaves a mark before it is sent, so a resume can
+  tell "never started" from "outcome unknown" — and an interrupted tool-using
+  call stops the run naming what is in doubt instead of silently running every
+  tool a second time.
 - Classified data, scoped `declassify`, sink policies, and audit output.
 - Safe terminal output: `print` and `write` redact classified leaves using a project-configurable marker.
 - Native `json`, `csv`, `fs`, `http`, `sql`, `time`, `re`, and `env` modules,
@@ -38,9 +52,10 @@ The current codebase includes:
 
 ### Stabilize streaming and workflows
 
-Streaming prose works for a single `str` call. The remaining work is streaming
-alongside tools and `parallel for`, exact in-flight token enforcement, and a
-general event-stream API.
+Streaming prose works for a single `str` call, including inside a durable run,
+and is metered and retried on the same terms as a blocking one. The remaining
+work is streaming alongside tools and `parallel for`, exact in-flight token
+enforcement, and a general event-stream API.
 
 ### Fill the deliberate standard-library gaps
 
@@ -52,6 +67,12 @@ general event-stream API.
 A hosted checksum log begins when third parties routinely fetch Kora packages.
 WASM components begin when a package cannot be expressed in Kora, MCP, or the
 Python sidecar. Native shared libraries remain deliberately unsupported.
+
+### Raise durable write throughput
+
+Every journaled write costs two `fsync`s, which caps a pure-write pipeline near
+a hundred rows a second. The fix is group commit across `parallel for` workers,
+amortizing one sync over many branches, rather than a weaker guarantee.
 
 ### Improve distribution and editor workflows
 
