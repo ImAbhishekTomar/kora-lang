@@ -92,10 +92,12 @@ section#community > div.landing-feature-list:nth-of-type(1) > article { padding:
 .landing-feature-list span svg { width:2rem; height:2rem; stroke-width:2.4; }
 .landing-run-card pre { overflow:auto; }
 .landing-run-card code { color:#dce6d5; }
-.token-keyword { color:#d5e72b; font-weight:700; }
+.token-keyword { color:#dce6d5; }
 .token-name { color:#dce6d5; }
 .token-type { color:#8bd7c0; }
-.token-call { color:#71b9ee; }
+.token-call { color:#dce6d5; }
+.token-string,.token-number { color:#7fd694; }
+.token-comment { color:#e7c56a; }
 .landing-trace { position:relative; }
 .landing-trace>div { position:relative; }
 .landing-trace>div:not(:last-child)::after { position:absolute; top:1.55rem; bottom:-.45rem; left:.46rem; z-index:0; width:1px; background:rgba(189,215,165,.32); content:''; }

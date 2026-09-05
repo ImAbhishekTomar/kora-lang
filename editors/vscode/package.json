@@ -65,6 +65,18 @@
         "path": "./fileicons/kora-icon-theme.json"
       }
     ],
+    "themes": [
+      {
+        "label": "Kora Light",
+        "uiTheme": "vs",
+        "path": "./themes/kora-light-color-theme.json"
+      },
+      {
+        "label": "Kora Dark",
+        "uiTheme": "vs-dark",
+        "path": "./themes/kora-dark-color-theme.json"
+      }
+    ],
     "commands": [
       {
         "command": "kora.runFile",

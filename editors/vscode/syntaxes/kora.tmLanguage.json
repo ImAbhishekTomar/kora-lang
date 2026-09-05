@@ -25,6 +25,9 @@
       "include": "#kora-keywords"
     },
     {
+      "include": "#type-def"
+    },
+    {
       "include": "#types"
     },
     {
@@ -34,16 +37,28 @@
       "include": "#numbers"
     },
     {
+      "include": "#variable-def"
+    },
+    {
       "include": "#function-def"
     },
     {
       "include": "#function-call"
     },
     {
+      "include": "#identifiers"
+    },
+    {
       "include": "#field-metadata"
     },
     {
       "include": "#operators"
+    },
+    {
+      "include": "#punctuation-bracket"
+    },
+    {
+      "include": "#punctuation-separator"
     }
   ],
   "repository": {
@@ -63,6 +78,9 @@
           "patterns": [
             {
               "include": "#keywords"
+            },
+            {
+              "include": "#kora-keywords"
             },
             {
               "include": "#constants"
@@ -101,7 +119,7 @@
       "name": "keyword.other.agent.kora"
     },
     "types": {
-      "match": "\\b(int|float|str|bool|list|dict|None)\\b",
+      "match": "\\b(int|float|str|bool|list|dict)\\b",
       "name": "support.type.kora"
     },
     "constants": {
@@ -116,9 +134,17 @@
       "match": "(?<=\\bdef\\s|\\bagent\\s|\\btool\\s)([A-Za-z_][A-Za-z0-9_]*)",
       "name": "entity.name.function.kora"
     },
+    "type-def": {
+      "match": "(?<=\\btype\\s)([A-Za-z_][A-Za-z0-9_]*)",
+      "name": "entity.name.type.kora"
+    },
+    "variable-def": {
+      "match": "^\\s*([A-Za-z_][A-Za-z0-9_]*)(?=\\s*(?::[^=\\n]+)?=)",
+      "name": "variable.other.definition.kora"
+    },
     "function-call": {
       "match": "\\b([A-Za-z_][A-Za-z0-9_]*)(?=\\()",
-      "name": "entity.name.function.call.kora"
+      "name": "variable.function.kora"
     },
     "field-metadata": {
       "match": "@[A-Za-z_][A-Za-z0-9_]*",
@@ -127,6 +153,18 @@
     "operators": {
       "match": "(\\*\\*|//|==|!=|<=|>=|->|\\+=|-=|\\*=|/=|[+\\-*/%<>=|])",
       "name": "keyword.operator.kora"
+    },
+    "identifiers": {
+      "match": "\\b[A-Za-z_][A-Za-z0-9_]*\\b",
+      "name": "variable.other.kora"
+    },
+    "punctuation-bracket": {
+      "match": "[{}\\[\\]()]",
+      "name": "punctuation.bracket.kora"
+    },
+    "punctuation-separator": {
+      "match": "[,;:.]",
+      "name": "punctuation.separator.kora"
     },
     "file-import": {
       "comment": "use \"./lib/tax.ko\" as tax",

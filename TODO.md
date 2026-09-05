@@ -3,6 +3,12 @@
 Where development stands. Updated as work moves, per the development
 principle in [AGENTS.md](AGENTS.md).
 
+## Current
+
+- [x] **Low-noise syntax highlighting.** Added Kora light and dark
+      VS Code themes and aligned the grammar and public code preview with
+      deliberate colors for literals, constants, comments, and definitions.
+
 ## Completed
 
 ### Packages (shipped, merged to main)
