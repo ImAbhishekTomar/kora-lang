@@ -2758,24 +2758,15 @@ impl Interpreter {
             &legacy_media_key,
         );
 
-        // Budget check before spending: an exhausted budget stops the call
-        // rather than discovering the overrun afterwards. Exhaustion is a
-        // value, so partial work upstream survives.
-        if let Some(meter) = self.budget.check() {
-            // Recorded even though nothing was sent. `x = analyze(...) else:`
-            // can swallow an `Exhausted` on its way to a fallback, and a
-            // budget that stopped a call has to stay visible to whoever reads
-            // the trace afterwards -- otherwise the cheapest-looking run is
-            // the one that quietly did the least.
-            self.trace_refused_call(&type_name, meter.name());
-            return Ok(Value::Variant {
-                tag: Rc::new("Exhausted".to_string()),
-                payload: vec![Value::Str(Rc::new(meter.name().to_string()))],
-            });
-        }
-
         // A durable run replays its own journal first: resuming must return
         // exactly what the earlier attempt returned.
+        //
+        // This runs *before* the budget check, which is what keeps a resumed
+        // run honest. Most meters are counted from the program's own
+        // spending, so a replay re-derives them identically; `max_seconds` is
+        // read from a clock, and a replay runs faster than the original. A
+        // refusal has to be replayed rather than recomputed, or the same run
+        // would answer differently the second time.
         let journal_site = format!("{site}#model");
         let at_risk = if on_token.is_some() || stream {
             AtRisk::StreamedOutput
@@ -2823,7 +2814,36 @@ impl Interpreter {
                     "check what the tools it was given did, then start a new run rather than resuming this one",
                 ));
             }
+            // Replayed from a run whose budget refused this call. The
+            // meter that tripped is part of the history, not a fact to
+            // rediscover.
+            ModelSlot::Refused(meter) => {
+                self.trace_refused_call(&type_name, &meter);
+                return Ok(Value::Variant {
+                    tag: Rc::new("Exhausted".to_string()),
+                    payload: vec![Value::Str(Rc::new(meter))],
+                });
+            }
             ModelSlot::Fresh => {}
+        }
+
+        // Budget check before spending: an exhausted budget stops the call
+        // rather than discovering the overrun afterwards. Exhaustion is a
+        // value, so partial work upstream survives.
+        if let Some(meter) = self.budget.check() {
+            // Recorded even though nothing was sent. `x = analyze(...) else:`
+            // can swallow an `Exhausted` on its way to a fallback, and a
+            // budget that stopped a call has to stay visible to whoever reads
+            // the trace afterwards -- otherwise the cheapest-looking run is
+            // the one that quietly did the least. In a durable run it is
+            // written to the journal for the same reason, and so a resume
+            // reaches the same verdict without re-reading the clock.
+            self.journal_record_refusal(&journal_site, meter.name(), span)?;
+            self.trace_refused_call(&type_name, meter.name());
+            return Ok(Value::Variant {
+                tag: Rc::new("Exhausted".to_string()),
+                payload: vec![Value::Str(Rc::new(meter.name().to_string()))],
+            });
         }
 
         // Replay next: a cassette hit costs nothing and keeps CI deterministic.
@@ -3177,6 +3197,9 @@ enum ModelSlot {
     /// asked for a tool, and whether that tool ran, is not knowable from
     /// the journal.
     InterruptedTools,
+    /// A budget refused this call on the earlier attempt, and named the
+    /// meter that ran out.
+    Refused(String),
     /// Not done yet.
     Fresh,
 }
@@ -3239,6 +3262,8 @@ fn chunks_of(outcome: &RecordedOutcome) -> Vec<String> {
         RecordedOutcome::Ok { chunks, .. }
         | RecordedOutcome::Uncertain { chunks, .. }
         | RecordedOutcome::Failed { chunks, .. } => chunks.clone(),
+        // A refused call was never sent, so it wrote nothing.
+        RecordedOutcome::Exhausted { .. } => Vec::new(),
     }
 }
 
@@ -3277,8 +3302,19 @@ fn record_from_outcome_with(outcome: &AnalyzeOutcome, chunks: &[String]) -> Reco
     }
 }
 
+/// A recorded outcome as the provider-shaped value the rest of the call
+/// path expects.
+///
+/// `Exhausted` has no provider-shaped form -- nothing was sent -- so it is
+/// handled before this is reached, and reaching it here would mean the
+/// journal lookup dropped the distinction.
 fn outcome_from_record(record: RecordedOutcome) -> AnalyzeOutcome {
     match record {
+        RecordedOutcome::Exhausted { meter } => AnalyzeOutcome::Failed {
+            reason: format!("budget exhausted ({meter})"),
+            tokens_in: 0,
+            tokens_out: 0,
+        },
         RecordedOutcome::Ok {
             fields,
             tokens_in,
@@ -4632,6 +4668,9 @@ impl Interpreter {
             .next(&self.scope, site)
             .map_err(|e| RuntimeError::new(e.to_string(), span))?
         {
+            Lookup::Replayed(Effect::Model {
+                outcome: RecordedOutcome::Exhausted { meter },
+            }) => Ok(ModelSlot::Refused(meter)),
             Lookup::Replayed(Effect::Model { outcome }) => {
                 let chunks = chunks_of(&outcome);
                 Ok(ModelSlot::Replayed(outcome_from_record(outcome), chunks))
@@ -4793,6 +4832,34 @@ impl Interpreter {
                 site,
                 Effect::Model {
                     outcome: record_from_outcome_with(outcome, chunks),
+                },
+            )
+            .map_err(|e| RuntimeError::new(e.to_string(), span))
+    }
+
+    /// Write a budget refusal into the slot this call claimed.
+    ///
+    /// Only a durable run has a slot to write to; elsewhere this is a no-op,
+    /// and the refusal is simply the value the program receives.
+    fn journal_record_refusal(
+        &mut self,
+        site: &str,
+        meter: &str,
+        span: Span,
+    ) -> Result<(), RuntimeError> {
+        let Some((scope, seq)) = self.pending_slot.take() else {
+            return Ok(());
+        };
+        let mut journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
+        journal
+            .record(
+                scope,
+                seq,
+                site,
+                Effect::Model {
+                    outcome: RecordedOutcome::Exhausted {
+                        meter: meter.to_string(),
+                    },
                 },
             )
             .map_err(|e| RuntimeError::new(e.to_string(), span))

@@ -951,6 +951,46 @@ security boundary.
     (`crates/kora-cli/tests/durable_crash_test.rs` kills a running pipeline
     and resumes it).
 
+### Time is a budget meter, not a separate cancellation concept
+
+The language already had a lexical fence that nests, only ever tightens, is
+shared across a `parallel for`, and reports exhaustion as a value rather than
+an exception. A deadline wants every one of those properties. Adding
+`max_seconds` to `budget` gets them by construction; a separate `deadline` or
+a cancellation-token API would have restated them, and then had to be argued
+about separately when the two disagreed.
+
+The deadline is stored as the instant it expires, not as a duration. Every
+worker in a fan-out is then measured against one moment, instead of each
+starting its own clock when its thread happens to begin — which is what
+"thirty seconds" means to the person who wrote it.
+
+Time is reported ahead of the other meters when several have run out. A scope
+short of tokens *and* out of time has run out of time; naming tokens would
+send someone to raise a limit that was not what stopped them.
+
+**What it deliberately does not do.** It does not interrupt work already in
+flight: like every other meter it is checked before a model call and between
+tool-loop turns, so a request already sent runs to its own transport timeout.
+And it does not bound computation — a loop calling no model is never refused,
+because a budget bounds agent work rather than CPU. Both follow from reusing
+the existing meter, and both are honest limits rather than gaps to paper over:
+interrupting an in-flight call is the same "did it happen" problem that makes
+a tool call unretryable, and it should be solved once, deliberately, if it is
+solved at all.
+
+**Why this one meter is journaled.** The other three are counted from the
+program's own spending, so a replay re-derives them exactly and a refusal can
+be recomputed. A clock cannot: a replay runs faster than the original, so
+re-deciding would let the same run answer differently the second time — and
+worse, send a call the first run refused. The refusal is written into the
+call's own journal slot and replayed like any other outcome. It occupies that
+slot rather than skipping it, so the effects after it keep their positions.
+
+This is also why the budget check now runs *after* the journal lookup rather
+than before. A replayed call returns what it returned; only a call that is
+genuinely fresh consults a meter.
+
 ### An effect is identified by which call it is, not which line
 
 Effect identity is what the journal checks on resume and what a cassette is

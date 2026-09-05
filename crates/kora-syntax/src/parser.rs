@@ -381,19 +381,20 @@ impl Parser {
                         format!("budget values must be whole numbers, found `{other}`"),
                         value_span,
                     )
-                    .with_hint("budgets are counted in tokens, calls, or steps"));
+                    .with_hint("budgets are counted in tokens, calls, steps, or seconds"));
                 }
             };
             match field.as_str() {
                 "max_tokens" => spec.max_tokens = Some(value),
                 "max_calls" => spec.max_calls = Some(value),
                 "max_steps" => spec.max_steps = Some(value),
+                "max_seconds" => spec.max_seconds = Some(value),
                 other => {
                     return Err(SyntaxError::new(
                         format!("unknown budget field `{other}`"),
                         field_span,
                     )
-                    .with_hint("known fields: max_tokens, max_calls, max_steps"));
+                    .with_hint("known fields: max_tokens, max_calls, max_steps, max_seconds"));
                 }
             }
             seen_any = true;

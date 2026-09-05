@@ -587,6 +587,39 @@ with budget(max_tokens = 500_000):
 Budgets nest, and a child may only **tighten**. A `parallel for` shares one
 pot, so concurrent agents stop collectively.
 
+### Bounding by time
+
+`max_seconds` is a fourth meter, and the only one not counted from the
+program's own spending:
+
+```python
+with budget(max_seconds = 30):
+    answer: str = analyze(question, "answer briefly")
+    match answer:
+        case Ok(text):
+            print(text)
+        case Exhausted(meter):
+            print(f"gave up: out of {meter}")
+```
+
+The clock starts when the scope is entered, and the deadline is an instant
+rather than a duration each branch starts for itself — so every worker in a
+`parallel for` expires together instead of each getting its own thirty
+seconds. A scope out of both time and tokens reports `seconds`, because
+naming tokens would send you to raise a limit that was not what stopped you.
+
+Two things it does **not** do. It does not interrupt work already in flight:
+like every other meter, it is checked before a model call and between tool
+loop turns, so a call already sent runs to its own timeout (`[models]
+timeout_secs`). And it does not bound computation — a scope spinning in a
+loop that calls no model is never refused, because a budget bounds agent
+work rather than CPU.
+
+In a durable run the refusal is journaled rather than recomputed. Every other
+meter is derived from spending the replay reproduces exactly; this one is read
+from a clock, and a replay runs faster than the original, so re-deciding would
+let the same run answer differently the second time.
+
 Introspection makes degrade-gracefully logic an ordinary `if`:
 
 ```python

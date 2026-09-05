@@ -347,6 +347,26 @@ with budget(max_tokens = 5_000):
     result = analyze(text, "summarize this")
 ```
 
+Four meters: `max_tokens`, `max_calls`, `max_steps`, and `max_seconds`.
+Budgets nest and a child may only tighten; a `parallel for` shares one pot,
+so its branches stop collectively.
+
+`max_seconds` starts its clock when the scope is entered, and the deadline is
+one instant shared by every branch rather than a duration each starts for
+itself. It refuses the next model call rather than interrupting one already
+in flight, and does not bound computation — a budget bounds agent work, not
+CPU.
+
+```kora
+with budget(max_seconds = 30):
+    answer: str = analyze(question, "answer briefly")
+    match answer:
+        case Ok(text):
+            print(text)
+        case Exhausted(meter):
+            print(f"gave up: out of {meter}")
+```
+
 ## Data safety
 
 ### `classified` and `declassify`

@@ -10,6 +10,7 @@
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 use kora_syntax::ast::BudgetSpec;
 
@@ -19,6 +20,7 @@ pub enum Meter {
     Tokens,
     Calls,
     Steps,
+    Seconds,
 }
 
 impl Meter {
@@ -27,6 +29,7 @@ impl Meter {
             Meter::Tokens => "tokens",
             Meter::Calls => "calls",
             Meter::Steps => "steps",
+            Meter::Seconds => "seconds",
         }
     }
 }
@@ -41,6 +44,12 @@ struct Scope {
     max_tokens: Option<u64>,
     max_calls: Option<u64>,
     max_steps: Option<u64>,
+    /// When this scope's time runs out.
+    ///
+    /// Stored as the moment it expires rather than as a duration, so every
+    /// worker in a `parallel for` is measured against one instant instead of
+    /// each starting its own clock when the thread happens to begin.
+    deadline: Option<Instant>,
     spent_tokens: AtomicU64,
     spent_calls: AtomicU64,
     spent_steps: AtomicU64,
@@ -74,6 +83,12 @@ impl Scope {
     /// Would one more call fit? Checked before dispatch so an exhausted budget
     /// stops *before* spending, rather than after.
     fn would_exceed(&self) -> Option<Meter> {
+        // Time first: a scope that has run out of it has run out whatever the
+        // other meters say, and naming the clock is more useful than naming
+        // a token count that merely happens to also be short.
+        if self.deadline.is_some_and(|end| Instant::now() >= end) {
+            return Some(Meter::Seconds);
+        }
         if self
             .max_calls
             .is_some_and(|m| self.spent_calls.load(Ordering::Relaxed) >= m)
@@ -128,6 +143,7 @@ impl Budget {
                 max_tokens: None,
                 max_calls: None,
                 max_steps: None,
+                deadline: None,
                 spent_tokens: AtomicU64::new(0),
                 spent_calls: AtomicU64::new(0),
                 spent_steps: AtomicU64::new(0),
@@ -144,6 +160,11 @@ impl Budget {
                 max_tokens: spec.max_tokens,
                 max_calls: spec.max_calls,
                 max_steps: spec.max_steps,
+                // The clock starts when the scope is entered, which is what
+                // `max_seconds = 30` reads as to anyone writing it.
+                deadline: spec
+                    .max_seconds
+                    .map(|s| Instant::now() + Duration::from_secs(s)),
                 spent_tokens: AtomicU64::new(0),
                 spent_calls: AtomicU64::new(0),
                 spent_steps: AtomicU64::new(0),
@@ -190,7 +211,16 @@ mod tests {
             max_tokens: tokens,
             max_calls: calls,
             max_steps: steps,
+            max_seconds: None,
             span_line: 1,
+        }
+    }
+
+    fn seconds(limit: u64) -> BudgetSpec {
+        BudgetSpec {
+            max_seconds: Some(limit),
+            span_line: 1,
+            ..Default::default()
         }
     }
 
@@ -274,5 +304,77 @@ mod tests {
             h.join().unwrap();
         }
         assert_eq!(budget.spent_tokens(), 1000, "no lost updates under races");
+    }
+
+    #[test]
+    fn a_deadline_that_has_passed_stops_the_next_call() {
+        // Zero seconds is the deterministic form of "already out of time",
+        // and it is a legitimate thing to write: a scope that must not start
+        // any new work.
+        let b = Budget::unlimited().nested(&seconds(0));
+        assert_eq!(b.check(), Some(Meter::Seconds));
+    }
+
+    #[test]
+    fn a_deadline_that_has_not_passed_allows_work() {
+        let b = Budget::unlimited().nested(&seconds(3600));
+        assert_eq!(b.check(), None);
+        assert_eq!(b.charge_call(10, 10), None);
+        assert_eq!(b.check(), None);
+    }
+
+    #[test]
+    fn time_is_named_ahead_of_the_other_meters() {
+        // A scope out of both time and tokens has run out of time; saying
+        // "tokens" would send someone to raise a limit that was not the
+        // thing that stopped them.
+        let b = Budget::unlimited().nested(&BudgetSpec {
+            max_tokens: Some(10),
+            max_seconds: Some(0),
+            span_line: 1,
+            ..Default::default()
+        });
+        b.charge_call(20, 0);
+        assert_eq!(b.check(), Some(Meter::Seconds));
+    }
+
+    #[test]
+    fn a_parent_deadline_binds_a_child_that_set_none() {
+        let parent = Budget::unlimited().nested(&seconds(0));
+        let child = parent.nested(&spec(Some(1_000_000), None, None));
+        assert_eq!(
+            child.check(),
+            Some(Meter::Seconds),
+            "a child cannot outlive the scope that contains it"
+        );
+    }
+
+    #[test]
+    fn a_child_cannot_extend_its_parents_deadline() {
+        // The same rule every other meter follows: entering a scope can only
+        // tighten what is already in force.
+        let parent = Budget::unlimited().nested(&seconds(0));
+        let child = parent.nested(&seconds(3600));
+        assert_eq!(child.check(), Some(Meter::Seconds));
+    }
+
+    #[test]
+    fn one_deadline_is_shared_across_threads() {
+        // Mirrors `parallel for`: the deadline is an instant, not a duration
+        // each worker starts for itself, so ten branches expire together.
+        let budget = Budget::unlimited().nested(&seconds(0));
+        let mut handles = Vec::new();
+        for _ in 0..10 {
+            let b = budget.clone();
+            handles.push(std::thread::spawn(move || b.check()));
+        }
+        for h in handles {
+            assert_eq!(h.join().unwrap(), Some(Meter::Seconds));
+        }
+    }
+
+    #[test]
+    fn the_meter_names_itself_for_a_message() {
+        assert_eq!(Meter::Seconds.name(), "seconds");
     }
 }
