@@ -268,6 +268,11 @@ pub struct BudgetSpec {
     pub max_tokens: Option<u64>,
     pub max_calls: Option<u64>,
     pub max_steps: Option<u64>,
+    /// Wall-clock seconds the scope may spend before its next model call is
+    /// refused. The one meter that is not counted from the program's own
+    /// spending, which is why it is the one meter a durable run has to
+    /// journal rather than recompute.
+    pub max_seconds: Option<u64>,
     pub span_line: u32,
 }
 

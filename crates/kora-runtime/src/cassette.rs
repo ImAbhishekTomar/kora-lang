@@ -68,6 +68,16 @@ pub enum RecordedOutcome {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         chunks: Vec<String>,
     },
+    /// A budget refused the call before anything was sent.
+    ///
+    /// Journaled, never recorded to a cassette, for the same reason a
+    /// `Failed` is not: a fixture that froze one afternoon's exhaustion into
+    /// it would refuse a call that has budget now. The journal is the
+    /// opposite case, and one meter makes it necessary rather than merely
+    /// tidy — `max_seconds` is read from a clock, not counted from the
+    /// program's own spending, so a resumed run cannot re-derive the same
+    /// answer by recomputing it. It has to be told.
+    Exhausted { meter: String },
     /// The provider did not answer.
     ///
     /// Journaled, never recorded to a cassette. A durable run that took the

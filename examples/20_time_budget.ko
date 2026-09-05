@@ -1,0 +1,56 @@
+# A budget denominated in time.
+#
+# `max_seconds` is the fourth meter, alongside `max_tokens`, `max_calls`, and
+# `max_steps`. It behaves like the others: it nests, a child may only tighten
+# it, a `parallel for` shares one deadline across every branch, and running
+# out is a value to match on rather than an exception.
+#
+# What it does *not* do is worth knowing before you reach for it. It refuses
+# the next model call; it does not interrupt one already in flight, which runs
+# to its own `[models] timeout_secs`. And it bounds agent work, not CPU: a
+# loop that calls no model is never refused by it.
+#
+# Run with no model configured and every call reports `Failed` instead —
+# which is the point of matching on the outcome either way.
+
+def summarize(item: str) -> str:
+    answer: str = analyze(item, "reply with one short sentence")
+    match answer:
+        case Ok(text):
+            return text
+        case Uncertain(reason):
+            return f"(declined: {reason})"
+        case Exhausted(meter):
+            # The deadline arrived. Everything summarized before it survives:
+            # this branch is a value, not an unwind.
+            return f"(gave up: out of {meter})"
+        case Failed(why):
+            return f"(no answer: {why})"
+
+def main():
+    items = ["a quarterly report", "a support ticket", "a pull request"]
+
+    # Thirty seconds for the whole fan-out, not thirty each. The deadline is
+    # an instant, so the branches expire together rather than each starting
+    # its own clock when its thread happens to begin.
+    with budget(max_seconds = 30, max_tokens = 20_000):
+        results = parallel for item in items:
+            return summarize(item)
+
+        for line in results:
+            print(line)
+
+    # A scope that must not start new work at all. Zero is a legitimate
+    # limit, not a mistake: it is how you say "only if there is time left",
+    # and here there never is.
+    with budget(max_seconds = 0):
+        answer: str = analyze("anything", "reply briefly")
+        match answer:
+            case Exhausted(meter):
+                print(f"skipped the optional pass: out of {meter}")
+            case Ok(text):
+                print(f"had time after all: {text}")
+            case Uncertain(reason):
+                print(f"declined: {reason}")
+            case Failed(why):
+                print(f"no answer: {why}")

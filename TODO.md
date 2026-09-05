@@ -289,7 +289,7 @@ remain; **Build** means it is not implemented yet.
 | P0 | Structured output | **Have** | Declared Kora types become validated model JSON schemas | Add schema evolution/versioning and better provider compatibility diagnostics |
 | P0 | Async/concurrency | **Partial** | Real OS-thread `parallel for` with isolated worker heaps | Add explicit cancellation, backpressure, bounded queues, fair scheduling, and a clear async/event model |
 | P0 | Streaming | **Partial** | `str` streaming with `on token`, replay chunks, `write`, crash-safe durable resume, budget accounting, and retry state, all covered by live-transport tests | Tool streaming, parallel streaming, and per-token in-flight enforcement |
-| P0 | Timeouts + cancellation | **Partial** | Model, HTTP, and MCP timeouts; handler can stop reading | Add language-level cancellation tokens, cancellation propagation across workers/tools, and cleanup guarantees |
+| P0 | Timeouts + cancellation | **Partial** | Model, HTTP, and MCP timeouts; `budget: max_seconds` bounding a scope and every `parallel for` branch under it; handler can stop reading | Interrupt work already in flight, let a program stop a fan-out early, and define cleanup guarantees |
 | P0 | Retry/backoff | **Have** | Jittered model retries and HTTP retries; MCP handshake retries | Add shared retry policy, observability for attempts, and cancellation-aware backoff |
 | P1 | Durable execution | **Partial** | Append-only replay journal for model calls, tools, writes, human input, output, time, and Python; per-effect fsync, run locking, torn-tail recovery, interrupted-stream semantics | Group commit for write-heavy fan-out, and retention/compaction |
 | P1 | Checkpoint/resume | **Partial** | Replay-based resume, `ask_human` suspension, exactly-once writes, and crash-injection tests against the real binary | Add explicit checkpoints, resumable in-flight effects, and versioned state migration |
@@ -312,8 +312,12 @@ remain; **Build** means it is not implemented yet.
 ### Suggested capability build order
 
 - [ ] **P0 correctness gate:** streaming accounting, retry state, durable
-      crash semantics, and live transport tests have shipped. Cancellation
-      semantics remain before expanding the streaming API.
+      crash semantics, live transport tests, and a time budget
+      (`max_seconds`) have shipped. What remains under "cancellation" is the
+      half a deadline does not cover: interrupting work already in flight,
+      and a way for a program to stop a fan-out early (first-success-wins).
+      Both are the same "did it happen" problem that makes a tool call
+      unretryable, and worth solving once, deliberately.
 - [ ] **P1 reliability layer:** explicit checkpoints remain; fsync policy,
       run locking, exactly-once writes, interrupted-stream semantics, and
       fault-injection tests have shipped.
