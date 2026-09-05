@@ -249,7 +249,11 @@ enum Record {
 }
 
 /// The line format this build writes and reads.
-const FORMAT: u32 = 1;
+/// Bumped to 2 when effect identity stopped being `file:line` and became
+/// structural (`kora_syntax::ops`). A run journaled under the old spelling
+/// cannot be replayed by this build: the sites recorded in it name lines,
+/// and nothing in the file recovers which call each one was.
+const FORMAT: u32 = 2;
 
 /// Live journal for one run: the recorded effects plus a replay cursor per
 /// scope.
@@ -677,6 +681,10 @@ pub enum JournalError {
         found: u32,
         supported: u32,
     },
+    /// A run file written before effect identity became structural.
+    RetiredFormat {
+        found: u32,
+    },
     Diverged {
         scope: String,
         seq: usize,
@@ -700,6 +708,10 @@ impl std::fmt::Display for JournalError {
             JournalError::UnknownFormat { found, supported } => write!(
                 f,
                 "this run was written by a newer Kora (journal format {found}, this build reads {supported})"
+            ),
+            JournalError::RetiredFormat { found } => write!(
+                f,
+                "this run was journaled by an older Kora (format {found}), which recorded each effect by line number rather than by which call it was; it cannot be resumed by this build — start a new run"
             ),
             JournalError::Diverged {
                 scope,
@@ -861,6 +873,13 @@ pub fn load_run(path: &Path) -> Result<Run, JournalError> {
                         found: format,
                         supported: FORMAT,
                     });
+                }
+                // Refused rather than replayed. An older run's sites name
+                // lines, so every one of them would be reported as a changed
+                // program -- true in the letter and misleading in the spirit,
+                // since what changed is how an effect is named.
+                if format < FORMAT {
+                    return Err(JournalError::RetiredFormat { found: format });
                 }
                 run.id = id;
                 run.program = program;

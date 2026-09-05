@@ -540,26 +540,28 @@ not and why:
       `kora-types/tests/diagnostics_test.rs::arity_and_fields_are_left_to_the_runtime`,
       which is the test to convert when this moves.
 
-- [ ] **Introduce a typed effect-aware IR.** Not started, and deliberately
-      not part of the audit-closing pass: it is a new lowering stage and a
-      retarget of the tree-walking interpreter, not a change inside one. It
-      gates streaming-with-tools and the bytecode VM, neither of which is
-      being built yet, so landing half of it would leave a second
-      representation with no consumer.
+- [x] **Structural operation ids.** Done. An effect is identified by which
+      call it is -- enclosing function, plus position among that function's
+      calls (`kora_syntax::ops`) -- rather than by the line it sits on.
+      Comments, blank lines, and reformatting no longer invalidate a cassette
+      entry or stop a durable run from resuming. Numbered per module, since
+      spans are byte offsets into one file. Old cassettes keep replaying
+      through the line-based fallback but stay line-sensitive until
+      re-recorded; the journal format is bumped, and an older run is refused
+      with a sentence rather than replayed into a misleading divergence.
 
-      The concrete complaint underneath it is worth separating, because it
-      bites today: an effect's identity is `file:line`. Adding a comment
-      above an `analyze()` moves it, which invalidates that call's committed
-      cassette and makes an in-flight durable run refuse to resume. (Hit
-      while editing `examples/14_streaming.ko` during this pass -- the
-      cassette went stale from a comment.) A structural operation ID --
-      function, effect kind, ordinal within the function -- fixes it without
-      an IR, and the cassette's legacy-key fallback is already the mechanism
-      for migrating to one without breaking committed files. Worth doing as
-      its own change, ahead of the IR.
-- [x] **Define OS durability guarantees.** Decided and documented: a killed
-      process loses nothing; a power cut can lose only unsynced output lines;
-      concurrent resume of one run is refused by an OS lock.
+- [ ] **Introduce a typed effect-aware IR.** Still not started, and still
+      deliberately: it is a new lowering stage and a retarget of the
+      tree-walking interpreter, and it gates streaming-with-tools and the
+      bytecode VM, neither of which is being built. Landing half of it would
+      leave a second representation of the program with no consumer.
+
+      The complaint that made it urgent is gone -- effect identity is
+      structural now, and that took a side table over the AST rather than a
+      lowering. What the IR is still worth doing for is explicit effect nodes
+      the checker and a future VM can both read, which is a reason to start
+      it when one of those two is actually being built.
+
 ### Context engineering delivery order
 
 - [x] Bound short-term tool-loop context with a lexical policy, whole-exchange

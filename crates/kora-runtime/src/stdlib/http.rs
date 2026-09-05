@@ -97,7 +97,7 @@ fn request(
 
     // A network call is nondeterministic, so a durable run must replay the
     // answer it already got rather than asking again.
-    let site = format!("{}:{}#http", interp.program_name, span.line);
+    let site = interp.effect_site_for(span, "http");
     if let Some(recorded) = interp.journal_lookup(&site, span)? {
         return Ok(response_from_json(&recorded));
     }

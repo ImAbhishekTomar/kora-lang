@@ -943,6 +943,48 @@ security boundary.
     (`crates/kora-cli/tests/durable_crash_test.rs` kills a running pipeline
     and resumes it).
 
+### An effect is identified by which call it is, not which line
+
+Effect identity is what the journal checks on resume and what a cassette is
+keyed on, and it used to be `file:line`. A line number is a property of the
+text, not of the program. Adding a comment above a call moved it, which
+invalidated that call's committed cassette entry and made an in-flight durable
+run refuse to resume — over an edit that changed nothing about what the
+program does. It happened during the work that wrote this section: a comment
+added to `examples/14_streaming.ko` took its cassette with it.
+
+An operation id is structural instead: the enclosing function, and the
+position of this call among the calls that function makes (`kora_syntax::ops`).
+Comments, blank lines, and reformatting leave it alone. Adding, removing, or
+reordering a *call* moves the ones after it, which is right — a program that
+calls something new before this one is a different program, and a recorded
+answer for the old position is not an answer for the new one.
+
+Calls are numbered, not every expression, so that `x = 1 + 2` becoming
+`x = 1 + 2 + 3` shifts nothing. Every effect this runtime journals happens at
+a call, so nothing is lost by the narrower rule and a great deal of stability
+is gained.
+
+The table is per module. Spans are byte offsets into one file, so two modules
+both have a call starting at byte 40; one global table would give them the
+same identity. The site string names the module's own path rather than the
+entry file's, which also fixes a latent ambiguity: two imported files with an
+effect on the same line used to produce the same site.
+
+**Migration.** Cassettes recorded under the old scheme keep replaying — the
+line-based key is computed alongside the structural one and used when the
+structural one misses — but they stay line-sensitive until re-recorded, since
+nothing in the file recovers which call a recorded line number was. Durable
+runs get no such bridge: the journal format is bumped, and a run journaled by
+an older build is refused with a sentence saying why rather than replayed into
+a misleading divergence.
+
+This is deliberately **not** the typed effect-aware IR. There is no lowering
+and no second representation of the program — a side table over the AST,
+computed once, answering one question. The IR would subsume it, and is still
+worth doing on its own terms when streaming-with-tools or the bytecode VM
+needs it.
+
 ### The four states every effect passes through
 
 Retry, budget, journal, telemetry, and resume are five rules that used to be

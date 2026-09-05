@@ -64,25 +64,47 @@ fn run_with_cassette(name: &str, source: &str, entries: Vec<Entry>) -> Result<Ve
 /// interpreter computes.
 fn entry_for(
     program_path: &str,
-    line: u32,
+    op: &str,
     prompt: &str,
     data: &str,
     outcome: RecordedOutcome,
 ) -> Entry {
-    entry_for_media(program_path, line, prompt, data, "", outcome)
+    entry_for_media(program_path, op, prompt, data, "", outcome)
+}
+
+/// The operation id of the `n`th `analyze(` in `src`.
+///
+/// Computed from the program rather than written down, so these fixtures
+/// follow the numbering instead of restating it — the point of structural
+/// identity is that nobody has to keep a line number in their head.
+fn analyze_op(src: &str, n: usize) -> String {
+    let program = kora_syntax::parse(src).expect("the fixture should parse");
+    let ids = kora_syntax::ops::assign(&program);
+    // A call's span begins at its opening parenthesis, not at the callee,
+    // which is also where the runtime's own diagnostics point.
+    let start = src
+        .match_indices("analyze(")
+        .nth(n)
+        .unwrap_or_else(|| panic!("no analyze call #{n} in the fixture"))
+        .0
+        + "analyze".len();
+    let span = kora_syntax::token::Span::new(start, start, 0, 0);
+    ids.get(span)
+        .unwrap_or_else(|| panic!("the analyze call at byte {start} was not numbered"))
+        .to_string()
 }
 
 /// `entry_for` for a call that also sent images: `media` is the fingerprint
 /// of those images, which is part of the key.
 fn entry_for_media(
     program_path: &str,
-    line: u32,
+    op: &str,
     prompt: &str,
     data: &str,
     media: &str,
     outcome: RecordedOutcome,
 ) -> Entry {
-    let site = format!("{program_path}:{line}");
+    let site = format!("{program_path}:{op}#analyze");
     let model = "ollama:test-model".to_string();
     Entry {
         key: kora_runtime::cassette::key_for(&site, &model, prompt, data, media),
@@ -135,7 +157,7 @@ fn analyze_ok_path_produces_typed_object() {
     let path = scratch_program_path("ok-path");
     let entry = entry_for(
         &path,
-        6,
+        &analyze_op(ANALYZE_PROGRAM, 0),
         "assess this",
         "\"some data\"",
         ok_fields(&[
@@ -152,7 +174,7 @@ fn analyze_uncertain_path_is_matchable() {
     let path = scratch_program_path("uncertain-path");
     let entry = entry_for(
         &path,
-        6,
+        &analyze_op(ANALYZE_PROGRAM, 0),
         "assess this",
         "\"some data\"",
         RecordedOutcome::Uncertain {
@@ -216,7 +238,7 @@ fn analyze_result_field_may_be_a_list_of_declared_type() {
     let path = scratch_program_path("nested-list");
     let entry = entry_for(
         &path,
-        9,
+        &analyze_op(NESTED_PROGRAM, 0),
         "plan this",
         "\"some data\"",
         ok_fields(&[(
@@ -259,7 +281,7 @@ fn analyze_result_field_may_be_a_declared_type() {
     let path = scratch_program_path("nested-object");
     let entry = entry_for(
         &path,
-        10,
+        &analyze_op(NESTED_OBJECT_PROGRAM, 0),
         "extract this",
         "\"some data\"",
         ok_fields(&[
@@ -295,7 +317,7 @@ fn token_usage_accumulates_from_cassette() {
     let path = scratch.program(ANALYZE_PROGRAM);
     let entry = entry_for(
         &path.to_string_lossy(),
-        6,
+        &analyze_op(ANALYZE_PROGRAM, 0),
         "assess this",
         "\"some data\"",
         ok_fields(&[
@@ -414,7 +436,7 @@ def main():
     for item in ["a", "b", "c"] {
         recording.insert(entry_for(
             &path_str,
-            6,
+            &analyze_op(src, 0),
             "assess this",
             &format!("\"{item}\""),
             ok_fields(&[
@@ -487,7 +509,7 @@ fn an_image_reaches_the_model_and_replays_from_a_cassette() {
     let media = kora_runtime::cassette::media_key(&[("image/png", &png_bytes(1))]);
     let entry = entry_for_media(
         &program_path,
-        10,
+        &analyze_op(&source, 0),
         "read this receipt",
         "\"<image>\"",
         &media,
@@ -516,7 +538,7 @@ fn editing_the_image_misses_the_cassette() {
     let media = kora_runtime::cassette::media_key(&[("image/png", &png_bytes(9))]);
     let entry = entry_for_media(
         &program_path,
-        10,
+        &analyze_op(&source, 0),
         "read this receipt",
         "\"<image>\"",
         &media,
@@ -548,7 +570,7 @@ def main():
             print(i.summary)
 "#;
     let program_path = scratch.0.join("prog.ko").to_string_lossy().to_string();
-    let site = format!("{program_path}:5");
+    let site = format!("{program_path}:{}#analyze", analyze_op(source, 0));
     let model = "ollama:test-vision".to_string();
     let entry = Entry {
         key: kora_runtime::cassette::key_for(&site, &model, "summarize", "\"data\"", ""),
@@ -617,4 +639,52 @@ fn on_tool_call_cannot_watch_a_plain_assignment() {
     // grammar at all -- `on` there is just the next statement's name -- so
     // this is a parse error, not the runtime check the annotated form hits.
     assert!(err.is_err(), "expected a parse or runtime error");
+}
+
+// --- what a cassette key survives ---
+
+/// The same program, with a comment and a blank line added above the call.
+const ANALYZE_PROGRAM_COMMENTED: &str = r#"type Insight:
+    summary: str
+    severity: int
+
+def main():
+    # Explaining what this call is for, which is a thing people do.
+
+    result: Insight = analyze("some data", "assess this")
+    match result:
+        case Ok(value):
+            print(f"{value.summary} / {value.severity}")
+        case Uncertain(reason):
+            print(f"uncertain: {reason}")
+"#;
+
+#[test]
+fn a_comment_above_a_call_does_not_invalidate_its_cassette() {
+    // The defect structural identity exists to fix. A cassette is a
+    // committed file replayed in CI, and it used to go stale on an edit that
+    // changed no code at all: the call moved down two lines, its key was
+    // built from that line, and the recorded answer stopped matching.
+    assert_eq!(
+        analyze_op(ANALYZE_PROGRAM, 0),
+        analyze_op(ANALYZE_PROGRAM_COMMENTED, 0),
+        "the call is in the same place in the program, whatever the text above it says"
+    );
+
+    // Recorded against the program without the comment, replayed against the
+    // one with it. `run_with_cassette` derives the same scratch path from the
+    // name, so the entry below is the one it will look for.
+    let entry = entry_for(
+        &scratch_program_path("comment-drift"),
+        &analyze_op(ANALYZE_PROGRAM, 0),
+        "assess this",
+        "\"some data\"",
+        ok_fields(&[
+            ("summary", serde_json::json!("disk nearly full")),
+            ("severity", serde_json::json!(3)),
+        ]),
+    );
+    let out = run_with_cassette("comment-drift", ANALYZE_PROGRAM_COMMENTED, vec![entry])
+        .expect("the recorded answer should still be found");
+    assert_eq!(out, vec!["disk nearly full / 3"]);
 }

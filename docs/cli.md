@@ -34,10 +34,19 @@ exiting silently. Use `kora test` for a file of `test` blocks.
 Cassettes live in `cassettes/` beside the program and are meant to be
 committed: they make a suite reproducible and free. A cassette is keyed on
 call site, model, prompt, and input, so **changing the configured model
-invalidates them** — re-record with `--record`. Editing a comment *above* a
-call moves its line and therefore its key, which invalidates that call's entry
-too; re-record when a cassette starts missing after an edit that changed no
-code.
+invalidates them** — re-record with `--record`.
+
+The call site is structural: which function the call is in, and which call it
+is within that function. Comments, blank lines, and reformatting do not move
+it, so an edit that changes no code cannot invalidate a recorded answer.
+Adding, removing, or reordering a *call* does move the ones after it, which is
+correct — that is a different program.
+
+A cassette recorded before Kora 0.3 is keyed on the line number instead. Those
+keep replaying unmodified, and are looked up under the old scheme
+automatically, but they stay line-sensitive until re-recorded: if one starts
+missing after an edit that changed no code, `--record` once and it will not
+happen again.
 
 ### `kora check <file.ko>...`
 

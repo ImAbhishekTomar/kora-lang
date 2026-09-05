@@ -178,6 +178,22 @@ fn run_durable(
     (interp.output, saved, error)
 }
 
+/// The operation id of a call in `src`, the way the runtime names it.
+///
+/// Computed rather than written down: effect identity is structural, so a
+/// fixture that hard-coded it would be restating the numbering instead of
+/// following it.
+fn call_op(src: &str, callee: &str) -> String {
+    let program = parse(src).expect("the fixture should parse");
+    let ids = kora_syntax::ops::assign(&program);
+    // A call's span begins at its opening parenthesis, not at the callee.
+    let start = src.find(callee).expect("the call should be in the fixture") + callee.len() - 1;
+    let span = kora_syntax::token::Span::new(start, start, 0, 0);
+    ids.get(span)
+        .unwrap_or_else(|| panic!("the call at byte {start} was not numbered"))
+        .to_string()
+}
+
 /// The answer `{"answer":"hello there"}` split the way a provider would.
 fn hello_frames() -> Vec<String> {
     vec![
@@ -469,7 +485,10 @@ fn an_interrupted_tool_using_call_stops_the_resume_instead_of_running_tools_twic
     run.entries = vec![Entry {
         scope: Scope::root(),
         seq: 0,
-        site: "test.ko:8#model".to_string(),
+        site: format!(
+            "test.ko:{}#analyze#model",
+            call_op(TOOLS_PROGRAM, "analyze(")
+        ),
         effect: Effect::Attempted {
             name: "a tool-using analyze()".to_string(),
         },
