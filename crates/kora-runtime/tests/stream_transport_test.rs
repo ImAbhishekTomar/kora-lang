@@ -459,3 +459,286 @@ def main():
     assert_eq!(i.tokens_in, 3);
     assert_eq!(i.tokens_out, 2);
 }
+
+/// A provider whose first attempt dies after sending nothing but protocol —
+/// a keep-alive and a usage frame — and whose second attempt answers.
+///
+/// The connection is dropped without terminating the chunked body, which is
+/// what a real socket failure looks like from the client's side: a read
+/// error part way through the response, not a clean end.
+fn spawn_provider_that_breaks_before_answering(frames: Vec<String>) -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a free port");
+    let port = listener.local_addr().unwrap().port();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&requests);
+
+    std::thread::spawn(move || {
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { return };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut length = 0usize;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                if line == "\r\n" || line == "\n" {
+                    break;
+                }
+                if let Some(rest) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    length = rest.trim().parse().unwrap_or(0);
+                }
+            }
+            let mut body = vec![0u8; length];
+            let _ = reader.read_exact(&mut body);
+            let attempt = seen.fetch_add(1, Ordering::SeqCst);
+
+            if attempt == 0 {
+                // Protocol only: a keep-alive comment and a usage frame.
+                // Neither puts a character of the answer in front of the
+                // program, so the attempt is still safe to repeat.
+                let _ = stream.write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n",
+                );
+                for line in [
+                    ": ping\n".to_string(),
+                    format!(
+                        "data: {}\n",
+                        serde_json::json!({
+                            "message": {"content": ""},
+                            "done": false,
+                            "prompt_eval_count": 3,
+                        })
+                    ),
+                ] {
+                    let _ = stream.write_all(format!("{:x}\r\n{line}\r\n", line.len()).as_bytes());
+                }
+                let _ = stream.flush();
+                // No terminating chunk: the body just stops.
+                drop(stream);
+                continue;
+            }
+
+            let mut payload = String::new();
+            for frame in &frames {
+                payload.push_str(&format!(
+                    "data: {}\n",
+                    serde_json::json!({"message": {"content": frame}, "done": false})
+                ));
+            }
+            payload.push_str(&format!(
+                "data: {}\n",
+                serde_json::json!({
+                    "message": {"content": ""},
+                    "done": true,
+                    "prompt_eval_count": 3,
+                    "eval_count": 2,
+                })
+            ));
+            let response = format!(
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                payload.len(),
+                payload
+            );
+            let _ = stream.write_all(response.as_bytes());
+            let _ = stream.flush();
+        }
+    });
+
+    (format!("http://127.0.0.1:{port}"), requests)
+}
+
+fn config_with_retries(endpoint: &str, retries: u32) -> String {
+    format!(
+        r#"
+[models]
+default = "local:test-model"
+max_retries = {retries}
+
+[models.local]
+endpoint = "{endpoint}"
+"#
+    )
+}
+
+#[test]
+fn a_stream_that_showed_nothing_is_retried_even_after_protocol_frames() {
+    // The frames a stream opens with — a keep-alive, a role-only delta,
+    // usage totals, `[DONE]` — carry none of the answer. A connection that
+    // dies just after one of those has shown the program nothing, so
+    // forfeiting the retry over it loses an answer for no reason.
+    let (endpoint, requests) = spawn_provider_that_breaks_before_answering(hello_frames());
+    let i = run(
+        &config_with_retries(&endpoint, 2),
+        r#"
+def main():
+    answer: str = analyze("q", "greet") on token(t):
+        print(f"piece: {t}")
+    match answer:
+        case Ok(text):
+            print(f"final: {text}")
+        case Failed(why):
+            print(f"failed: {why}")
+"#,
+    );
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        2,
+        "the first attempt showed nothing, so it should have been retried"
+    );
+    assert_eq!(
+        i.output,
+        vec![
+            "piece: hel",
+            "piece: lo ",
+            "piece: there",
+            "final: hello there"
+        ]
+    );
+}
+
+#[test]
+fn a_stream_that_already_wrote_is_never_retried() {
+    // The other half of the same rule, and the one that must not regress:
+    // once characters have reached the program, a second attempt would
+    // write the answer twice on top of output already acted on.
+    let (endpoint, requests) = spawn_error_provider("upstream is down");
+    let i = run(
+        &config_with_retries(&endpoint, 3),
+        r#"
+def main():
+    answer: str = analyze("q", "greet") on token(t):
+        print(f"piece: {t}")
+    match answer:
+        case Failed(why):
+            print("failed")
+        case Ok(text):
+            print(f"final: {text}")
+"#,
+    );
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        1,
+        "a stream that emitted must not be sent again"
+    );
+    assert_eq!(i.output, vec!["piece: par", "failed"]);
+}
+
+/// Run and expect the program to fail, keeping the interpreter so the test
+/// can look at what the run spent before it stopped.
+fn run_failing(config_text: &str, src: &str) -> (kora_runtime::Interpreter, String) {
+    let program = kora_syntax::parse(src).unwrap_or_else(|e| panic!("parse error: {e}\n{src}"));
+    let mut i = interpreter(config_text);
+    let message = match i.run(&program) {
+        Ok(()) => panic!("the run should have failed\n{src}"),
+        Err(e) => e.message,
+    };
+    (i, message)
+}
+
+#[test]
+fn a_handler_that_fails_still_charges_the_call_it_was_watching() {
+    // The handler raising is the program failing, not the provider. The
+    // call was made and the tokens are spent either way, so a budget that
+    // forgot it would make raising in a handler the cheapest way to run a
+    // model: the meter would read zero for work that really happened.
+    let (endpoint, requests) = spawn_streaming_provider(hello_frames(), 11, 7);
+    let (i, message) = run_failing(
+        &config(&endpoint),
+        r#"
+def main():
+    answer: str = analyze("q", "greet") on token(t):
+        zero = len("")
+        print(f"{1 / zero}")
+    print("unreachable")
+"#,
+    );
+    assert!(
+        message.contains("division by zero"),
+        "the handler's own error should surface: {message}"
+    );
+    assert_eq!(requests.load(Ordering::SeqCst), 1);
+    assert_eq!(
+        i.model_calls, 1,
+        "the call happened, whatever the handler did next"
+    );
+    assert_eq!(
+        i.budget.spent_calls(),
+        1,
+        "a call the budget never saw is a call that can be repeated for free"
+    );
+}
+
+/// A provider that accepts the request and then says nothing at all.
+fn spawn_silent_provider() -> (String, Arc<AtomicUsize>) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a free port");
+    let port = listener.local_addr().unwrap().port();
+    let requests = Arc::new(AtomicUsize::new(0));
+    let seen = Arc::clone(&requests);
+
+    std::thread::spawn(move || {
+        // Held so the connections stay open rather than being closed by the
+        // socket dropping, which would read as a refusal instead of silence.
+        let mut open = Vec::new();
+        for stream in listener.incoming() {
+            let Ok(stream) = stream else { return };
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                if line == "\r\n" || line == "\n" {
+                    break;
+                }
+            }
+            seen.fetch_add(1, Ordering::SeqCst);
+            open.push(stream);
+        }
+    });
+
+    (format!("http://127.0.0.1:{port}"), requests)
+}
+
+#[test]
+fn a_stream_that_never_answers_times_out_as_a_failed_outcome() {
+    // A provider that holds the connection open forever is the failure a
+    // deadline exists for. It has to end the call as a value the program
+    // matches on, inside the configured timeout, rather than hanging the run.
+    let (endpoint, requests) = spawn_silent_provider();
+    let config_text = format!(
+        r#"
+[models]
+default = "local:test-model"
+max_retries = 0
+timeout_secs = 1
+
+[models.local]
+endpoint = "{endpoint}"
+"#
+    );
+    let started = std::time::Instant::now();
+    let i = run(
+        &config_text,
+        r#"
+def main():
+    answer: str = analyze("q", "greet") on token(t):
+        print(f"piece: {t}")
+    match answer:
+        case Failed(why):
+            print("failed")
+        case Ok(text):
+            print(f"final: {text}")
+"#,
+    );
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(30),
+        "the deadline should end the call, not the test's patience"
+    );
+    assert_eq!(i.output, vec!["failed"]);
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        1,
+        "no retry was configured"
+    );
+}

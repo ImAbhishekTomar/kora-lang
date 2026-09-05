@@ -73,6 +73,56 @@ pub(crate) enum Observed {
     Text,
 }
 
+/// One line of a streamed body, reduced to what the delta parser needs.
+///
+/// Splitting this out is what keeps wire framing from leaking into two
+/// places it does not belong: the socket loop, which should only be reading
+/// lines, and [`crate::provider::parse_delta`], which should only be reading
+/// one provider's JSON shape. Everything above this point sees one internal
+/// protocol -- a sequence of payloads -- whichever form arrived.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Frame<'a> {
+    /// Nothing to parse. A keep-alive, a blank line, or an end marker: real
+    /// frames that carry no delta, and dropping them here is why a slow
+    /// answer is not more likely to fail than a fast one.
+    Empty,
+    /// A payload for the provider's delta parser.
+    Payload(&'a str),
+}
+
+/// Normalize one raw line into [`Frame`].
+///
+/// Accepts both wire forms rather than choosing by provider, deliberately.
+/// Server-sent events is what OpenAI speaks and newline-delimited JSON is
+/// what Ollama speaks, but the pairing is not fixed in practice: an
+/// OpenAI-compatible proxy behind an `[models.local]` endpoint answers a
+/// locally-configured model in SSE. Picking the framing from the configured
+/// provider would fail that deployment for a reason the user cannot see, and
+/// the two forms are not ambiguous -- an SSE payload announces itself.
+pub(crate) fn frame(line: &str) -> Frame<'_> {
+    // An SSE comment: a line whose first character is `:`. It exists to say
+    // nothing. Checked before the `data:` strip so a comment is never
+    // mistaken for a field.
+    if line.starts_with(':') {
+        return Frame::Empty;
+    }
+    // The space after `data:` is optional in the SSE grammar, and only one
+    // prefix is ever stripped, so a payload that itself begins with `data:`
+    // survives intact.
+    let payload = line
+        .strip_prefix("data:")
+        .map(|rest| rest.strip_prefix(' ').unwrap_or(rest))
+        .unwrap_or(line)
+        .trim();
+    // The end marker is framing, not content. Handling it here rather than
+    // in the delta parser is the difference between one provider's quirk and
+    // a shape every parser has to know about.
+    if payload.is_empty() || payload == "[DONE]" {
+        return Frame::Empty;
+    }
+    Frame::Payload(payload)
+}
+
 /// Pulls the value of the `answer` field out of a JSON object arriving in
 /// fragments.
 ///
@@ -408,30 +458,17 @@ fn send_streaming(
     let reader = std::io::BufReader::new(response.into_reader());
     for line in reader.lines() {
         let line = line.map_err(|e| {
-            // Deliberately not retryable: characters have reached the
-            // program by now, and a second attempt would write the answer
-            // twice.
-            ModelError::new(format!("stream from {url} broke mid-response: {e}"))
+            // Retryable as an error *kind*; whether it is actually retried
+            // is decided by `emitted` in the loop above. Marking it
+            // unretryable here would answer the question in the wrong
+            // place: a body can break after nothing but a keep-alive or a
+            // usage frame, and those show the program nothing, so the
+            // attempt is still safe to repeat.
+            ModelError::retryable(format!("stream from {url} broke mid-response: {e}"))
         })?;
-        // An SSE comment — a line whose first character is `:` — is a
-        // keep-alive with no event in it. Handing it on would fail the
-        // stream as "not JSON" over a frame that exists precisely to say
-        // nothing. Checked before the `data:` strip so that a comment is
-        // never mistaken for a field.
-        if line.starts_with(':') {
+        let Frame::Payload(payload) = frame(&line) else {
             continue;
-        }
-        // The space after `data:` is optional in the SSE grammar, and only
-        // one prefix is ever stripped, so a payload that itself begins with
-        // `data:` survives intact.
-        let payload = line
-            .strip_prefix("data:")
-            .map(|rest| rest.strip_prefix(' ').unwrap_or(rest))
-            .unwrap_or(&line)
-            .trim();
-        if payload.is_empty() {
-            continue;
-        }
+        };
         let (flow, observed) = on_line(payload)?;
         if observed == Observed::Text {
             *emitted = true;
@@ -454,6 +491,42 @@ mod tests {
             out.push_str(&extractor.push(fragment));
         }
         out
+    }
+
+    #[test]
+    fn framing_strips_server_sent_events() {
+        assert_eq!(frame("data: {\"a\":1}"), Frame::Payload("{\"a\":1}"));
+        // The space after `data:` is optional in the grammar.
+        assert_eq!(frame("data:{\"a\":1}"), Frame::Payload("{\"a\":1}"));
+    }
+
+    #[test]
+    fn framing_passes_json_lines_through_untouched() {
+        assert_eq!(frame("{\"a\":1}"), Frame::Payload("{\"a\":1}"));
+    }
+
+    #[test]
+    fn framing_drops_the_lines_that_carry_nothing() {
+        assert_eq!(frame(": ping"), Frame::Empty);
+        assert_eq!(frame(":"), Frame::Empty);
+        assert_eq!(frame(""), Frame::Empty);
+        assert_eq!(frame("   "), Frame::Empty);
+        assert_eq!(frame("data: [DONE]"), Frame::Empty);
+        assert_eq!(frame("[DONE]"), Frame::Empty);
+    }
+
+    #[test]
+    fn framing_strips_only_one_data_prefix() {
+        // A payload that itself begins with `data:` has to survive: the
+        // second prefix is content, not framing.
+        assert_eq!(frame("data: data: x"), Frame::Payload("data: x"));
+    }
+
+    #[test]
+    fn a_comment_is_not_mistaken_for_a_field() {
+        // Checked before the prefix strip, so a comment whose text happens
+        // to mention `data:` is still a comment.
+        assert_eq!(frame(": data: not a payload"), Frame::Empty);
     }
 
     #[test]
