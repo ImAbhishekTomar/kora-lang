@@ -237,6 +237,12 @@ pub struct Interpreter {
     pub journal: Arc<Mutex<Journal>>,
     /// This agent's position in the execution tree, for journal ordering.
     pub scope: journal::Scope,
+    /// Structural identity for every call, one table per module.
+    ///
+    /// Indexed by `ModuleId`, because spans are byte offsets into one file:
+    /// two modules both have a call starting at byte 40, and a single table
+    /// would give them the same identity.
+    ops: Vec<kora_syntax::ops::OperationIds>,
     /// Journal slot claimed for an in-flight model call.
     pending_slot: Option<(journal::Scope, usize)>,
     /// Whether `http` may reach loopback and private address ranges.
@@ -379,6 +385,7 @@ impl Interpreter {
                 kora_pkg::ROOT,
             )],
             current_module: modules::ROOT,
+            ops: Vec::new(),
             loading: Vec::new(),
             types: HashMap::new(),
             output: Vec::new(),
@@ -424,6 +431,7 @@ impl Interpreter {
     /// scope, but the program's entry point must not run.
     pub fn run_top_level(&mut self, program: &Program) -> Result<(), RuntimeError> {
         self.sync_root();
+        self.number_operations(modules::ROOT, program);
         // The entry file counts as loading while its top level runs, so a file
         // that imports it back is reported as the cycle it is rather than
         // silently seeing a half-built namespace.
@@ -2731,15 +2739,24 @@ impl Interpreter {
                 .map_err(|e| RuntimeError::new(e.message, span))?,
         };
         let model_label = format!("{:?}:{}", model.provider, model.model).to_lowercase();
-        let site = format!("{}:{}", self.program_name, span.line);
+        // Structural, so a comment above the call no longer moves it. The
+        // line-based spelling is kept alongside it purely to look up a
+        // cassette recorded before this changed.
+        let site = self.effect_site(span, "analyze");
+        let legacy_site = format!("{}:{}", self.program_name, span.line);
         let key = cassette::key_for(&site, &model_label, &prompt, &data_text, &media_key);
         // Cassettes are committed files, and an image one cannot be
         // regenerated without the model that recorded it. A miss on the
         // current key is checked against the one the older algorithm would
         // have produced, so an existing cassette keeps replaying while
         // everything recorded from now on carries the stronger key.
-        let legacy_key =
-            cassette::legacy_key_for(&site, &model_label, &prompt, &data_text, &legacy_media_key);
+        let legacy_key = cassette::legacy_key_for(
+            &legacy_site,
+            &model_label,
+            &prompt,
+            &data_text,
+            &legacy_media_key,
+        );
 
         // Budget check before spending: an exhausted budget stops the call
         // rather than discovering the overrun afterwards. Exhaustion is a
@@ -3498,6 +3515,7 @@ impl Interpreter {
         // branch still resolves the names of the file it was written in.
         let module_seed = self.snapshot_modules();
         let current_module = self.current_module;
+        let ops = self.ops.clone();
         let types = self.types.clone();
         let config = self.config.clone();
         let sinks = self.sinks.clone();
@@ -3550,6 +3568,7 @@ impl Interpreter {
                         &seed,
                         &module_seed,
                         current_module,
+                        &ops,
                         &types,
                         &packages,
                         &config,
@@ -3637,6 +3656,7 @@ fn run_one(
     seed: &[(String, Portable)],
     module_seed: &[ModuleSnapshot],
     current_module: ModuleId,
+    ops: &[kora_syntax::ops::OperationIds],
     types: &HashMap<String, Vec<FieldDef>>,
     packages: &Arc<kora_pkg::Resolution>,
     config: &Config,
@@ -3655,6 +3675,10 @@ fn run_one(
 ) -> WorkerResult {
     let mut interp = Interpreter::new();
     interp.restore_modules(module_seed, current_module);
+    // Without these a worker would fall back to line-based identity, so the
+    // same call would be named one way in the main thread and another inside
+    // a `parallel for` body.
+    interp.ops = ops.to_vec();
     interp.types = types.clone();
     interp.packages = packages.clone();
     interp.config = config.clone();
@@ -4020,7 +4044,7 @@ impl Interpreter {
                 tool_history: history.clone(),
             };
             if let Some(max_input_tokens) = self.context.max_input_tokens {
-                let context_site = format!("{}:{}#context", self.program_name, span.line);
+                let context_site = self.effect_site(span, "context");
                 match self.journal_prune_tool_history(
                     &request,
                     max_input_tokens,
@@ -4522,7 +4546,7 @@ impl Interpreter {
             .map(|v| v.unlabeled().to_string())
             .unwrap_or_default();
 
-        let site = format!("{}:{}#human", self.program_name, span.line);
+        let site = self.effect_site(span, "human");
         let mut journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
 
         let lookup = journal
@@ -4803,7 +4827,7 @@ impl Interpreter {
         if !journal.is_durable() {
             return Ok(true);
         }
-        let site = format!("{}:{}#output", self.program_name, span.line);
+        let site = self.effect_site(span, "output");
         match journal
             .next(&self.scope, &site)
             .map_err(|e| RuntimeError::new(e.to_string(), span))?
@@ -5026,6 +5050,46 @@ impl Interpreter {
     }
 
     /// The file the current module was loaded from, for error messages.
+    /// Record the structural identity of every call in one module's source.
+    ///
+    /// Called once per file, as it is loaded. Growing the table rather than
+    /// indexing it directly keeps this correct whichever order modules are
+    /// reached in.
+    fn number_operations(&mut self, module: ModuleId, program: &Program) {
+        let ids = kora_syntax::ops::assign(program);
+        if self.ops.len() <= module {
+            self.ops.resize_with(module + 1, Default::default);
+        }
+        self.ops[module] = ids;
+    }
+
+    /// The identity of one effect: which file, which call in it, and which
+    /// kind of effect the call performs.
+    ///
+    /// The middle part used to be a line number, which made an effect's
+    /// identity a property of the text rather than of the program: adding a
+    /// comment above a call invalidated its cassette entry and made an
+    /// in-flight durable run refuse to resume. See `kora_syntax::ops`.
+    ///
+    /// The fallback exists because a span can reach here from somewhere the
+    /// numbering never walked -- a synthesized call, or a construct added to
+    /// the AST without being added to that walk. Falling back to the line
+    /// keeps such an effect journaled and replayable; `L` marks it so the
+    /// two kinds of identity can never be mistaken for one another.
+    pub fn effect_site_for(&self, span: Span, kind: &str) -> String {
+        self.effect_site(span, kind)
+    }
+
+    fn effect_site(&self, span: Span, kind: &str) -> String {
+        let operation = self
+            .ops
+            .get(self.current_module)
+            .and_then(|table| table.get(span))
+            .map(str::to_string)
+            .unwrap_or_else(|| format!("L{}", span.line));
+        format!("{}:{}#{kind}", self.current_file(), operation)
+    }
+
     pub fn current_file(&self) -> String {
         if self.current_module == modules::ROOT {
             return self.program_name.clone();
@@ -5276,6 +5340,7 @@ impl Interpreter {
         })?;
 
         let id = self.modules.len();
+        self.number_operations(id, &program);
         self.modules.push(ModuleSpace::new(
             display.clone(),
             resolved.key,
@@ -5369,7 +5434,7 @@ impl Interpreter {
         span: Span,
         live: impl FnOnce() -> Value,
     ) -> Result<Value, RuntimeError> {
-        let site = format!("{}:{}#notes", self.program_name, span.line);
+        let site = self.effect_site(span, "notes");
         let mut journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
         if !journal.is_durable() {
             drop(journal);
@@ -5423,7 +5488,7 @@ impl Interpreter {
         if !journal.is_durable() {
             return Ok(live());
         }
-        let site = format!("{}:{}#{what}", self.program_name, span.line);
+        let site = self.effect_site(span, what);
         match journal
             .next(&self.scope, &site)
             .map_err(|e| RuntimeError::new(e.to_string(), span))?
@@ -6120,7 +6185,7 @@ impl Interpreter {
 
         // A call into Python is nondeterministic as far as the journal is
         // concerned, so a durable run replays it rather than repeating it.
-        let site = format!("{}:{}#python", self.program_name, span.line);
+        let site = self.effect_site(span, "python");
         if let Some(recorded) = self.journal_lookup(&site, span)? {
             return Ok(python_result_value(&recorded));
         }

@@ -4,6 +4,7 @@ pub mod ast;
 pub mod error;
 pub mod lexer;
 pub mod lines;
+pub mod ops;
 pub mod parser;
 pub mod token;
 

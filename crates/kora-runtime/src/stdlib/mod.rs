@@ -110,7 +110,7 @@ pub(crate) fn journaled_write(
     span: Span,
     perform: impl FnOnce(&mut Interpreter) -> Value,
 ) -> Result<Value, RuntimeError> {
-    let site = format!("{}:{}#{func}", interp.program_name, span.line);
+    let site = interp.effect_site_for(span, func);
     match interp.journal_write_start(&site, func, span)? {
         WriteSlot::Done(recorded) => return Ok(decode_outcome(&recorded)),
         WriteSlot::Interrupted(name) => {
@@ -143,7 +143,7 @@ pub(crate) fn journaled_read(
     perform: impl FnOnce(&mut Interpreter) -> Value,
 ) -> Result<Value, RuntimeError> {
     let outcome = perform(interp);
-    let site = format!("{}:{}#{func}", interp.program_name, span.line);
+    let site = interp.effect_site_for(span, func);
     interp.journal_input(&site, func, &digest(&outcome), span)?;
     Ok(outcome)
 }

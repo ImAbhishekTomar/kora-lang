@@ -37,6 +37,22 @@ impl Drop for Scratch {
 
 const CONFIG: &str = "[models]\ndefault = \"local:test-model\"\n";
 
+/// The operation id of a call in `src`, the way the runtime names it.
+///
+/// Computed rather than written down: effect identity is structural now, so
+/// a fixture that hard-coded it would be restating the numbering instead of
+/// following it.
+fn call_op(src: &str, callee: &str) -> String {
+    let program = parse(src).expect("the fixture should parse");
+    let ids = kora_syntax::ops::assign(&program);
+    // A call's span begins at its opening parenthesis, not at the callee.
+    let start = src.find(callee).expect("the call should be in the fixture") + callee.len() - 1;
+    let span = kora_syntax::token::Span::new(start, start, 0, 0);
+    ids.get(span)
+        .unwrap_or_else(|| panic!("the call at byte {start} was not numbered"))
+        .to_string()
+}
+
 /// A path as a Kora string literal.
 ///
 /// Windows separators are backslashes, and a backslash in Kora source starts
@@ -345,7 +361,7 @@ fn a_write_interrupted_before_its_outcome_was_recorded_stops_the_resume() {
     run.entries.push(journal::Entry {
         scope: Scope::root(),
         seq: 0,
-        site: "test.ko:4#fs.append".into(),
+        site: format!("test.ko:{}#fs.append", call_op(&src, "fs.append(")),
         effect: Effect::Attempted {
             name: "fs.append".into(),
         },
