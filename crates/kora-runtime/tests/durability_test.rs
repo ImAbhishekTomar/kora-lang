@@ -37,6 +37,16 @@ impl Drop for Scratch {
 
 const CONFIG: &str = "[models]\ndefault = \"local:test-model\"\n";
 
+/// A path as a Kora string literal.
+///
+/// Windows separators are backslashes, and a backslash in Kora source starts
+/// an escape — `D:\a\kora-lang\...` is `\a`, which is not one. Forward
+/// slashes are accepted by the Windows APIs underneath, so this is a change
+/// of spelling rather than of meaning.
+fn ko_path(path: &std::path::Path) -> String {
+    path.to_str().expect("a UTF-8 path").replace('\\', "/")
+}
+
 /// Run `src` against a durable journal, returning (output, run).
 fn run_durable(src: &str, run: Run, path: PathBuf) -> (Vec<String>, Run, Option<String>) {
     let program = parse(src).unwrap_or_else(|e| panic!("parse error: {e}\n{src}"));
@@ -305,7 +315,7 @@ fn a_write_replays_from_the_journal_instead_of_happening_twice() {
     let scratch = Scratch::new("write-once");
     let path = scratch.run_path("r1");
     let out = scratch.0.join("out.txt");
-    let src = WRITE_PROGRAM.replace("OUT", out.to_str().unwrap());
+    let src = WRITE_PROGRAM.replace("OUT", &ko_path(&out));
 
     let (_, run, err) = run_durable(&src, Run::new("r1".into(), "test.ko".into()), path.clone());
     assert!(err.is_none(), "{err:?}");
@@ -329,7 +339,7 @@ fn a_write_interrupted_before_its_outcome_was_recorded_stops_the_resume() {
     let scratch = Scratch::new("write-unknown");
     let path = scratch.run_path("r1");
     let out = scratch.0.join("out.txt");
-    let src = WRITE_PROGRAM.replace("OUT", out.to_str().unwrap());
+    let src = WRITE_PROGRAM.replace("OUT", &ko_path(&out));
 
     let mut run = Run::new("r1".into(), "test.ko".into());
     run.entries.push(journal::Entry {
