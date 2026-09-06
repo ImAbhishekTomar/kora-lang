@@ -110,6 +110,15 @@ pub struct ModelConfig {
     /// program that gives up on the first 429 is a program that gives up
     /// several times an hour.
     pub max_retries: u32,
+    /// When an enclosing `budget: max_seconds` runs out, if one is in force.
+    ///
+    /// A meter checked before dispatch bounds *starting* a call. Carrying the
+    /// same deadline into the transport is what bounds one already in flight:
+    /// every attempt is cut short by it, and the backoff between attempts
+    /// stops rather than sleeping past it. Stored as the instant it expires,
+    /// for the reason the budget stores it that way — every worker in a
+    /// `parallel for` is then measured against one moment.
+    pub deadline: Option<std::time::Instant>,
 }
 
 #[derive(Debug, Clone, PartialEq)]

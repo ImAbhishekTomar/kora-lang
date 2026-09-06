@@ -206,7 +206,7 @@ fn walk_stmt(stmt: &Stmt, file: &str, out: &mut Vec<DeclassifySite>) {
         | StmtKind::Expr(_)
         | StmtKind::TypeDef { .. }
         | StmtKind::Return(_)
-        | StmtKind::Break
+        | StmtKind::Break(_)
         | StmtKind::Continue
         | StmtKind::Use { .. }
         | StmtKind::UseFile { .. }

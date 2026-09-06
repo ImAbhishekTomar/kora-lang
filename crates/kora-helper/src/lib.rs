@@ -48,11 +48,14 @@
 
 use std::io::{Read, Write};
 use std::path::PathBuf;
-use std::process::{Child, ChildStdin, Command, Stdio};
+use std::process::{Child, ChildStdin, Stdio};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
 use std::time::Duration;
 
 use serde_json::{json, Value};
+
+pub mod sandbox;
+pub use sandbox::{Applied, Needs};
 
 /// A frame larger than this is refused rather than allocated. A helper is a
 /// separate program, and a separate program can lie about how much it is
@@ -91,6 +94,9 @@ pub struct Config {
     /// How long one call may take before the helper is killed. A helper that
     /// hangs must not hang the run.
     pub timeout_secs: u64,
+    /// What the helper process is allowed to reach. Everything absent is
+    /// withheld by the operating system, not by convention.
+    pub needs: Needs,
 }
 
 impl Config {
@@ -99,6 +105,9 @@ impl Config {
             program,
             args: Vec::new(),
             timeout_secs: 120,
+            // Confined unless the manifest asked otherwise and the importer
+            // agreed.
+            needs: Needs::default(),
         }
     }
 }
@@ -113,12 +122,22 @@ pub struct Response {
 /// One request in, one response out.
 pub trait Transport: Send {
     fn call(&mut self, header: Value, blobs: Vec<Vec<u8>>) -> Result<Response, HelperError>;
+
+    /// Cut this transport's own timeout short for the calls that follow.
+    ///
+    /// A `budget: max_seconds` bounds the work a scope may do, and a helper
+    /// grinding on a page is work. `None` restores the configured timeout.
+    fn limit_next(&mut self, _within: Option<Duration>) {}
 }
 
 /// A running helper.
 pub struct Worker {
     transport: Box<dyn Transport>,
     next_id: u64,
+    /// What confinement the operating system actually applied, so the runtime
+    /// can report an unconfined helper rather than implying a sandbox that is
+    /// not there.
+    confinement: Applied,
 }
 
 impl std::fmt::Debug for Worker {
@@ -129,9 +148,12 @@ impl std::fmt::Debug for Worker {
 
 impl Worker {
     pub fn start(config: &Config) -> Result<Worker, HelperError> {
+        let transport = ProcessTransport::spawn(config)?;
+        let confinement = transport.confinement;
         Ok(Worker {
-            transport: Box::new(ProcessTransport::spawn(config)?),
+            transport: Box::new(transport),
             next_id: 1,
+            confinement,
         })
     }
 
@@ -140,7 +162,13 @@ impl Worker {
         Worker {
             transport,
             next_id: 1,
+            confinement: Applied::None,
         }
+    }
+
+    /// What the operating system applied to this helper.
+    pub fn confinement(&self) -> Applied {
+        self.confinement
     }
 
     /// Call `function(args...)` with optional binary input.
@@ -153,7 +181,9 @@ impl Worker {
         function: &str,
         args: Vec<Value>,
         blobs: Vec<Vec<u8>>,
+        within: Option<Duration>,
     ) -> Result<Result<Response, HelperError>, HelperError> {
+        self.transport.limit_next(within);
         let id = self.next_id;
         self.next_id += 1;
 
@@ -195,6 +225,10 @@ struct ProcessTransport {
     stdin: ChildStdin,
     frames: Receiver<Result<Response, HelperError>>,
     timeout: Duration,
+    /// A tighter bound for the next call, set from the budget deadline in
+    /// force. Never loosens `timeout`.
+    limit: Option<Duration>,
+    confinement: Applied,
     /// Once the far end is gone or out of step, every later call fails the
     /// same way rather than blocking on a pipe nobody is reading.
     broken: Option<String>,
@@ -202,8 +236,12 @@ struct ProcessTransport {
 
 impl ProcessTransport {
     fn spawn(config: &Config) -> Result<ProcessTransport, HelperError> {
-        let mut child = Command::new(&config.program)
-            .args(&config.args)
+        // Confinement is decided before the pipes are attached: on macOS it
+        // replaces the command with a sandbox wrapper around it, and stdio
+        // set on the old one would be lost.
+        let (mut command, confinement) =
+            sandbox::command(&config.program, &config.args, config.needs);
+        let mut child = command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             // The helper's own stderr goes to the terminal, so a helper that
@@ -243,6 +281,8 @@ impl ProcessTransport {
             stdin,
             frames,
             timeout: Duration::from_secs(config.timeout_secs.max(1)),
+            limit: None,
+            confinement,
             broken: None,
         })
     }
@@ -258,6 +298,10 @@ impl ProcessTransport {
 }
 
 impl Transport for ProcessTransport {
+    fn limit_next(&mut self, within: Option<Duration>) {
+        self.limit = within;
+    }
+
     fn call(&mut self, mut header: Value, blobs: Vec<Vec<u8>>) -> Result<Response, HelperError> {
         if let Some(why) = &self.broken {
             return Err(HelperError::new(why.clone()));
@@ -281,12 +325,18 @@ impl Transport for ProcessTransport {
             return Err(self.kill(format!("the helper stopped listening: {e}")));
         }
 
-        match self.frames.recv_timeout(self.timeout) {
+        // The tighter of the helper's configured timeout and whatever the
+        // budget has left. A budget only ever narrows this.
+        let wait = match self.limit {
+            Some(left) => self.timeout.min(left),
+            None => self.timeout,
+        };
+        match self.frames.recv_timeout(wait) {
             Ok(Ok(response)) => Ok(response),
             Ok(Err(e)) => Err(self.kill(e.message)),
             Err(RecvTimeoutError::Timeout) => Err(self.kill(format!(
                 "the helper did not answer within {} seconds",
-                self.timeout.as_secs()
+                wait.as_secs()
             ))),
             Err(RecvTimeoutError::Disconnected) => {
                 Err(self.kill("the helper exited; see its output above"))
@@ -441,7 +491,7 @@ mod tests {
             value: json!({"ok": false, "error": "page 3 is not an image"}),
             blobs: Vec::new(),
         }])));
-        let outcome = worker.call("render", vec![], vec![]).unwrap();
+        let outcome = worker.call("render", vec![], vec![], None).unwrap();
         assert_eq!(outcome.unwrap_err().message, "page 3 is not an image");
     }
 }

@@ -588,14 +588,48 @@ journaled for the same reason `max_seconds` journals its refusal: a replay
 would race again, and could answer differently, or answer at all where the
 first run did not.
 
-A branch already running is **not** interrupted — the same honest limit
-`max_seconds` has. No further work is started, but a request already sent runs
-to its own transport timeout. Interrupting an in-flight call is the same "did
-it happen" problem that makes a tool call unretryable, and it is not solved
-here.
-
 `first` is contextual, like `stream`: a program that already uses `first` as a
 variable or a function name keeps working.
+
+### `break`: stop a fan-out that is collecting
+
+`first` answers a question. `break` stops a loop that is still a map:
+
+```python
+scanned = parallel for page in pages:
+    if looks_wrong(page):
+        break
+    return summarize(page)
+```
+
+The loop still yields a **list**. `break` says the rest is not worth running —
+a scan that has seen enough, a search whose answer was written somewhere else.
+`break <value>` also contributes the stopping branch's own find, so the branch
+that decided to stop is not silent:
+
+```python
+found = parallel for candidate in candidates:
+    if matches(candidate):
+        break candidate
+    return 0
+```
+
+`break <value>` is only legal inside a `parallel for`, because it is the only
+loop with somewhere to put the value; anywhere else it is a check-time error.
+
+**Which of the two.** Reach for `first` whenever the loop is asking a question,
+which is most of the time: it yields the answer directly, its winner does not
+depend on scheduling, and it replays. `break` is for the case `first` does not
+cover — a fan-out whose collected results you still want, stopped part way. Its
+result list is *not* replay-stable: which branches finished before the stop
+depends on how the threads were scheduled, so `len(results)` differs between
+two runs on the same input. Do not build a durable run's logic on that number.
+
+> A branch is let go of at a statement boundary, not mid-statement, whichever
+> of the two stopped it. A thread cannot be killed, and a half-written effect
+> is worse than a branch that runs a moment too long. A request already sent
+> runs to its own deadline — which is what `budget(max_seconds = N)` bounds.
+
 
 > Running many branches against one local model is slower than it looks:
 > they contend for the same GPU. Cassettes make repeat runs free.
@@ -642,11 +676,15 @@ rather than a duration each branch starts for itself — so every worker in a
 seconds. A scope out of both time and tokens reports `seconds`, because
 naming tokens would send you to raise a limit that was not what stopped you.
 
-Two things it does **not** do. It does not interrupt work already in flight:
-like every other meter, it is checked before a model call and between tool
-loop turns, so a call already sent runs to its own timeout (`[models]
-timeout_secs`). And it does not bound computation — a scope spinning in a
-loop that calls no model is never refused, because a budget bounds agent
+The deadline reaches work already sent. Every model call, HTTP request, MCP
+tool call, and package-helper call inside the scope is given the smaller of
+its own timeout and what the scope has left, and the wait between retries
+stops rather than sleeping past it — so a provider that accepts a connection
+and goes quiet no longer holds the run for the full `[models] timeout_secs`.
+The outcome is `Failed`, exactly as a transport timeout already produced.
+
+One thing it does **not** do: it does not bound computation. A scope spinning
+in a loop that calls no model is never refused, because a budget bounds agent
 work rather than CPU.
 
 In a durable run the refusal is journaled rather than recomputed. Every other
@@ -1131,6 +1169,7 @@ kills.
 [package.helper]
 protocol = "stdio/v1"
 timeout_secs = 120
+needs = []                        # no network, no writing files
 
 [package.helper.aarch64-apple-darwin]
 url = "https://.../helper-0.1.0-aarch64-apple-darwin.tar.gz"
@@ -1166,6 +1205,31 @@ helper cannot: it gets bytes rather than paths, so it can only see what it was
 handed; it is killed when it stops answering, so it cannot hang the run; and a
 crash in it is an `Err`, not a dead program. Kora never loads native code into
 itself, and that is not a setting.
+
+#### What a helper is allowed to reach
+
+`needs` is the helper's own capability list, and it is empty by default —
+a helper that says nothing about what it needs gets nothing. The operating
+system enforces it, not a convention: a seccomp filter on Linux, a sandbox
+profile on macOS. A confined helper cannot open a socket, cannot write to a
+file, and cannot read the memory of the `kora` process that started it.
+
+```toml
+[package.helper]
+needs = ["net"]                   # a helper that must fetch something
+```
+
+Declaring it is not the same as getting it. `needs = ["net"]` is refused
+unless the program that imported the package holds `net` itself, exactly like
+every other capability: a package cannot pass on authority it does not have.
+Only `net` and `fs` can be asked for — they are what an operating system can
+be told to withhold from a separate process.
+
+Two honest limits. It is a denylist rather than a jail, so what is claimed is
+what is listed above and not "a helper can do nothing else". And Windows has
+no mechanism available to an unprivileged process, so a helper there runs with
+`kora`'s rights and says so on stderr rather than implying a sandbox that is
+not present.
 
 `kora install` fetches only the entry for the machine it runs on, and only
 when a program actually imports the package — so a program that does not use

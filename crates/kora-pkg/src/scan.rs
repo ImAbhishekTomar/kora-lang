@@ -104,7 +104,7 @@ fn walk(stmts: &[Stmt], include_tests: bool, out: &mut Imports) {
             | StmtKind::UseMcp { .. }
             | StmtKind::Assert { .. }
             | StmtKind::Return(_)
-            | StmtKind::Break
+            | StmtKind::Break(_)
             | StmtKind::Continue
             | StmtKind::Pass => {}
         }

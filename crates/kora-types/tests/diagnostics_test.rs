@@ -253,3 +253,41 @@ fn an_error_is_an_error_and_not_a_warning() {
     );
     assert!(!said.is_empty(), "an undefined name is an error");
 }
+
+/// `break <value>` is only meaningful where there is a results list to put the
+/// value in. An ordinary loop has none, so the value is refused rather than
+/// evaluated and dropped -- a silently ignored value is a bug that reads as
+/// working code.
+#[test]
+fn break_carries_a_value_only_inside_a_parallel_for() {
+    let inside = errors("def main():\n    out = parallel for n in [1, 2]:\n        break n\n");
+    assert!(inside.is_empty(), "{inside:?}");
+
+    for loop_head in ["for n in [1, 2]:", "while true:"] {
+        let outside = joined(&format!("def main():\n    {loop_head}\n        break 1\n"));
+        assert!(
+            outside.contains("only carry a value inside a `parallel for`"),
+            "{loop_head}: {outside}"
+        );
+    }
+
+    // A plain loop *inside* a fan-out is still a plain loop: its `break`
+    // leaves that loop and never reaches the fan-out.
+    let nested = joined(
+        "def main():\n    out = parallel for n in [1, 2]:\n        for m in [1]:\n            break m\n",
+    );
+    assert!(
+        nested.contains("only carry a value inside a `parallel for`"),
+        "{nested}"
+    );
+
+    // Neither does a function defined inside one: the call returns before the
+    // loop sees anything.
+    let in_function = joined(
+        "def main():\n    out = parallel for n in [1, 2]:\n        def inner():\n            break n\n        return 1\n",
+    );
+    assert!(
+        in_function.contains("only carry a value inside a `parallel for`"),
+        "{in_function}"
+    );
+}

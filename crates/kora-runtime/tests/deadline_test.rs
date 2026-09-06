@@ -87,6 +87,27 @@ fn spawn_provider() -> (String, Arc<AtomicUsize>) {
     (format!("http://127.0.0.1:{port}"), requests)
 }
 
+/// A provider that accepts the connection and then never answers.
+///
+/// This is the case a deadline could not previously touch: the request is
+/// already sent, so no meter checked before dispatch will ever see it again,
+/// and it runs to `[models] timeout_secs` -- ten minutes by default. The
+/// listener is held so the port stays open for the whole test.
+fn spawn_wedged_provider() -> (String, TcpListener) {
+    let listener = TcpListener::bind("127.0.0.1:0").expect("a free port");
+    let port = listener.local_addr().unwrap().port();
+    let accepting = listener.try_clone().expect("a second handle");
+    std::thread::spawn(move || {
+        let mut held = Vec::new();
+        for stream in accepting.incoming() {
+            let Ok(stream) = stream else { return };
+            // Held open, never written to.
+            held.push(stream);
+        }
+    });
+    (format!("http://127.0.0.1:{port}"), listener)
+}
+
 fn config(endpoint: &str) -> String {
     format!(
         r#"
@@ -339,4 +360,119 @@ fn a_budget_with_no_limits_at_all_is_still_refused_by_the_parser() {
         "got: {}",
         err.message
     );
+}
+
+/// The deadline reaches a request that has already been sent.
+///
+/// Before this, `max_seconds` bounded the decision to make a call and nothing
+/// else: a provider that accepted the connection and went quiet held the run
+/// for the full `[models] timeout_secs`. The transport now carries the
+/// smaller of its own timeout and what the budget has left, so the scope ends
+/// roughly when it said it would.
+#[test]
+fn a_deadline_cuts_short_a_request_already_in_flight() {
+    let (endpoint, _listener) = spawn_wedged_provider();
+    // Ten minutes if the deadline is not honoured; two seconds if it is.
+    let config_text = format!(
+        r#"
+[models]
+default = "local:test-model"
+max_retries = 0
+timeout_secs = 600
+
+[models.local]
+endpoint = "{endpoint}"
+"#
+    );
+
+    let src = r#"
+def main():
+    with budget(max_seconds = 2):
+        answer: str = analyze("q", "greet")
+        match answer:
+            case Ok(text):
+                print("ok")
+            case Exhausted(meter):
+                print(f"out of {meter}")
+            case Uncertain(reason):
+                print("uncertain")
+            case Failed(why):
+                print("failed")
+"#;
+
+    let started = std::time::Instant::now();
+    let out = run(&config_text, src);
+    let elapsed = started.elapsed();
+
+    assert_eq!(out, vec!["failed"], "the call should end as a failure");
+    assert!(
+        elapsed < std::time::Duration::from_secs(30),
+        "the call ran for {elapsed:?}; the deadline did not reach it"
+    );
+}
+
+/// A `parallel for` where one branch finds the answer stops the rest.
+///
+/// The bound is deliberately loose: how many branches are in flight when the
+/// first one breaks depends on the machine. What is being asserted is that
+/// the loop stops being proportional to the input, which is the whole point.
+#[test]
+fn a_break_stops_a_fan_out_from_starting_more_work() {
+    let src = r#"
+def main():
+    found = parallel for n in range(400):
+        if n > 0 and n % 89 == 0:
+            break n
+        return 0
+    print(f"{len(found)}")
+    print(f"{sum(found)}")
+"#;
+    let program = parse(src).expect("parses");
+    let mut i = Interpreter::new();
+    i.program_name = "test.ko".into();
+    i.run(&program).expect("the run succeeds");
+
+    let ran: usize = i.output[0].trim().parse().expect("a count");
+    assert!(
+        ran < 300,
+        "{ran} of 400 branches ran; the break did nothing"
+    );
+    // The branch that broke contributed its find; every other branch that
+    // finished contributed zero.
+    let total: i64 = i.output[1].trim().parse().expect("a total");
+    assert!(total >= 89, "the breaking branch's value was lost");
+}
+
+/// A branch let go of part way through is not a failure, and it does not
+/// leave a hole in the results either: it produced nothing, exactly like a
+/// branch that was never started.
+#[test]
+fn a_stopped_branch_is_neither_an_error_nor_an_empty_slot() {
+    let src = r#"
+def slow(n: int) -> int:
+    total = 0
+    for i in range(200000):
+        total = total + i
+    return total
+
+def main():
+    out = parallel for n in range(8):
+        if n == 0:
+            break 7
+        x = slow(n)
+        return x
+    print(f"{len(out)}")
+    print(f"{sum(out)}")
+"#;
+    let program = parse(src).expect("parses");
+    let mut i = Interpreter::new();
+    i.program_name = "test.ko".into();
+    // A branch cut short mid-`slow()` must not surface as a runtime error.
+    i.run(&program).expect("a stopped branch is not a failure");
+
+    let slots: usize = i.output[0].trim().parse().expect("a count");
+    assert!(slots >= 1, "the breaking branch kept no slot");
+    // Every slot holds an int: a stopped branch contributed nothing rather
+    // than a `none` for `sum` to trip over.
+    let _: i64 = i.output[1].trim().parse().expect("summable results");
 }

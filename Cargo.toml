@@ -66,3 +66,7 @@ roxmltree = "0.21"
 lsp-server = "0.7"
 lsp-types = "0.95"
 rusqlite = { version = "0.32", features = ["bundled"] }
+# Confining a package helper: `prctl`, `setrlimit`, and the syscall numbers a
+# seccomp filter compares against. Unix only, and already in the tree through
+# `rusqlite`.
+libc = "0.2"

@@ -34,6 +34,7 @@ no API key and no model installed.
 | [23_yaml.ko](23_yaml.ko) | YAML config: a duplicate key, the Norway problem, and an alias bomb, all as values | `kora run`, `kora test` |
 | [24_xml.ko](24_xml.ko) | XML: a DOCTYPE refused, namespaces kept, character data whole, one child still a list | `kora run`, `kora test` |
 | [25_race.ko](25_race.ko) | `parallel for ... first`: stopping a fan-out the moment one branch answers | `kora run`, `kora test` |
+| [26_stopping_early.ko](26_stopping_early.ko) | `break` out of a fan-out that is collecting, and a deadline that reaches work already sent | `kora run`, `kora test` |
 
 ## The pattern set
 

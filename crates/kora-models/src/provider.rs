@@ -61,7 +61,44 @@ pub fn parse_model_spec(spec: &str) -> Result<ModelConfig, ModelError> {
         max_output_tokens: 4096,
         timeout_secs: DEFAULT_TIMEOUT_SECS,
         max_retries: DEFAULT_MAX_RETRIES,
+        // A model spec names a model; a deadline comes from the budget in
+        // force where the call is written, and is set per call.
+        deadline: None,
     })
+}
+
+/// How long one attempt may take: this config's own timeout, cut short by an
+/// enclosing deadline when there is one.
+///
+/// Never zero. A transport handed a zero timeout usually reads it as "no
+/// timeout", which is the opposite of what an expired deadline means. The
+/// budget refuses an expired scope before dispatch, so the one-second floor
+/// covers a deadline that expires between that check and the send.
+pub(crate) fn attempt_timeout(config: &crate::ModelConfig) -> std::time::Duration {
+    // Zero is how "no timeout" sneaks back in, so it is clamped rather than
+    // honoured -- the same rule the `http` module applies.
+    let own = std::time::Duration::from_secs(config.timeout_secs.max(1));
+    match config.deadline {
+        Some(end) => own
+            .min(end.saturating_duration_since(std::time::Instant::now()))
+            .max(std::time::Duration::from_secs(1)),
+        None => own,
+    }
+}
+
+/// Whether waiting `delay` would carry the call past its deadline.
+///
+/// A retry that would land after the deadline is not worth taking: the
+/// attempt it makes would be refused on arrival, and sleeping first only
+/// delays the failure the program is already going to see.
+pub(crate) fn backoff_fits(
+    deadline: Option<std::time::Instant>,
+    delay: std::time::Duration,
+) -> bool {
+    match deadline {
+        Some(end) => std::time::Instant::now() + delay < end,
+        None => true,
+    }
 }
 
 pub(crate) fn step_with(
@@ -472,12 +509,15 @@ fn sanitize_schema_name(name: &str) -> String {
 /// unit that is retried: a tool loop that has already run three turns does not
 /// start over because the fourth request was rate limited.
 pub(crate) fn transport_for(config: &ModelConfig) -> Box<Transport> {
-    // Zero is how "no timeout" sneaks back in, so it is clamped rather than
-    // honoured -- the same rule the `http` module applies.
-    let timeout = std::time::Duration::from_secs(config.timeout_secs.max(1));
     let attempts = config.max_retries.saturating_add(1);
+    // Read per attempt rather than once: a deadline shrinks while the call
+    // runs, so the second attempt gets what is left, not what was left when
+    // the transport was built.
+    let config = config.clone();
     Box::new(move |url: &str, headers: &[(&str, String)], body: &Value| {
-        retry_loop(attempts, || send(url, headers, body, timeout))
+        retry_loop(attempts, config.deadline, || {
+            send(url, headers, body, attempt_timeout(&config))
+        })
     })
 }
 
@@ -486,7 +526,11 @@ pub(crate) fn transport_for(config: &ModelConfig) -> Box<Transport> {
 /// Split from the socket so the policy can be tested without one: how many
 /// attempts a 429 is worth is the part that will be argued about, and it
 /// should not need a listening port to check.
-fn retry_loop<F>(attempts: u32, mut attempt_once: F) -> Result<String, ModelError>
+fn retry_loop<F>(
+    attempts: u32,
+    deadline: Option<std::time::Instant>,
+    mut attempt_once: F,
+) -> Result<String, ModelError>
 where
     F: FnMut() -> Result<String, (ModelError, Option<u64>)>,
 {
@@ -500,7 +544,14 @@ where
         if !error.retryable || attempt >= attempts {
             return Err(error);
         }
-        std::thread::sleep(retry_delay(attempt, retry_after));
+        let delay = retry_delay(attempt, retry_after);
+        // The deadline outranks the retry policy. Sleeping past it and then
+        // sending would spend time the program said it did not have, on an
+        // attempt the budget would refuse anyway.
+        if !backoff_fits(deadline, delay) {
+            return Err(error);
+        }
+        std::thread::sleep(delay);
     }
 }
 
@@ -922,7 +973,7 @@ mod retry_tests {
         // Counts attempts rather than sleeping: the policy is what is under
         // test, not the clock.
         let attempts = std::cell::Cell::new(0);
-        let result = retry_loop(3, || {
+        let result = retry_loop(3, None, || {
             attempts.set(attempts.get() + 1);
             Err((ModelError::retryable("nope"), Some(0)))
         });
@@ -933,7 +984,7 @@ mod retry_tests {
     #[test]
     fn an_unretryable_failure_is_reported_on_the_first_attempt() {
         let attempts = std::cell::Cell::new(0);
-        let result = retry_loop(3, || {
+        let result = retry_loop(3, None, || {
             attempts.set(attempts.get() + 1);
             Err((ModelError::new("bad api key"), None))
         });
@@ -944,7 +995,7 @@ mod retry_tests {
     #[test]
     fn a_retry_that_succeeds_returns_the_answer() {
         let attempts = std::cell::Cell::new(0);
-        let result = retry_loop(3, || {
+        let result = retry_loop(3, None, || {
             attempts.set(attempts.get() + 1);
             if attempts.get() < 2 {
                 Err((ModelError::retryable("try again"), Some(0)))

@@ -5,6 +5,38 @@ principle in [AGENTS.md](AGENTS.md).
 
 ## Current
 
+- [x] **Stopping a fan-out that is still collecting, and a deadline that
+      reaches work already sent.** `parallel for ... first` covers the loop
+      that asks a question; `break` covers the loop that is still a map and
+      has seen enough. The list still comes back, and `break <value>`
+      contributes the stopping branch's own find — refused at check time
+      anywhere else, because an ordinary loop has nowhere to put it. Both
+      spellings now share one stop flag, and both let a branch already
+      running leave at its next statement rather than run to completion,
+      which `first` did not do before. `break`'s result length depends on
+      scheduling and is deliberately *not* replay-stable; `first` is the one
+      to reach for when that matters, and `DECISIONS.md` says so rather than
+      burying it.
+      The other half: `budget(max_seconds = N)` now travels into every
+      transport, so model calls, HTTP requests, MCP tool calls, and
+      package-helper calls each take the smaller of their own timeout and
+      what the scope has left, and the backoff between retries stops rather
+      than sleeping past the deadline. A provider that accepts a connection
+      and goes quiet no longer holds the run for `[models] timeout_secs`.
+      `examples/26_stopping_early.ko`,
+      `crates/kora-runtime/tests/deadline_test.rs`, docs, site, and
+      `DECISIONS.md`.
+- [x] **Helpers are confined, not merely separated.** `[package.helper] needs`
+      is empty by default and the operating system enforces it — a seccomp
+      filter on Linux (`crates/kora-helper/src/sandbox.rs`), a `sandbox-exec`
+      profile on macOS. A confined helper cannot open a socket, write a file,
+      or `ptrace` the interpreter. The author declares; the importer grants:
+      `needs = ["net"]` is refused unless the importing program holds `net`.
+      It is a denylist rather than a jail, and Windows has no mechanism
+      available to an unprivileged process — both said out loud rather than
+      implied. `crates/kora-helper/tests/sandbox_test.rs` checks the macOS
+      confinement against the operating system itself.
+
 - [x] **Documentation and editor consistency pass.** Five features landed in
       quick succession, and the prose that describes the language drifted
       behind them in six places. Fixed, and where possible made
@@ -289,8 +321,15 @@ running beside each other -- **4.79s to 0.82s on 400 rows from a
 - [ ] Publish the `pdf_render` helper as per-platform artifacts, so the
       package names a url and sha256 instead of a build path. Until then the
       example builds the helper from source.
-- [ ] OS-level sandboxing for helpers (seccomp, `sandbox_init`). A helper is
-      isolated from the interpreter today, not confined by the system.
+- [x] OS-level sandboxing for helpers. `[package.helper] needs` is empty by
+      default; a seccomp filter on Linux and a `sandbox-exec` profile on macOS
+      withhold the network and filesystem writes, and `ptrace` /
+      `process_vm_*` are denied whatever the package asked for. It is a
+      denylist rather than a jail, and Windows is unconfined and says so —
+      both stated in `DECISIONS.md` rather than implied.
+- [ ] Windows confinement, and an allowlist rather than a denylist. Both are
+      the same argument as WASM components, which is where the jail properly
+      belongs; neither is worth a second sandbox to maintain before then.
 
 - [x] Refresh the documentation welcome page with a more playful guided
       experience, responsive styling, and reduced-motion-safe animation.
@@ -348,6 +387,13 @@ running beside each other -- **4.79s to 0.82s on 400 rows from a
       recorded to the cassette and the journal, since a handler that counts
       them must see the same run twice. `write` is `print` without the
       newline.
+- [x] **Stopping a fan-out.** `break` inside a `parallel for` ends the loop
+      and `break <value>` carries the branch's find. Branches that never
+      started, and branches let go of part way through, keep no slot in the
+      results.
+- [x] **A deadline that reaches work in flight.** `budget(max_seconds = N)`
+      travels into every transport, so a provider that accepts a connection
+      and goes quiet no longer holds the run for `[models] timeout_secs`.
 - [ ] Streaming alongside tools, and streaming across `parallel for` — both
       refused today rather than silently degraded. Budget metering is still
       per call, not per token: providers report usage only when a stream
@@ -428,7 +474,7 @@ remain; **Build** means it is not implemented yet.
 | P0 | Structured output | **Have** | Declared Kora types become validated model JSON schemas | Add schema evolution/versioning and better provider compatibility diagnostics |
 | P0 | Async/concurrency | **Partial** | Real OS-thread `parallel for` with isolated worker heaps | Add explicit cancellation, backpressure, bounded queues, fair scheduling, and a clear async/event model |
 | P0 | Streaming | **Partial** | `str` streaming with `on token`, replay chunks, `write`, crash-safe durable resume, budget accounting, and retry state, all covered by live-transport tests | Tool streaming, parallel streaming, and per-token in-flight enforcement |
-| P0 | Timeouts + cancellation | **Partial** | Model, HTTP, and MCP timeouts; `budget: max_seconds` bounding a scope and every `parallel for` branch under it; `parallel for ... first` stopping a fan-out the moment one branch answers, journaled so a resume keeps the same winner; handler can stop reading | Interrupt work already in flight, and define cleanup guarantees |
+| P0 | Timeouts + cancellation | **Partial** | Model, HTTP, MCP, and helper timeouts, each cut short by an enclosing `budget: max_seconds` so a request already sent ends with the scope; `parallel for ... first` stopping a fan-out the moment one branch answers, journaled so a resume keeps the same winner; `break` stopping one that is still collecting; a stopped branch leaving at its next statement; handler can stop reading | Define cleanup guarantees, and make a `break` loop's results replay-stable or keep steering durable programs to `first` |
 | P0 | Retry/backoff | **Have** | Jittered model retries and HTTP retries; MCP handshake retries | Add shared retry policy, observability for attempts, and cancellation-aware backoff |
 | P1 | Durable execution | **Partial** | Append-only replay journal for model calls, tools, writes, human input, output, time, and Python; per-effect fsync with group commit across `parallel for` workers, run locking, torn-tail recovery, interrupted-stream semantics | Retention and compaction |
 | P1 | Checkpoint/resume | **Partial** | Replay-based resume, `ask_human` suspension, exactly-once writes, and crash-injection tests against the real binary | Add explicit checkpoints, resumable in-flight effects, and versioned state migration |
@@ -439,7 +485,7 @@ remain; **Build** means it is not implemented yet.
 | P1 | Sessions/memory | **Build** (designed, see below) | No persistent user-facing session or memory abstraction | Build durable session IDs, scoped memory, retrieval/update rules, privacy labels, eviction, and replay semantics |
 | P1 | MCP | **Have** | Server discovery, typed tools, timeouts, failure values, capability checks | Add richer MCP schemas, cancellation, reconnect policy, server health, and protocol-version negotiation |
 | P2 | Multi-agent/handoffs | **Partial** | Agents and parallel workers exist as isolated execution units | Build first-class messages, handoff contracts, ownership transfer, supervision, and failure semantics |
-| P2 | Sandboxed execution | **Partial** | Package grants, process boundaries, Python sidecar, and no native shared libraries | Build OS-level sandboxing and WASM components with capability enforcement |
+| P2 | Sandboxed execution | **Partial** | Package grants, process boundaries, Python sidecar, no native shared libraries, and OS-level helper confinement (seccomp / `sandbox-exec`, denylist) | Windows confinement, an allowlist rather than a denylist, and WASM components with capability enforcement |
 | P2 | Model routing/fallback | **Partial** | Named model roles and per-call model selection | Build policy-based routing, health-aware fallback, cost/latency rules, and deterministic replay of route decisions |
 | P2 | RAG/embeddings | **Build** (designed, see below) | No embeddings, chunking, retrieval, or vector index | Build embedding effects, document ingestion, chunk identity, retrieval APIs, labels, and cassette/journal behavior |
 | P2 | Scheduler/cron | **Build** | No language-level scheduled execution | Build a scheduler primitive, durable triggers, retries, overlap policy, time zones, and operational inspection |
@@ -450,13 +496,17 @@ remain; **Build** means it is not implemented yet.
 
 ### Suggested capability build order
 
-- [ ] **P0 correctness gate:** streaming accounting, retry state, durable
+- [x] **P0 correctness gate:** streaming accounting, retry state, durable
       crash semantics, live transport tests, a time budget (`max_seconds`),
-      and stopping a fan-out early (`parallel for ... first`) have shipped.
-      What remains under "cancellation" is the one half that is genuinely
-      hard: interrupting work already in flight. It is the same "did it
-      happen" problem that makes a tool call unretryable, and it is stated as
-      an honest limit in three places rather than papered over.
+      stopping a fan-out early (`parallel for ... first` and `break`), and
+      interrupting work already in flight have all shipped. The "did it
+      happen" problem was not solved and was not pretended away: a deadline
+      stops *waiting* for the answer, and a call it cut short is `Failed` and
+      never retried, exactly like one its own timeout cut short.
+- [ ] **Cleanup guarantees**, which the cancellation work did not cover. A
+      branch is let go of at a statement boundary, so anything it opened
+      mid-statement is closed by the interpreter dropping it rather than by
+      anything the program can say.
 - [ ] **P1 reliability layer:** explicit checkpoints remain; fsync policy,
       run locking, exactly-once writes, interrupted-stream semantics, and
       fault-injection tests have shipped.
@@ -772,6 +822,16 @@ something that is not code. Full reasoning in
 
 ## This change
 
-- [x] Added a separate Figma-matched landing page at `/new-home` without changing `/`.
-- [x] Connected the new route through the docs navigation and linked back to the current docs home.
-- [x] Verified the new route with a production site build and responsive visual preview.
+- [x] `break` and `break <value>` inside a `parallel for`: parser, checker
+      diagnostic, `Flow::Break(Option<Value>)`, a shared stop flag across the
+      fan-out, and `StopKind::Stopped` so a branch unwinds through calls
+      instead of handing its caller a `none`.
+- [x] `Budget::remaining_time` / `bounded_timeout`, carried into
+      `kora-models` (`ModelConfig::deadline`, blocking and streaming), the
+      `http` module, `kora-mcp` (`Transport::limit_next`), and `kora-helper`.
+- [x] `crates/kora-helper/src/sandbox.rs`: seccomp on Linux, `sandbox-exec` on
+      macOS, `RLIMIT_FSIZE` for writes, `Applied` reported rather than assumed.
+- [x] `[package.helper] needs`, checked against the importer's grants at the
+      point the helper is started.
+- [x] `examples/23_stopping_early.ko`, listed in `examples/README.md` and run
+      in both the tests and examples jobs of `ci.yml`.

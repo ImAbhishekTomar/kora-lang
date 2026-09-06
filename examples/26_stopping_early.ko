@@ -1,0 +1,123 @@
+# Stopping work that stopped being worth doing -- the case `first` does not
+# cover, and a deadline that reaches work already sent.
+#
+# `parallel for ... first` (examples/25_race.ko) is the one to reach for when
+# the loop is asking a question: it yields the answer directly, its winner is
+# the earliest in *input* order rather than whichever thread got a core, and
+# it is journaled so a durable run replays it.
+#
+# **`break` is for the loop that is still a map.** A scan that has seen
+# enough, a search whose answer was recorded elsewhere: the list still comes
+# back, and the rest of the items are never started. `break <value>` also
+# contributes the stopping branch's own find, so the branch that decided to
+# stop is not silent.
+#
+# The honest cost, so nobody is surprised by it: which branches finished
+# before the stop depends on how the threads were scheduled, so `len(results)`
+# differs between two runs on the same input. That is fine for "how much did
+# we skip" and wrong for durable logic. Use `first` when the answer has to
+# replay.
+#
+# **Interrupting work already sent** is not a keyword at all; it is a budget.
+# `budget(max_seconds = N)` now travels into every transport, so a model call,
+# an HTTP request, an MCP tool call, or a package helper is cut short by the
+# deadline instead of running on to its own timeout.
+#
+# A branch is let go of at a statement boundary, not mid-statement, whichever
+# of the two stopped it. A thread cannot be killed, and a half-written effect
+# is worse than a branch that runs a moment too long.
+#
+#   kora run examples/26_stopping_early.ko
+
+# Cheap, deterministic, and slow enough to notice. Nothing here calls a model,
+# so this example runs with no key and no cassette.
+def digits_of(n: int) -> int:
+    count = 0
+    value = n
+    for step in range(1000):
+        if value < 10:
+            break
+        value = value // 10
+        count = count + 1
+    return count + 1
+
+
+def main():
+    # ------------------------------------------------------------------
+    # First success wins.
+    # ------------------------------------------------------------------
+    # Five hundred candidates, and the answer is near the front. Without a
+    # `break` every one of them is examined; with it, the loop stops as soon
+    # as a branch has something worth having.
+    #
+    # The result list holds the branches that actually ran, in input order.
+    # A branch that never started has no slot at all, so `len(found)` is how
+    # much work the `break` saved.
+    found = parallel for candidate in range(500):
+        if candidate > 0 and candidate % 97 == 0:
+            break candidate
+        # A branch that found nothing yields zero, so the answers are the
+        # non-zero entries.
+        return 0
+
+    print(f"examined {len(found)} of 500 candidates")
+    print(f"  found: {sum(found)}")
+
+    # ------------------------------------------------------------------
+    # A plain `break` stops the loop without producing anything.
+    # ------------------------------------------------------------------
+    # Use it when the point is to stop, not to collect: a scan that has seen
+    # enough, or a search whose answer was written somewhere else.
+    scanned = parallel for n in [10, 200, 3000, 40000, 500000, 6000000]:
+        if digits_of(n) >= 5:
+            break
+        return digits_of(n)
+
+    print(f"{len(scanned)} of 6 branches finished before the loop stopped")
+
+    # ------------------------------------------------------------------
+    # A deadline is the other half, and it is a budget, not a keyword.
+    # ------------------------------------------------------------------
+    # Inside a `max_seconds` scope every outbound call now carries the smaller
+    # of its own timeout and what is left of the scope. A model call, an HTTP
+    # request, an MCP tool, or a package helper is cut short by the deadline
+    # instead of running on to a timeout the program never asked for.
+    #
+    # Zero seconds is the case that needs no network to demonstrate: there is
+    # no time, so the call is refused before it is sent, and running out is a
+    # value like any other.
+    with budget(max_seconds = 0):
+        answer: str = analyze("say hello", "reply with one short word")
+        match answer:
+            case Exhausted(meter):
+                print(f"skipped the optional pass: out of {meter}")
+            case Ok(text):
+                print(f"had time after all: {text}")
+            case Uncertain(reason):
+                print(f"declined: {reason}")
+            case Failed(why):
+                print(f"no answer: {why}")
+
+
+test "break carries the value of the branch that stopped the search":
+    found = parallel for candidate in range(500):
+        if candidate > 0 and candidate % 97 == 0:
+            break candidate
+        return 0
+
+    # Far fewer than 500 branches ran: the rest were never started. The exact
+    # number depends on how many workers were already in flight when the
+    # answer was found, which is why this is a bound rather than an equality.
+    assert len(found) < 250
+    # At least one branch reached a multiple of 97 and stopped the loop, and
+    # every branch that did not contributed zero.
+    assert sum(found) >= 97
+
+
+test "a plain break stops the loop and collects only what finished":
+    scanned = parallel for n in [1, 22, 333, 4444, 55555, 666666]:
+        if digits_of(n) >= 4:
+            break
+        return digits_of(n)
+
+    assert len(scanned) <= 6

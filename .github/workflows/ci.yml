@@ -122,6 +122,7 @@ jobs:
           ./target/debug/kora test examples/10_modules.ko
           ./target/debug/kora test examples/13_packages.ko
           ./target/debug/kora test examples/21_pdf.ko
+          ./target/debug/kora test examples/26_stopping_early.ko
       # The pattern set carries its own tests and needs no model, no API key,
       # and no cassette -- so every failure path in it is checked on every
       # push, which is the half of a pattern nobody usually tests.
@@ -151,6 +152,7 @@ jobs:
           ./target/debug/kora run examples/00_basics.ko
           ./target/debug/kora run examples/05_stdlib.ko
           ./target/debug/kora run examples/21_pdf.ko
+          ./target/debug/kora run examples/26_stopping_early.ko
           ./target/debug/kora run --durable examples/19_durable_pipeline.ko
           rm -f pipeline-out.csv
           ./target/debug/kora run examples/10_modules.ko

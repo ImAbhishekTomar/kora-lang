@@ -10,3 +10,9 @@ description = "The package-helper boundary: a separate process a Kora package ma
 [dependencies]
 serde = { workspace = true }
 serde_json = { workspace = true }
+
+# Confinement is applied with `prctl` and `setrlimit` on Linux. macOS wraps
+# the helper in `sandbox-exec` instead and needs nothing here; Windows has no
+# mechanism to apply.
+[target.'cfg(target_os = "linux")'.dependencies]
+libc = { workspace = true }

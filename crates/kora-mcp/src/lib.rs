@@ -96,6 +96,17 @@ impl std::error::Error for McpError {}
 /// How to reach a server. One request in, one response out.
 pub trait Transport: Send {
     fn request(&mut self, method: &str, params: Value) -> Result<Value, McpError>;
+
+    /// Cut this transport's own timeout short for the calls that follow.
+    ///
+    /// A `budget: max_seconds` bounds the work a scope may do, and a tool
+    /// call already sent is work. Without this the deadline could only be
+    /// checked before dispatch, and a server that stops answering would hold
+    /// the run open to a timeout the program never asked for.
+    ///
+    /// `None` restores the configured timeout. Transports with no clock of
+    /// their own ignore it.
+    fn limit_next(&mut self, _within: Option<Duration>) {}
     fn notify(&mut self, method: &str, params: Value) -> Result<(), McpError>;
 }
 
@@ -244,7 +255,13 @@ impl Server {
     /// decide whether to run a side effect a second time is not a trade worth
     /// making. So the timeout is the whole protection here: the call ends,
     /// and the program is told the server did not answer.
-    pub fn call(&mut self, tool: &str, arguments: Value) -> Result<String, McpError> {
+    pub fn call(
+        &mut self,
+        tool: &str,
+        arguments: Value,
+        within: Option<Duration>,
+    ) -> Result<String, McpError> {
+        self.transport.limit_next(within);
         let response = self.transport.request(
             "tools/call",
             json!({ "name": tool, "arguments": arguments }),
@@ -379,6 +396,9 @@ struct StdioTransport {
     lines: Receiver<String>,
     next_id: u64,
     timeout: Duration,
+    /// A tighter bound for the next request, set from the budget deadline in
+    /// force where the tool call is written. Never loosens `timeout`.
+    limit: Option<Duration>,
 }
 
 impl StdioTransport {
@@ -434,6 +454,7 @@ impl StdioTransport {
             // rather than honoured -- the same rule `http` and the model
             // transport already apply.
             timeout: Duration::from_secs(config.timeout_secs.max(1)),
+            limit: None,
         })
     }
 
@@ -447,6 +468,10 @@ impl StdioTransport {
 }
 
 impl Transport for StdioTransport {
+    fn limit_next(&mut self, within: Option<Duration>) {
+        self.limit = within;
+    }
+
     fn request(&mut self, method: &str, params: Value) -> Result<Value, McpError> {
         let id = self.next_id;
         self.next_id += 1;
@@ -465,7 +490,14 @@ impl Transport for StdioTransport {
         // The deadline covers the whole wait rather than each line, so a
         // server that chatters on stdout cannot hold the request open past
         // its timeout.
-        let deadline = Instant::now() + self.timeout;
+        // The tighter of the server's configured timeout and whatever the
+        // budget has left. A budget can only ever narrow this, never widen a
+        // server's own limit.
+        let wait = match self.limit {
+            Some(left) => self.timeout.min(left),
+            None => self.timeout,
+        };
+        let deadline = Instant::now() + wait;
         loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             let line = match self.lines.recv_timeout(remaining) {
@@ -473,7 +505,7 @@ impl Transport for StdioTransport {
                 Err(RecvTimeoutError::Timeout) => {
                     return Err(McpError::retryable(format!(
                         "server did not answer `{method}` within {}s",
-                        self.timeout.as_secs()
+                        wait.as_secs()
                     )))
                 }
                 Err(RecvTimeoutError::Disconnected) => {
@@ -617,7 +649,7 @@ mod tests {
     fn calling_a_tool_returns_its_text_content() {
         let mut s = server();
         let out = s
-            .call("search_issues", json!({ "repo": "rust-lang/rust" }))
+            .call("search_issues", json!({ "repo": "rust-lang/rust" }), None)
             .unwrap();
         assert_eq!(out, "{\"count\": 3}");
     }
@@ -638,7 +670,7 @@ mod tests {
             ),
         ]);
         let mut s = Server::with_transport("github", Box::new(fake)).unwrap();
-        let out = s.call("search_issues", json!({})).unwrap();
+        let out = s.call("search_issues", json!({}), None).unwrap();
         assert!(out.contains("repository not found"), "got: {out}");
         assert!(out.contains("error"), "got: {out}");
     }
@@ -654,7 +686,10 @@ mod tests {
             ),
         ]);
         let mut s = Server::with_transport("x", Box::new(fake)).unwrap();
-        assert_eq!(s.call("anything", json!({})).unwrap(), "<image content>");
+        assert_eq!(
+            s.call("anything", json!({}), None).unwrap(),
+            "<image content>"
+        );
     }
 
     #[test]

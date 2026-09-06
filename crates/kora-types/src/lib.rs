@@ -158,6 +158,7 @@ fn analyze_inner(program: &Program, base: Option<PathBuf>, loading: &mut Vec<Pat
         type_names: HashSet::new(),
         base,
         loading,
+        parallel_depth: 0,
     };
     checker.collect_definitions(&program.items);
     checker.check_block(&program.items);
@@ -175,6 +176,13 @@ struct Checker<'a> {
     /// Files whose analysis is in progress, so a cycle is reported once
     /// instead of recursing.
     loading: &'a mut Vec<PathBuf>,
+    /// How many `parallel for` bodies enclose the statement being checked.
+    ///
+    /// `break <value>` needs somewhere to put the value, and only a fan-out
+    /// has one: an ordinary loop binds nothing per iteration. A plain `for`
+    /// nested inside a `parallel for` body does not count, because its
+    /// `break` leaves that inner loop and never reaches the fan-out.
+    parallel_depth: usize,
 }
 
 /// Names the runtime provides without a definition.
@@ -647,16 +655,28 @@ impl Checker<'_> {
             }
             StmtKind::While { cond, body } => {
                 self.check_expr(cond);
+                let outer = std::mem::take(&mut self.parallel_depth);
                 self.nested(body);
+                self.parallel_depth = outer;
             }
-            StmtKind::For { var, iter, body }
-            | StmtKind::ParallelFor {
-                var, iter, body, ..
-            } => {
+            StmtKind::For { var, iter, body } => {
                 self.check_expr(iter);
                 // The loop variable outlives the loop, as it does in Python.
                 self.declare(var);
+                // A `break` in here leaves this loop, not any fan-out around
+                // it, so it has nowhere to put a value.
+                let outer = std::mem::take(&mut self.parallel_depth);
                 self.nested(body);
+                self.parallel_depth = outer;
+            }
+            StmtKind::ParallelFor {
+                var, iter, body, ..
+            } => {
+                self.check_expr(iter);
+                self.declare(var);
+                self.parallel_depth += 1;
+                self.nested(body);
+                self.parallel_depth -= 1;
                 if let StmtKind::ParallelFor {
                     collect_into: Some(name),
                     ..
@@ -667,6 +687,10 @@ impl Checker<'_> {
             }
             StmtKind::FuncDef(f) => {
                 self.scopes.push(HashSet::new());
+                // A function defined inside a `parallel for` body is still a
+                // function: its `break` never reaches the fan-out, because
+                // the call returns before the loop sees anything.
+                let outer_parallel = std::mem::take(&mut self.parallel_depth);
                 for p in &f.params {
                     self.declare(&p.name);
                     if let Some(ty) = &p.ty {
@@ -679,6 +703,7 @@ impl Checker<'_> {
                 // Definitions inside a body are visible to the rest of it.
                 self.collect_local_definitions(&f.body);
                 self.check_block(&f.body);
+                self.parallel_depth = outer_parallel;
                 self.scopes.pop();
             }
             StmtKind::TypeDef { fields, .. } => {
@@ -809,7 +834,24 @@ impl Checker<'_> {
                 }
                 self.declare(alias);
             }
-            StmtKind::Return(None) | StmtKind::Break | StmtKind::Continue | StmtKind::Pass => {}
+            StmtKind::Break(Some(value)) => {
+                self.check_expr(value);
+                if self.parallel_depth == 0 {
+                    self.analysis.diagnostics.push(
+                        Diagnostic::error(
+                            stmt.span,
+                            "`break` can only carry a value inside a `parallel for`",
+                        )
+                        .with_hint(
+                            "an ordinary loop has nowhere to put it; write `break` on its own, or assign the value before it",
+                        ),
+                    );
+                }
+            }
+            StmtKind::Return(None)
+            | StmtKind::Break(None)
+            | StmtKind::Continue
+            | StmtKind::Pass => {}
         }
     }
 
@@ -1160,7 +1202,7 @@ fn diverges(body: &[Stmt]) -> bool {
         return false;
     };
     match &last.kind {
-        StmtKind::Return(_) | StmtKind::Break | StmtKind::Continue => true,
+        StmtKind::Return(_) | StmtKind::Break(_) | StmtKind::Continue => true,
         StmtKind::If {
             branches,
             else_body,

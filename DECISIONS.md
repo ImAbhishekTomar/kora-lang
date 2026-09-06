@@ -986,15 +986,27 @@ Time is reported ahead of the other meters when several have run out. A scope
 short of tokens *and* out of time has run out of time; naming tokens would
 send someone to raise a limit that was not what stopped them.
 
-**What it deliberately does not do.** It does not interrupt work already in
-flight: like every other meter it is checked before a model call and between
-tool-loop turns, so a request already sent runs to its own transport timeout.
-And it does not bound computation — a loop calling no model is never refused,
-because a budget bounds agent work rather than CPU. Both follow from reusing
-the existing meter, and both are honest limits rather than gaps to paper over:
-interrupting an in-flight call is the same "did it happen" problem that makes
-a tool call unretryable, and it should be solved once, deliberately, if it is
-solved at all.
+**It reaches work already in flight.** The deadline travels into the
+transport: every model call, HTTP request, MCP tool call, and package-helper
+call is given the smaller of its own timeout and what the scope has left, and
+the backoff between retries stops rather than sleeping past it. A provider
+that accepts a connection and goes quiet no longer holds the run for the full
+`[models] timeout_secs`.
+
+This was deliberately deferred when `max_seconds` first landed, on the
+grounds that interrupting an in-flight call is the same "did it happen"
+problem that makes a tool call unretryable. It is — and the resolution is that
+the deadline does not answer that question, it only stops waiting for the
+answer. The outcome is `Failed`, which is exactly the outcome a transport
+timeout already produced, so nothing downstream had to learn a new case. What
+is *not* claimed is that the far end stopped working: a tool call cut short by
+a deadline may still have opened the issue, which is why it is not retried,
+the same as a tool call cut short by its own timeout.
+
+**What it still does not do.** It does not bound computation — a loop calling
+no model is never refused, because a budget bounds agent work rather than CPU.
+That follows from reusing the existing meter, and it is an honest limit rather
+than a gap to paper over.
 
 **Why this one meter is journaled.** The other three are counted from the
 program's own spending, so a replay re-derives them exactly and a refusal can
@@ -1046,13 +1058,18 @@ won" is what makes a trace readable. A race with no winner is journaled too:
 otherwise a resume would find the slot empty, race again, and diverge by the
 other door.
 
-**What it deliberately does not do.** It does not interrupt a branch already
-running. No further work is *started*, but a request already sent runs to its
-own transport timeout — the same honest limit `max_seconds` has, and the same
-reason: interrupting an in-flight call is the "did it happen" problem that
-makes a tool call unretryable, and it should be solved once, deliberately, if
-it is solved at all. This ships the half that is solvable without pretending
-to have solved the other.
+**A branch already running does now leave.** This paragraph used to say the
+opposite, and the honest limit it described has moved rather than gone. A
+branch sees the stop at its next statement boundary and unwinds from there, so
+a race no longer pays for the branches that lost to finish their work. What is
+still true is the smaller claim: a *request already sent* runs to its own
+deadline, because interrupting one is the "did it happen" problem that makes a
+tool call unretryable. That deadline is what `budget(max_seconds = N)` now
+bounds — see "Time is a budget meter" above — so the two halves meet.
+
+A statement is as fine-grained as this can safely be. A thread cannot be
+killed, and a branch abandoned mid-statement would leave a half-written effect
+behind, which is worse than a branch that runs a moment too long.
 
 **`first` is contextual, and stays out of the grammar file.** Like `stream`
 and `on`, it is a keyword only in that one position, so a program that already
@@ -1060,6 +1077,49 @@ uses `first` as a variable or a function name keeps working. It is
 deliberately *not* added to the editor's keyword list: `first` is a common
 name, and colouring every one of them as a keyword would contradict the
 promise the contextual parse makes. A missing highlight is the smaller wrong.
+
+### `break` stops a fan-out that is still collecting
+
+`first` covers the loop that is asking a question. It does not cover the loop
+that is still a map and has simply seen enough — a scan that found what it was
+looking for, a search whose answer was recorded elsewhere. `break` inside a
+`parallel for` body is that: the loop still yields its list, and the rest of
+the items are never started. `break <value>` also contributes the stopping
+branch's own find, so the branch that decided to stop is not silent.
+
+There was no other meaning available to take. A `break` in a parallel body did
+nothing at all before this, silently, which is the worst of the three possible
+behaviours. And a value on `break` is the only way a stopping branch can say
+what it found: a worker has an isolated heap, so it cannot set a flag the
+parent reads. Outside a `parallel for` the value is refused at check time
+rather than ignored — an ordinary loop has nowhere to put it, and a silently
+dropped value reads as working code.
+
+**The stop unwinds on the error channel, not on `Flow`.** `Flow` cannot cross
+a call. A function that returned normally when its fan-out stopped would hand
+its caller a `none`, and the rest of that statement would then try to use it —
+turning a stop into a type error several lines from anything the program
+wrote. `StopKind::Stopped` rides the channel `ask_human`'s suspension already
+uses, for the same reason: nothing catches it on the way out.
+
+**Why both spellings exist, and which is the default.** `first` is the one to
+reach for. It yields the answer directly, its winner is a function of the
+input rather than of scheduling, and it is journaled, so a durable run replays
+it. `break` cannot offer the last two: which branches finished before the stop
+depends on how the threads were scheduled, so the length of the results list
+differs between two runs on the same input. That is a real cost, accepted with
+open eyes, and the documentation says it rather than burying it — a program
+should not build durable logic on `len(results)` from a `break`. The
+alternative was to give every branch a slot and fill the stopped ones with
+`none`, which buys replay-stability at the price of salting a list of answers
+with holes; `first` already exists for programs that need the guarantee, so
+`break` keeps the shape that reads better for the case it is actually for.
+
+**What lands in the results.** The branches that produced something, in input
+order. A branch that never started has no slot, and neither does one that was
+let go of part way through: both produced nothing, and a `none` in a list of
+answers would make `sum` and `len` lie about what the loop found.
+
 
 ### An effect is identified by which call it is, not which line
 
@@ -1455,11 +1515,58 @@ good at.
 (below). It needs a runtime compiled into the compiler, which grows the binary
 for everyone and is a subsystem rather than a module. A helper reaches the
 same capability today at native speed, with the isolation of a process rather
-than of a sandbox. That difference is the honest cost of this decision: a
-helper is an ordinary program with ordinary operating-system rights, so trust
-rests on the pinned hash and on who published the package, not on
-confinement. OS-level sandboxing can be added later without changing the
-package API.
+than of a sandbox.
+
+**A helper is now confined, not merely separated.** That last paragraph used
+to end by conceding that a helper was an ordinary program with ordinary
+operating-system rights. It no longer is. A helper declares what it needs:
+
+```toml
+[package.helper]
+needs = []           # the default: no network, no writing files
+```
+
+The operating system enforces it — a seccomp filter on Linux, a sandbox
+profile on macOS — so a confined helper cannot open a socket, cannot write to
+a file, and cannot `ptrace` the interpreter that started it. Absent means
+empty, because the alternative is that an author who forgets the line ships an
+unconfined process, which is the failure this field exists to close.
+
+**The author declares; the importer grants.** `needs = ["net"]` is refused
+unless the program that imported the package holds `net` itself. This is not a
+new rule, it is the existing one applied where it matters most: the code on
+the other side of a helper is compiled, and nobody reads it.
+
+**It is a denylist, and saying so is the point.** An allowlist of syscalls is
+stronger and is what a WASM component will eventually give. It is not what is
+written here, because an allowlist has to be right about every libc version,
+allocator, and C++ runtime a helper might link, and a wrong one shows up as a
+helper that dies on somebody else's machine. The claim made is narrower and
+true: no network, no writing files, no reading the interpreter's memory.
+Writes are bounded by `RLIMIT_FSIZE` rather than by the filter, because
+seccomp sees syscall numbers and never paths.
+
+**The confinement is inherited, so `execve` is not blocked.** A seccomp filter
+survives `fork` and `execve`, so a helper that starts another program does not
+escape by doing so. Blocking `execve` would buy nothing and break helpers that
+legitimately shell out.
+
+**Windows is not confined, and is told so.** There is no equivalent mechanism
+available to an unprivileged process, so a helper there runs with `kora`'s own
+rights and the person running it gets a warning on stderr saying exactly that.
+A sandbox that silently does nothing is worse than one that says so.
+
+**On macOS the helper is wrapped, not hooked.** `sandbox_init` would have to be
+called from a `pre_exec` hook, which runs between `fork` and `execve` in a
+process whose other threads are gone but whose locks are not — and
+`sandbox_init` allocates, so that window can deadlock the child forever.
+`sandbox-exec` applies the profile and execs, with no such window. Linux
+seccomp stays in `pre_exec`, where it is two `prctl` calls over a filter built
+before the fork, which is async-signal-safe.
+
+What WASM still adds over this is a jail rather than a fence: a component
+cannot escape, while a confined helper is an ordinary process denied specific
+things. That remains worth having, and worth having once.
 
 **How trust is anchored.** A fetched helper carries a mandatory `sha256`;
 the manifest format has nowhere to put an unpinned one. `kora install`
@@ -1490,9 +1597,9 @@ Being language-agnostic is a bonus; being unable to escape is the reason.
 
 **Why it is still deferred.** Package helpers now cover the capability gap —
 see above — at native speed and with no runtime compiled into `kora`. What
-WASM adds over a helper is confinement rather than capability: a component
-cannot escape, while a helper is an ordinary process that merely cannot reach
-into the interpreter. That is worth having, and it is worth having *once*, as
+WASM adds over a helper is a jail rather than a fence: a component cannot
+escape, while a confined helper is an ordinary process that has been denied
+specific things by a denylist somebody has to keep correct. That is worth having, and it is worth having *once*, as
 a general extension point, rather than being rushed for one package.
 
 **What would start it.** A helper that needs to be confined rather than

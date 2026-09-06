@@ -394,14 +394,17 @@ pub(crate) fn analyze_streaming_with(
 /// retry loop: a stream that dies half way through is a `Failed` outcome
 /// carrying what was already written, not a request to run again.
 pub(crate) fn stream_transport_for(config: &crate::ModelConfig) -> Box<StreamTransport> {
-    let timeout = std::time::Duration::from_secs(config.timeout_secs.max(1));
     let attempts = config.max_retries.saturating_add(1);
+    // Cloned so each attempt reads the deadline afresh: what is left shrinks
+    // while the stream runs.
+    let config = config.clone();
     Box::new(
         move |url: &str, headers: &[(&str, String)], body: &Value, on_line: &mut OnFrame<'_>| {
             let mut attempt = 0;
             loop {
                 attempt += 1;
                 let mut emitted = false;
+                let timeout = crate::provider::attempt_timeout(&config);
                 match send_streaming(url, headers, body, timeout, &mut emitted, on_line) {
                     Ok(()) => return Ok(()),
                     Err(e) => {
@@ -410,9 +413,16 @@ pub(crate) fn stream_transport_for(config: &crate::ModelConfig) -> Box<StreamTra
                         }
                     }
                 }
-                std::thread::sleep(std::time::Duration::from_millis(
-                    crate::provider::retry_base_delay(attempt),
-                ));
+                let delay =
+                    std::time::Duration::from_millis(crate::provider::retry_base_delay(attempt));
+                // Same rule as the blocking path: a retry that would land
+                // after the deadline is not taken.
+                if !crate::provider::backoff_fits(config.deadline, delay) {
+                    return Err(ModelError::retryable(format!(
+                        "the stream from {url} failed and there was no time left to retry"
+                    )));
+                }
+                std::thread::sleep(delay);
             }
         },
     )

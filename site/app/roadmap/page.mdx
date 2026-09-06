@@ -46,6 +46,21 @@ The current codebase includes:
   matches rather than a dead run. A fetched helper is pinned by `sha256`,
   fetched only for the platform and only for a package the program imports,
   and recorded in `kora.sums`.
+- Confined helpers: `[package.helper] needs` is empty by default, and the
+  operating system enforces it — a seccomp filter on Linux, a sandbox profile
+  on macOS. A confined helper cannot open a socket, write a file, or read the
+  memory of the `kora` process that started it, and `needs = ["net"]` is
+  refused unless the importing program holds `net` itself. Windows has no
+  mechanism available to an unprivileged process, and the runtime says so
+  rather than implying a sandbox that is not there.
+- Stopping work that stopped being worth doing. `break` inside a
+  `parallel for` ends the fan-out — no further item is started, and the
+  branches already running are let go of at their next statement —
+  and `break <value>` carries what the branch that stopped it found, so a
+  search ends as soon as it has an answer. A `budget(max_seconds = N)`
+  deadline now reaches work already sent: model calls, HTTP requests, MCP
+  tool calls, and helper calls all take the smaller of their own timeout and
+  what the scope has left.
 - Python sidecar and MCP tool integrations through project configuration,
   with a deadline on every MCP request. A tool server that does not answer
   comes back as `Failed(reason)` instead of ending the run, and tool calls are
@@ -77,6 +92,14 @@ Streaming prose works for a single `str` call, including inside a durable run,
 and is metered and retried on the same terms as a blocking one. The remaining
 work is streaming alongside tools and `parallel for`, exact in-flight token
 enforcement, and a general event-stream API.
+
+### Sharpen what confinement claims
+
+A helper's sandbox is a denylist: the network and filesystem writes are
+withheld, and the claim stops there. An allowlist is stronger and is what a
+WASM component will eventually give, which is why WASM remains the end state
+rather than a second sandbox to maintain. Windows confinement is the other
+open piece.
 
 ### Fill the deliberate standard-library gaps
 

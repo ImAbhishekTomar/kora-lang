@@ -72,9 +72,19 @@ impl Parser {
             }
             TokenKind::Break => {
                 self.advance();
+                // `break` alone stops the loop; `break <expr>` also says what
+                // the branch that stopped it produced, which only a
+                // `parallel for` has anywhere to put. The checker decides
+                // that, not the parser: refusing it here would report the
+                // wrong thing about a `break` inside a nested plain loop.
+                let value = if self.check(&TokenKind::Newline) {
+                    None
+                } else {
+                    Some(self.expression()?)
+                };
                 self.expect_newline("break")?;
                 Ok(Stmt {
-                    kind: StmtKind::Break,
+                    kind: StmtKind::Break(value),
                     span,
                 })
             }
@@ -2123,6 +2133,29 @@ mod tests {
                 assert_eq!(handler.body.len(), 1);
             }
             other => panic!("expected an `on tool_call` handler, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn break_parses_with_and_without_a_value() {
+        let p = ok("for x in y:\n    break\n");
+        match &p.items[0].kind {
+            StmtKind::For { body, .. } => match &body[0].kind {
+                StmtKind::Break(None) => {}
+                other => panic!("expected a bare `break`, got {other:?}"),
+            },
+            other => panic!("expected a loop, got {other:?}"),
+        }
+
+        // The value is an ordinary expression, not a special form: whether
+        // there is anywhere to put it is the checker's question.
+        let p = ok("for x in y:\n    break x + 1\n");
+        match &p.items[0].kind {
+            StmtKind::For { body, .. } => match &body[0].kind {
+                StmtKind::Break(Some(_)) => {}
+                other => panic!("expected `break <expr>`, got {other:?}"),
+            },
+            other => panic!("expected a loop, got {other:?}"),
         }
     }
 

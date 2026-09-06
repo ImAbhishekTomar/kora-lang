@@ -27,6 +27,17 @@ helper = true
 protocol = "stdio/v1"
 timeout_secs = 120
 
+# What the helper process is allowed to reach. Empty is the interesting case
+# and the default: PDFium turns bytes into other bytes, so it is confined to
+# exactly that -- no sockets, no writing files, no reading the interpreter's
+# memory. The operating system enforces it (seccomp on Linux, a sandbox
+# profile on macOS), not a convention.
+#
+# A helper that genuinely needed one would write `needs = ["net"]`, and it
+# would still be refused unless the program that imported this package holds
+# `net` itself. A package cannot pass on authority it does not have.
+needs = []
+
 [package.helper.aarch64-apple-darwin]
 path = "helper/target/release/kora-pdf-helper"
 

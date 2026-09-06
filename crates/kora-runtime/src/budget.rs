@@ -120,6 +120,22 @@ impl Scope {
             (None, own) => own,
         }
     }
+
+    /// How long the tightest enclosing deadline leaves, if any scope set one.
+    ///
+    /// A scope whose deadline has already passed answers `Some(ZERO)` rather
+    /// than `None`: "no time left" and "no limit" are opposite answers, and a
+    /// transport handed the second when the first was true would run on.
+    fn remaining_time(&self) -> Option<Duration> {
+        let own = self
+            .deadline
+            .map(|end| end.saturating_duration_since(Instant::now()));
+        match (&self.parent, own) {
+            (Some(p), Some(mine)) => Some(p.remaining_time().unwrap_or(Duration::MAX).min(mine)),
+            (Some(p), None) => p.remaining_time(),
+            (None, own) => own,
+        }
+    }
 }
 
 /// A handle to the currently active budget scope.
@@ -200,6 +216,32 @@ impl Budget {
     pub fn remaining_tokens(&self) -> Option<u64> {
         self.scope.remaining_tokens()
     }
+
+    /// Time left in the tightest enclosing deadline, if any is set.
+    ///
+    /// This is what makes `max_seconds` bound a call that is *already in
+    /// flight*: a transport is given the smaller of its own timeout and this,
+    /// so a request already sent dies at the deadline instead of running on
+    /// to a timeout the program never asked for. Without it the meter could
+    /// only be checked between effects, which is a weaker promise than
+    /// `max_seconds = 30` reads as.
+    pub fn remaining_time(&self) -> Option<Duration> {
+        self.scope.remaining_time()
+    }
+
+    /// A timeout that respects both `own` and whatever deadline is in force.
+    ///
+    /// Never returns zero: a transport handed a zero timeout usually reads it
+    /// as "no timeout". A deadline that has already passed is caught by
+    /// [`Budget::check`] before dispatch, so the one second floor here is the
+    /// margin for a deadline that expires between that check and the send,
+    /// not a way to overrun one.
+    pub fn bounded_timeout(&self, own: Duration) -> Duration {
+        match self.remaining_time() {
+            Some(left) => own.min(left).max(Duration::from_secs(1)),
+            None => own,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -222,6 +264,58 @@ mod tests {
             span_line: 1,
             ..Default::default()
         }
+    }
+
+    #[test]
+    fn a_scope_with_no_deadline_leaves_a_timeout_alone() {
+        let b = Budget::unlimited().nested(&spec(Some(10), None, None));
+        assert_eq!(b.remaining_time(), None);
+        assert_eq!(
+            b.bounded_timeout(Duration::from_secs(600)),
+            Duration::from_secs(600)
+        );
+    }
+
+    #[test]
+    fn a_deadline_cuts_a_longer_timeout_down() {
+        let b = Budget::unlimited().nested(&seconds(5));
+        let left = b.remaining_time().expect("a deadline is in force");
+        assert!(left <= Duration::from_secs(5) && left > Duration::from_secs(3));
+        // The transport's own 600s ceiling is irrelevant once the program has
+        // said the whole scope gets five seconds.
+        assert!(b.bounded_timeout(Duration::from_secs(600)) <= Duration::from_secs(5));
+    }
+
+    #[test]
+    fn a_timeout_shorter_than_the_deadline_wins() {
+        let b = Budget::unlimited().nested(&seconds(300));
+        assert_eq!(
+            b.bounded_timeout(Duration::from_secs(30)),
+            Duration::from_secs(30)
+        );
+    }
+
+    #[test]
+    fn the_tightest_enclosing_deadline_is_the_one_that_binds() {
+        let outer = Budget::unlimited().nested(&seconds(600));
+        let inner = outer.nested(&seconds(2));
+        assert!(inner.bounded_timeout(Duration::from_secs(600)) <= Duration::from_secs(2));
+        // A child cannot buy back time its parent does not have.
+        let greedy = inner.nested(&seconds(600));
+        assert!(greedy.bounded_timeout(Duration::from_secs(600)) <= Duration::from_secs(2));
+    }
+
+    /// "No time left" and "no limit" are opposite answers, and a transport
+    /// handed the second when the first is true would run on regardless.
+    #[test]
+    fn an_expired_deadline_answers_zero_not_none() {
+        let b = Budget::unlimited().nested(&seconds(0));
+        assert_eq!(b.remaining_time(), Some(Duration::ZERO));
+        // Never zero at the transport, which usually reads zero as "forever".
+        assert_eq!(
+            b.bounded_timeout(Duration::from_secs(600)),
+            Duration::from_secs(1)
+        );
     }
 
     #[test]

@@ -218,7 +218,7 @@ impl<'a> Scope<'a> {
             | StmtKind::UseHelper { .. }
             | StmtKind::UsePkg { .. }
             | StmtKind::UseMcp { .. }
-            | StmtKind::Break
+            | StmtKind::Break(_)
             | StmtKind::Continue
             | StmtKind::Pass => {}
         }

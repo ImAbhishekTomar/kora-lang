@@ -345,7 +345,20 @@ answer = parallel for mirror in mirrors first:
     return fetch(mirror)
 ```
 
-The winner is the earliest in *input* order, not the earliest to finish: an answer that depended on which core was free could not be replayed. Under `--durable` the winner is journaled for the same reason `max_seconds` journals its refusal. A branch already running is not interrupted — no further work is started, but a request already sent runs to its own timeout. A race nobody wins is `None`. `first` is contextual, so a program that already uses it as a name keeps working.
+The winner is the earliest in *input* order, not the earliest to finish: an answer that depended on which core was free could not be replayed. Under `--durable` the winner is journaled for the same reason `max_seconds` journals its refusal. A race nobody wins is `None`. `first` is contextual, so a program that already uses it as a name keeps working.
+
+`break` covers the other shape — a fan-out that is still collecting and has seen enough. The loop still yields a list; `break <value>` also contributes the stopping branch's own find.
+
+```kora
+found = parallel for candidate in candidates:
+    if matches(candidate):
+        break candidate
+    return 0
+```
+
+Branches that never started keep no slot, and neither do branches let go of part way through. `break` with a value is only legal here; anywhere else it is a check-time error. Prefer `first` when the loop is asking a question: a `break` loop's result length depends on scheduling and is not replay-stable.
+
+Either way, a branch already running is let go of at its next statement, not mid-statement. A request already sent runs to its own deadline, which `budget(max_seconds = N)` bounds.
 
 ### `with budget(...)`
 
@@ -362,9 +375,10 @@ so its branches stop collectively.
 
 `max_seconds` starts its clock when the scope is entered, and the deadline is
 one instant shared by every branch rather than a duration each starts for
-itself. It refuses the next model call rather than interrupting one already
-in flight, and does not bound computation — a budget bounds agent work, not
-CPU.
+itself. It reaches work already sent: every model call, HTTP request, MCP tool
+call, and package-helper call inside the scope gets the smaller of its own
+timeout and what the scope has left. It does not bound computation — a budget
+bounds agent work, not CPU.
 
 ```kora
 with budget(max_seconds = 30):
@@ -495,6 +509,8 @@ rows = sql.query("app.db", "select * from users where id = ?", [user_id])
 ### Package helpers
 
 A package may declare one helper: a separate program it carries heavy work out to, for things that cannot be written in Kora — rendering a PDF page, decoding a video. `use helper` binds the declaring package's own helper, the importer decides whether it may run through a `helper` grant, and a fetched helper is pinned by `sha256` and recorded in `kora.sums`. Kora never loads native code into itself: a helper is a process, so a crash in it is an `Err`, a hang is killed, and it only ever sees the bytes it was handed.
+
+A helper is also confined, not merely separated. `needs` in `[package.helper]` is empty by default, and an empty one means the operating system withholds the network and the ability to write files — a seccomp filter on Linux, a sandbox profile on macOS. `needs = ["net"]` is refused unless the importing program holds `net` itself. It is a denylist rather than a jail, and Windows has no mechanism to apply, which the runtime says on stderr rather than implying a sandbox that is not there.
 
 ```kora
 use helper

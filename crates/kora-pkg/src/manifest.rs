@@ -7,7 +7,7 @@
 //! resolve that package's imports against the wrong `[dependencies]` table.
 
 use crate::grants::Grants;
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 /// The default entry file of a package, when `[package] entry` is absent.
@@ -85,6 +85,13 @@ pub struct HelperSpec {
     pub timeout_secs: u64,
     /// Target triple -> where that platform's helper comes from.
     pub artifacts: HashMap<String, HelperArtifact>,
+    /// `needs = ["net", "fs"]` — what the helper process is allowed to reach.
+    ///
+    /// Empty by default, and empty is the interesting case: a helper that
+    /// turns bytes into other bytes is confined to exactly that. What is
+    /// declared here is still only a request — the importer's grants decide
+    /// whether it is honoured, the same as every other capability.
+    pub needs: BTreeSet<crate::grants::Capability>,
 }
 
 /// Where one platform's helper binary comes from.
@@ -281,6 +288,41 @@ fn parse_helper(table: &toml::map::Map<String, toml::Value>) -> Result<HelperSpe
         .filter(|n| *n > 0)
         .unwrap_or(120) as u64;
 
+    // Absent means empty, not unrestricted. A helper that says nothing about
+    // what it needs is a helper that needs nothing, which is the only default
+    // that fails safe.
+    let mut needs = BTreeSet::new();
+    if let Some(listed) = table.get("needs") {
+        let Some(items) = listed.as_array() else {
+            return Err(ManifestError::new("`needs` must be a list of capabilities")
+                .with_hint("write `needs = [\"net\"]`"));
+        };
+        for item in items {
+            let name = item.as_str().unwrap_or_default();
+            let Some(capability) = crate::grants::Capability::parse(name) else {
+                return Err(ManifestError::new(format!(
+                    "the helper asks for an unknown capability `{name}`"
+                ))
+                .with_hint("a helper can ask for `net` or `fs`"));
+            };
+            // The rest of the capability set is about what *Kora* does on a
+            // package's behalf -- a `sql` grant gates the `sql` module, not a
+            // separate program. A helper is a process; `net` and `fs` are the
+            // two things the operating system can be told to withhold from
+            // one.
+            if !matches!(
+                capability,
+                crate::grants::Capability::Net | crate::grants::Capability::Fs
+            ) {
+                return Err(
+                    ManifestError::new(format!("a helper cannot ask for `{name}`"))
+                        .with_hint("a helper is a separate process: it can ask for `net` or `fs`"),
+                );
+            }
+            needs.insert(capability);
+        }
+    }
+
     let mut artifacts = HashMap::new();
     for (target, spec) in table {
         // Everything that is a table is a target; the scalars above are the
@@ -329,6 +371,7 @@ fn parse_helper(table: &toml::map::Map<String, toml::Value>) -> Result<HelperSpe
         protocol,
         timeout_secs,
         artifacts,
+        needs,
     })
 }
 
@@ -571,6 +614,47 @@ retry = { path = "../retry" }
         ] {
             assert_eq!(normalize_git_url(written), "github.com/org/x", "{written}");
         }
+    }
+
+    fn helper_of(toml_text: &str) -> Result<HelperSpec, ManifestError> {
+        let value: toml::Value = toml_text.parse().expect("valid toml");
+        parse_helper(value.as_table().expect("a table"))
+    }
+
+    /// A helper that says nothing about what it needs needs nothing. Any other
+    /// default would mean an author who forgot the line ships an unconfined
+    /// process, which is the failure mode this whole field exists to close.
+    #[test]
+    fn a_helper_that_asks_for_nothing_gets_nothing() {
+        let spec = helper_of("protocol = \"stdio/v1\"\n").expect("parses");
+        assert!(spec.needs.is_empty());
+    }
+
+    #[test]
+    fn a_helper_may_ask_for_net_and_fs() {
+        let spec = helper_of("needs = [\"net\", \"fs\"]\n").expect("parses");
+        assert!(spec.needs.contains(&crate::grants::Capability::Net));
+        assert!(spec.needs.contains(&crate::grants::Capability::Fs));
+    }
+
+    /// The rest of the capability set gates what *Kora* does for a package.
+    /// A helper is a separate process, and `net` and `fs` are what an
+    /// operating system can be told to withhold from one -- so asking for
+    /// `sql` is a mistake to report, not a request to quietly drop.
+    #[test]
+    fn a_helper_cannot_ask_for_a_capability_the_os_cannot_withhold() {
+        let err = helper_of("needs = [\"sql\"]\n").expect_err("refused");
+        assert!(
+            err.message.contains("cannot ask for `sql`"),
+            "{}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn an_unknown_capability_is_named_rather_than_ignored() {
+        let err = helper_of("needs = [\"gpu\"]\n").expect_err("refused");
+        assert!(err.message.contains("`gpu`"), "{}", err.message);
     }
 
     #[test]

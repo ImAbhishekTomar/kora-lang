@@ -180,7 +180,12 @@ pub enum StmtKind {
         context: ContextSpec,
         body: Vec<Stmt>,
     },
-    Break,
+    /// `break`, or `break <expr>` inside a `parallel for`.
+    ///
+    /// The value is what the breaking branch yields into the results list.
+    /// An ordinary loop has nowhere to put one, so a value there is refused
+    /// rather than ignored.
+    Break(Option<Expr>),
     Continue,
     Pass,
     /// `match expr:` with `case Pattern:` arms

@@ -180,7 +180,10 @@ def main():
 
 Each branch of `parallel for` runs on its own thread with its own heap, so
 there is no shared mutable state to guard. All branches draw from one token
-budget, and results come back in input order.
+budget, and results come back in input order. When the loop is a search rather
+than a map, `break candidate` stops it: no further item is started, the
+branches already running are let go of, and the value goes into the results —
+so the branch that finds the answer is the one that ends the search.
 
 An `agent` is a valid tool too, so a supervisor can delegate to specialists —
 each with its own `budget:` line — rather than wrapping every specialist in
@@ -551,7 +554,10 @@ the network.
 
 Not built yet: classes, list comprehensions, and `try`/`except`. PDF text is
 in (`pdf`); rendering a page to an image is a package with a helper process
-(`examples/lib/pdf`), not part of the compiler. See
+(`examples/lib/pdf`), not part of the compiler. A helper is confined by the
+operating system — seccomp on Linux, a sandbox profile on macOS — but not on
+Windows, where the runtime says so rather than implying a sandbox that is not
+there. See
 [DECISIONS.md](DECISIONS.md) for what is planned and what is deliberately
 excluded.
 

@@ -448,6 +448,11 @@ const KEYWORDS: &[&str] = &[
     "match",
     "case",
     "parallel for",
+    // `break` earns its place here now that it does something inside a
+    // `parallel for` that nothing else does: `break <value>` ends the
+    // fan-out and says what the branch that ended it found.
+    "break",
+    "continue",
     "budget",
     "context",
     "classified",

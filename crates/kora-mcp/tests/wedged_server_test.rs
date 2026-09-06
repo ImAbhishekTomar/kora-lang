@@ -72,7 +72,7 @@ fn a_server_that_never_answers_times_out_instead_of_hanging() {
     let mut server = connect("wedge", None);
     let started = Instant::now();
     let error = server
-        .call("act", serde_json::json!({}))
+        .call("act", serde_json::json!({}), None)
         .expect_err("a call that is never answered is an error");
 
     assert!(
@@ -95,7 +95,7 @@ fn a_server_that_exits_mid_call_reports_the_closed_connection() {
     }
     let mut server = connect("die", None);
     let error = server
-        .call("act", serde_json::json!({}))
+        .call("act", serde_json::json!({}), None)
         .expect_err("a server that exits cannot answer");
     assert!(
         error.message.contains("closed the connection"),
@@ -131,7 +131,7 @@ fn a_tool_call_is_never_repeated() {
     )
     .expect("the handshake succeeds");
     server
-        .call("act", serde_json::json!({}))
+        .call("act", serde_json::json!({}), None)
         .expect_err("the server never answers");
 
     let ran = std::fs::read_to_string(&tally).unwrap_or_default();
@@ -158,13 +158,13 @@ fn a_late_answer_is_not_read_as_the_reply_to_the_next_call() {
     // has time left when that answer arrives.
     let mut server = connect_with_timeout("late", LATE_TIMEOUT_SECS, None);
     server
-        .call("act", serde_json::json!({}))
+        .call("act", serde_json::json!({}), None)
         .expect_err("the first call times out");
 
     // The fixture holds this answer back until the stale one has been sent,
     // so the reply being skipped has definitely arrived first.
     let second = server
-        .call("act", serde_json::json!({}))
+        .call("act", serde_json::json!({}), None)
         .expect("the server is still up and answers the second call");
     assert_eq!(second, "answer to the second call");
 }

@@ -102,7 +102,15 @@ fn request(
         return Ok(response_from_json(&recorded));
     }
 
-    let outcome = perform(method, &url, body.as_deref(), interp.http_timeout_secs);
+    // A deadline in force cuts the request short rather than letting it run
+    // to a timeout the program never asked for. `budget: max_seconds` bounds
+    // the request in flight, not just the decision to send it.
+    let timeout = interp
+        .budget
+        .bounded_timeout(std::time::Duration::from_secs(
+            interp.http_timeout_secs.max(1),
+        ));
+    let outcome = perform(method, &url, body.as_deref(), timeout);
     let encoded = match &outcome {
         Ok(response) => serde_json::json!({
             "status": response.status,
@@ -157,11 +165,9 @@ fn perform(
     method: &str,
     url: &str,
     body: Option<&str>,
-    timeout_secs: u64,
+    timeout: std::time::Duration,
 ) -> Result<Response, String> {
-    let agent = ureq::AgentBuilder::new()
-        .timeout(std::time::Duration::from_secs(timeout_secs))
-        .build();
+    let agent = ureq::AgentBuilder::new().timeout(timeout).build();
 
     // GET is idempotent, so retrying is safe. POST is not: a retried payment
     // is worse than a failed one, so it is attempted once.

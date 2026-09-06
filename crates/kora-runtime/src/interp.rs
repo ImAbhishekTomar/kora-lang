@@ -36,6 +36,16 @@ pub enum StopKind {
     /// A debugger client asked for the run to stop. Not a failure either: the
     /// program did nothing wrong, somebody pressed stop.
     Terminated,
+    /// The `parallel for` this branch belongs to was stopped by another
+    /// branch's `break`. Not a failure: the work simply stopped being worth
+    /// doing.
+    ///
+    /// It rides the error channel rather than the `Flow` channel because it
+    /// has to unwind through a *call*, not just a block. A function that
+    /// returned normally would hand its caller a `none` that the rest of the
+    /// statement would then try to use, which turns a stop into a type error
+    /// several lines away from anything the program did.
+    Stopped,
 }
 
 /// A runtime error, source-anchored like syntax errors.
@@ -91,6 +101,21 @@ impl RuntimeError {
         }
     }
 
+    /// Raised at the first statement boundary after a sibling branch broke.
+    fn stopped(span: Span) -> Self {
+        RuntimeError {
+            message: "the parallel loop this branch belongs to was stopped".into(),
+            hint: None,
+            span,
+            kind: StopKind::Stopped,
+            file: None,
+        }
+    }
+
+    pub fn is_stopped(&self) -> bool {
+        self.kind == StopKind::Stopped
+    }
+
     pub fn is_terminated(&self) -> bool {
         self.kind == StopKind::Terminated
     }
@@ -139,7 +164,11 @@ impl RuntimeError {
 /// Non-error control flow escaping a block.
 enum Flow {
     Normal,
-    Break,
+    /// `break`, carrying the value of `break <expr>` when there was one.
+    ///
+    /// Only a `parallel for` has anywhere to put that value; the checker
+    /// refuses it everywhere else, so an ordinary loop only ever sees `None`.
+    Break(Option<Value>),
     Continue,
     Return(Value),
 }
@@ -274,6 +303,12 @@ pub struct Interpreter {
     /// across calls and shared with `parallel for` branches: starting a
     /// helper per page would cost more than the work it does.
     pub helpers: Arc<Mutex<HashMap<usize, kora_helper::Worker>>>,
+    /// Set when a branch of the enclosing `parallel for` has stopped it.
+    ///
+    /// `None` in the main interpreter, which belongs to no fan-out. Shared
+    /// across a fan-out's workers, so one branch's `break` is seen by every
+    /// other one.
+    stop: Option<Arc<std::sync::atomic::AtomicBool>>,
     /// Attached debugger, if any. `None` costs one branch per statement.
     ///
     /// Taken out of the interpreter while it is being called, so the debugger
@@ -415,6 +450,9 @@ impl Interpreter {
             pending_slot: None,
             allow_private_hosts: false,
             http_timeout_secs: 30,
+            // The main interpreter belongs to no fan-out; a worker is given
+            // the flag its siblings share.
+            stop: None,
             mocked_analyze: Vec::new(),
             collecting_tests: false,
             tests: Vec::new(),
@@ -626,7 +664,7 @@ impl Interpreter {
             StmtKind::While { cond, body } => {
                 while self.eval(cond, scope)?.truthy() {
                     match self.exec_block(body, scope)? {
-                        Flow::Break => break,
+                        Flow::Break(_) => break,
                         Flow::Continue | Flow::Normal => {}
                         ret @ Flow::Return(_) => return Ok(ret),
                     }
@@ -639,7 +677,7 @@ impl Interpreter {
                 for item in items {
                     scope.insert(var.clone(), item);
                     match self.exec_block(body, scope)? {
-                        Flow::Break => break,
+                        Flow::Break(_) => break,
                         Flow::Continue | Flow::Normal => {}
                         ret @ Flow::Return(_) => return Ok(ret),
                     }
@@ -960,7 +998,13 @@ impl Interpreter {
                 }
                 Ok(Flow::Normal)
             }
-            StmtKind::Break => Ok(Flow::Break),
+            StmtKind::Break(value) => {
+                let value = match value {
+                    Some(expr) => Some(self.eval(expr, scope)?),
+                    Option::None => Option::None,
+                };
+                Ok(Flow::Break(value))
+            }
             StmtKind::Continue => Ok(Flow::Continue),
             StmtKind::Pass => Ok(Flow::Normal),
             StmtKind::Match { subject, arms } => {
@@ -1090,12 +1134,26 @@ impl Interpreter {
 
     fn exec_block(&mut self, body: &[Stmt], scope: &mut Scope) -> Result<Flow, RuntimeError> {
         for stmt in body {
+            // A statement boundary is the one place a running branch can be
+            // let go of safely: everything before it has finished, and
+            // nothing after it has started. A thread cannot be killed, and
+            // pretending otherwise would leave a half-written effect behind.
+            if self.stop_requested() {
+                return Err(RuntimeError::stopped(stmt.span));
+            }
             match self.exec(stmt, scope)? {
                 Flow::Normal => {}
                 other => return Ok(other),
             }
         }
         Ok(Flow::Normal)
+    }
+
+    /// Whether the fan-out this branch belongs to has been stopped.
+    fn stop_requested(&self) -> bool {
+        self.stop
+            .as_ref()
+            .is_some_and(|flag| flag.load(std::sync::atomic::Ordering::Relaxed))
     }
 
     /// `name = name + <expr>` where `name` is a plain local string, appended
@@ -1871,7 +1929,7 @@ impl Interpreter {
             );
             self.parent_span = outer_parent;
             let error = match &flow {
-                Err(e) if !e.is_suspension() => Some(e.message.clone()),
+                Err(e) if !e.is_suspension() && !e.is_stopped() => Some(e.message.clone()),
                 _ => Option::None,
             };
             self.tracer.end(span, error);
@@ -2772,13 +2830,21 @@ impl Interpreter {
         let media_key = cassette::media_key(&image_parts);
         let legacy_media_key = cassette::legacy_media_key(&image_parts);
 
-        let model = match kwargs.iter().find(|(n, _)| n == "model") {
+        let mut model = match kwargs.iter().find(|(n, _)| n == "model") {
             Some((_, arg)) => self.named_model(arg, scope)?,
             Option::None => self
                 .config
                 .default_model()
                 .map_err(|e| RuntimeError::new(e.message, span))?,
         };
+        // The deadline in force travels with the call, which is what makes
+        // `budget: max_seconds` bound a request already in flight rather than
+        // only the decision to send one. Set per call: the same named model
+        // is used under different budgets in the same program.
+        model.deadline = self
+            .budget
+            .remaining_time()
+            .map(|left| std::time::Instant::now() + left);
         let model_label = format!("{:?}:{}", model.provider, model.model).to_lowercase();
         // Structural, so a comment above the call no longer moves it. The
         // line-based spelling is kept alongside it purely to look up a
@@ -3649,15 +3715,30 @@ impl Interpreter {
         let packages = self.packages.clone();
 
         let portable_items: Vec<Portable> = items.iter().map(Portable::from_value).collect();
+        // Set when the loop has stopped being worth running: by the first
+        // branch to produce a value under `first`, or by the first branch to
+        // `break`. One flag for both, because both mean the same thing to
+        // every other worker.
+        //
+        // Checked before a worker takes its next item, so no further work is
+        // started -- which is the bulk of what stopping saves. The branches
+        // already running see it too, and leave at their next statement
+        // boundary; a statement is as fine-grained as this can safely be,
+        // since a thread cannot be killed and a half-written effect is worse
+        // than a branch that runs a moment too long. A request already sent
+        // still runs to its own deadline: that is the "did it happen"
+        // problem that makes a tool call unretryable, and `budget(
+        // max_seconds = N)` is what bounds it.
+        //
+        // Shared behind an `Arc` so each branch's interpreter can hold it.
+        let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // A fan-out nested inside another one gets its own flag, so its
+        // branches see their own siblings. It must still notice the outer
+        // loop stopping, or an outer stop would wait for this whole inner
+        // loop to finish before anything unwound.
+        let parent_stop = self.stop.clone();
         let next = std::sync::atomic::AtomicUsize::new(0);
         let total = portable_items.len();
-        // Set by the first branch to produce a value under `first`. Checked
-        // before a worker takes its next item, so no further work is
-        // started. A branch already in flight is not interrupted -- the same
-        // honest limit `max_seconds` documents, and for the same reason:
-        // stopping a request already sent is the "did it happen" problem
-        // that makes a tool call unretryable.
-        let stop = std::sync::atomic::AtomicBool::new(false);
         let slots: Vec<std::sync::Mutex<Option<WorkerResult>>> =
             (0..total).map(|_| std::sync::Mutex::new(None)).collect();
 
@@ -3665,6 +3746,17 @@ impl Interpreter {
         std::thread::scope(|s| {
             for _ in 0..worker_count {
                 s.spawn(|| loop {
+                    // A fan-out nested inside another one has its own flag,
+                    // so its branches see their own siblings. It must still
+                    // notice the outer loop stopping, or an outer `break` or
+                    // `first` would wait for this whole inner loop to finish
+                    // before anything unwound.
+                    if parent_stop
+                        .as_ref()
+                        .is_some_and(|f| f.load(std::sync::atomic::Ordering::Relaxed))
+                    {
+                        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
                     if stop.load(std::sync::atomic::Ordering::Relaxed) {
                         break;
                     }
@@ -3697,11 +3789,14 @@ impl Interpreter {
                         &mcp,
                         &python,
                         &helpers,
+                        &stop,
                     );
                     // A value, not merely a finished branch: a body that
                     // falls off its end has not answered the question the
                     // race was asking.
-                    if first && matches!(&outcome.value, Ok(v) if !matches!(v, Portable::None)) {
+                    if first
+                        && matches!(&outcome.value, Some(Ok(v)) if !matches!(v, Portable::None))
+                    {
                         stop.store(true, std::sync::atomic::Ordering::Relaxed);
                     }
                     *slots[index].lock().unwrap() = Some(outcome);
@@ -3728,7 +3823,13 @@ impl Interpreter {
             self.model_calls += result.model_calls;
             self.output.extend(result.output);
             self.declassify_sites.extend(result.declassify_sites);
-            match result.value {
+            // A branch that was let go of part way through produced nothing,
+            // which is the same as a branch that was never started: it takes
+            // no slot rather than leaving a `none` in a list of answers.
+            let Some(value) = result.value else {
+                continue;
+            };
+            match value {
                 Ok(v) => {
                     let value = v.into_value();
                     if first && winner.is_none() && !matches!(value, Value::None) {
@@ -3779,7 +3880,11 @@ impl Interpreter {
 
 /// What one worker produced.
 struct WorkerResult {
-    value: Result<Portable, RuntimeError>,
+    /// `None` when the branch produced nothing to collect because it was let
+    /// go of part way through. That is the same category as a branch that
+    /// never started, so it takes no slot in the results either -- a list of
+    /// answers should not be salted with holes where the search stopped.
+    value: Option<Result<Portable, RuntimeError>>,
     output: Vec<String>,
     tokens_in: u64,
     tokens_out: u64,
@@ -3824,6 +3929,7 @@ fn run_one(
     mcp: &Arc<Mutex<HashMap<String, kora_mcp::Server>>>,
     python: &Arc<Mutex<Option<kora_python::Worker>>>,
     helpers: &Arc<Mutex<HashMap<usize, kora_helper::Worker>>>,
+    stop: &Arc<std::sync::atomic::AtomicBool>,
 ) -> WorkerResult {
     let mut interp = Interpreter::new();
     interp.restore_modules(module_seed, current_module);
@@ -3861,6 +3967,7 @@ fn run_one(
     interp.mcp = mcp.clone();
     interp.python = python.clone();
     interp.helpers = helpers.clone();
+    interp.stop = Some(stop.clone());
     interp.parent_span = parent_span.clone();
     // Each branch counts its own journal steps, so a resumed run replays
     // correctly no matter how the threads interleaved.
@@ -3876,9 +3983,24 @@ fn run_one(
     let value = match flow {
         // `return` inside the body yields that value; otherwise the body's
         // last bound value for `var` is not meaningful, so yield None.
-        Ok(Flow::Return(v)) => Ok(Portable::from_value(&v)),
-        Ok(_) => Ok(Portable::None),
-        Err(e) => Err(e),
+        Ok(Flow::Return(v)) => Some(Ok(Portable::from_value(&v))),
+        // `break <value>` stops the fan-out *and* says what this branch
+        // found, which is the whole first-success-wins shape: the branch
+        // that knows the answer is the branch that ends the search.
+        Ok(Flow::Break(value)) => {
+            stop.store(true, std::sync::atomic::Ordering::Relaxed);
+            // `break` on its own stops the loop without answering, so it
+            // takes no slot; `break <value>` is the branch saying what it
+            // found, which does.
+            value.as_ref().map(|v| Ok(Portable::from_value(v)))
+        }
+        Ok(_) => Some(Ok(Portable::None)),
+        // The branch was let go of because a sibling found the answer. It
+        // produced nothing, which is not the same as failing: a stop must not
+        // take the whole loop down with it, and it must not leave a hole in
+        // the results either.
+        Err(e) if e.is_stopped() => Option::None,
+        Err(e) => Some(Err(e)),
     };
 
     // A branch that ended mid-line still wrote those characters.
@@ -3996,7 +4118,7 @@ impl Interpreter {
         scope.insert(handler.var.clone(), Value::Str(Rc::new(text.to_string())));
         match self.exec_block(&handler.body, scope)? {
             Flow::Normal => Ok(()),
-            Flow::Break | Flow::Continue => Err(RuntimeError::new(
+            Flow::Break(_) | Flow::Continue => Err(RuntimeError::new(
                 "`break` and `continue` have nothing to leave inside an `on token` handler",
                 handler.span,
             )
@@ -4445,7 +4567,7 @@ impl Interpreter {
             .with_hint(
                 "return the text to hand back to the model in place of running the tool, or fall off the end of the block to let it run",
             )),
-            Flow::Break | Flow::Continue => Err(RuntimeError::new(
+            Flow::Break(_) | Flow::Continue => Err(RuntimeError::new(
                 "`break` and `continue` have nothing to leave inside an `on tool_call` handler",
                 handler.span,
             )
@@ -6361,13 +6483,18 @@ impl Interpreter {
         let arguments: serde_json::Value =
             serde_json::from_str(arguments_json).unwrap_or(serde_json::json!({}));
 
+        // A tool call already sent is work the budget is paying for, so a
+        // deadline in force bounds it rather than only bounding the decision
+        // to make it.
+        let within = self.budget.remaining_time();
+
         let mut servers = self.mcp.lock().unwrap_or_else(|e| e.into_inner());
         // Not being connected is a bug in the runtime rather than a failure
         // of the server, so it still raises.
         let connected = servers
             .get_mut(server)
             .ok_or_else(|| RuntimeError::new(format!("`{server}` is not connected"), span))?;
-        match connected.call(name, arguments) {
+        match connected.call(name, arguments, within) {
             Ok(text) => Ok(ToolRun::Result(text)),
             Err(e) => Ok(ToolRun::Unavailable(format!(
                 "`{server}.{name}` failed: {e}"
@@ -6527,18 +6654,50 @@ impl Interpreter {
             })
             .collect();
 
+        // A helper grinding on a page is work the budget is paying for.
+        let within = self.budget.remaining_time();
         let mut workers = self.helpers.lock().unwrap_or_else(|e| e.into_inner());
         if let std::collections::hash_map::Entry::Vacant(slot) = workers.entry(package) {
             let mut config = kora_helper::Config::new(program);
             config.timeout_secs = spec.timeout_secs;
+            // The manifest declares what the helper wants; the importer's
+            // grants decide what it gets. A package cannot pass on authority
+            // it does not hold, and a helper is not an exception to that --
+            // it is the case where the rule matters most, because the code
+            // on the other side is compiled and unread.
+            for capability in &spec.needs {
+                self.require_capability(
+                    *capability,
+                    &format!("a helper that needs `{}`", capability.name()),
+                    span,
+                )?;
+                match capability {
+                    kora_pkg::Capability::Net => config.needs.net = true,
+                    kora_pkg::Capability::Fs => config.needs.fs = true,
+                    // The manifest parser refuses anything else, so this is
+                    // unreachable rather than a silent widening.
+                    _ => {}
+                }
+            }
             let worker = kora_helper::Worker::start(&config)
                 .map_err(|e| RuntimeError::new(e.message, span))?;
+            // A sandbox that silently does nothing is worse than one that
+            // says so: on a platform with no mechanism to apply, the helper
+            // runs with this process's rights and the person running it is
+            // told, once, on stderr -- the channel the helper's own output
+            // already uses.
+            if !config.needs.is_unconfined() && !worker.confinement().describes_confinement() {
+                eprintln!(
+                    "warning: the helper for `{}` is not confined on this platform; it runs with the same rights as `kora`",
+                    resolved.manifest.name.as_deref().unwrap_or("this package")
+                );
+            }
             slot.insert(worker);
         }
         let outcome = workers
             .get_mut(&package)
             .expect("just started")
-            .call(function, encoded, blobs)
+            .call(function, encoded, blobs, within)
             .map_err(|e| RuntimeError::new(e.message, span))?;
         drop(workers);
 
