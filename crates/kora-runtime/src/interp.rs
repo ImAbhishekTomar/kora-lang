@@ -6443,19 +6443,25 @@ fn helper_program(
         }));
     };
 
-    let path = match artifact {
-        kora_pkg::HelperArtifact::Path { path } => package_root.join(path),
-        kora_pkg::HelperArtifact::Fetch { sha256, binary, .. } => {
-            let dir = kora_pkg::helper_dir(project_root, sha256);
-            dir.join(binary.as_deref().unwrap_or("helper"))
-        }
+    // How it gets there differs, and so does what to do when it has not: a
+    // fetched helper is `kora install`'s job, while a pathed one is built by
+    // whoever is developing it.
+    let (path, hint) = match artifact {
+        kora_pkg::HelperArtifact::Path { path } => (
+            package_root.join(path),
+            "this package builds its helper from source; see its README",
+        ),
+        kora_pkg::HelperArtifact::Fetch { sha256, binary, .. } => (
+            kora_pkg::helper_dir(project_root, sha256).join(binary.as_deref().unwrap_or("helper")),
+            "run `kora install <file.ko>`",
+        ),
     };
     if !path.is_file() {
         return Err(RuntimeError::new(
             format!("the helper is not installed: {}", path.display()),
             span,
         )
-        .with_hint("run `kora install <file.ko>`"));
+        .with_hint(hint));
     }
     Ok(path)
 }
