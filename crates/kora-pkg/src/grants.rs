@@ -21,6 +21,8 @@ pub enum Capability {
     Sql,
     Env,
     Python,
+    /// Running the package's own helper program.
+    Helper,
 }
 
 impl Capability {
@@ -31,6 +33,7 @@ impl Capability {
             Capability::Sql => "sql",
             Capability::Env => "env",
             Capability::Python => "python",
+            Capability::Helper => "helper",
         }
     }
 
@@ -61,6 +64,7 @@ impl Capability {
             Capability::Sql,
             Capability::Env,
             Capability::Python,
+            Capability::Helper,
         ]
         .into_iter()
         .find(|c| c.name() == name)

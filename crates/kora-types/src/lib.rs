@@ -216,7 +216,7 @@ const MODULES: &[(&str, &[&str])] = &[
     (
         "fs",
         &[
-            "read", "write", "append", "exists", "lines", "image", "list", "glob",
+            "read", "write", "append", "exists", "lines", "image", "bytes", "list", "glob",
         ],
     ),
     ("time", &["now", "format", "elapsed"]),
@@ -285,6 +285,18 @@ impl Checker<'_> {
                         span: stmt.span,
                         detail: format!("type {name}:\n{}", lines.join("\n")),
                         doc: None,
+                    });
+                }
+                StmtKind::UseHelper { alias } => {
+                    self.define_symbol(Symbol {
+                        name: alias.clone(),
+                        kind: SymbolKind::Module,
+                        span: stmt.span,
+                        detail: "use helper".to_string(),
+                        doc: Some(
+                            "This package's helper: a separate program it carries work out to."
+                                .to_string(),
+                        ),
                     });
                 }
                 StmtKind::UsePython { module, alias } => {
@@ -756,6 +768,13 @@ impl Checker<'_> {
             StmtKind::UsePython { alias, .. } => {
                 // Which functions a Python module has is a runtime question,
                 // so the checker records the alias and stops there.
+                self.declare(alias);
+            }
+            StmtKind::UseHelper { alias } => {
+                // What a helper answers to is the helper's business, and it
+                // is a different binary on every platform. The alias is
+                // recorded; whether a package declares a helper at all is
+                // checked where the manifest is read.
                 self.declare(alias);
             }
             StmtKind::UsePkg { alias, .. } => {

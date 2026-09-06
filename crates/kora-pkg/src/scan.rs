@@ -100,6 +100,7 @@ fn walk(stmts: &[Stmt], include_tests: bool, out: &mut Imports) {
             | StmtKind::TypeDef { .. }
             | StmtKind::Use { .. }
             | StmtKind::UsePython { .. }
+            | StmtKind::UseHelper { .. }
             | StmtKind::UseMcp { .. }
             | StmtKind::Assert { .. }
             | StmtKind::Return(_)

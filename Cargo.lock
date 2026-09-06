@@ -704,6 +704,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "kora-helper"
+version = "0.2.0"
+dependencies = [
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "kora-lsp"
 version = "0.2.0"
 dependencies = [
@@ -755,6 +763,7 @@ dependencies = [
 name = "kora-runtime"
 version = "0.2.0"
 dependencies = [
+ "kora-helper",
  "kora-mcp",
  "kora-models",
  "kora-pkg",

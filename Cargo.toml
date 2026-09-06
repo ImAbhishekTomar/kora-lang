@@ -10,6 +10,7 @@ members = [
     "crates/kora-dap",
     "crates/kora-mcp",
     "crates/kora-python",
+    "crates/kora-helper",
     "crates/kora-cli",
 ]
 
@@ -37,6 +38,7 @@ kora-lsp = { path = "crates/kora-lsp", version = "0.2.0" } # x-release-please-ve
 kora-dap = { path = "crates/kora-dap", version = "0.2.0" } # x-release-please-version
 kora-mcp = { path = "crates/kora-mcp", version = "0.2.0" } # x-release-please-version
 kora-python = { path = "crates/kora-python", version = "0.2.0" } # x-release-please-version
+kora-helper = { path = "crates/kora-helper", version = "0.2.0" } # x-release-please-version
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 ureq = { version = "2", features = ["json"] }

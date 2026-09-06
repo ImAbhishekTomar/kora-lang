@@ -336,6 +336,8 @@ pub(crate) fn value_to_json(value: &Value) -> Option<J> {
         // megabyte of pixels ends up in a log line by accident, so the
         // caller is told to hand the image to `analyze` instead.
         Value::Image(_)
+        | Value::Bytes(_)
+        | Value::Helper { .. }
         | Value::Func { .. }
         | Value::Builtin(_)
         | Value::Module { .. }

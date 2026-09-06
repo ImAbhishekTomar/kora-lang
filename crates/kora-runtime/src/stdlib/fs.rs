@@ -40,6 +40,7 @@ pub const EXPORTS: super::Exports = &[
     ("exists", exists),
     ("lines", lines),
     ("image", image),
+    ("bytes", bytes),
     ("list", list),
     ("glob", glob_files),
 ];
@@ -153,6 +154,23 @@ fn image(_interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Valu
         )),
         Err(reason) => Ok(err(reason)),
     }
+}
+
+/// `fs.bytes(path) -> Ok(bytes) | Err(reason)`
+///
+/// A file that is not text. `fs.read` decodes as UTF-8 and fails on a PDF, a
+/// font, or an archive; forcing one through a lossy decode would hand back
+/// something that no longer round-trips. Bytes exist to be handed to
+/// something that understands them — a package helper, usually — and are
+/// `unverified` like any other file content.
+fn bytes(interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
+    let path = checked_path(&args, "fs.bytes", span)?;
+    super::journaled_read(interp, "fs.bytes", span, move |_| {
+        match std::fs::read(&path) {
+            Ok(bytes) => ok(Value::Bytes(Rc::new(bytes)).with_label(Label::UNVERIFIED)),
+            Err(e) => err(describe_io(&path, &e)),
+        }
+    })
 }
 
 /// `fs.list(dir) -> Ok(list of paths) | Err(reason)`

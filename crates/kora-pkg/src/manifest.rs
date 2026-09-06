@@ -64,6 +64,60 @@ pub struct Dep {
     pub grants: Grants,
 }
 
+/// `[package.helper]` — a program this package carries work out to.
+///
+/// Some work cannot be written in Kora and does not belong in the compiler
+/// either: rasterizing a PDF page needs a large C library, and linking that
+/// into the interpreter would put a memory-unsafe parser in the same address
+/// space as every label and capability the run holds. A helper is that work,
+/// kept in its own process.
+///
+/// The artifact is named per target and pinned by hash. `kora install`
+/// fetches only the one this machine needs, verifies it, and records it — a
+/// program that never imports the package downloads nothing at all, and one
+/// that does gets a binary whose contents are in `kora.sums` like any other
+/// dependency.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct HelperSpec {
+    /// The wire protocol. One today: `stdio/v1`.
+    pub protocol: String,
+    /// How long one call may take before the helper is killed.
+    pub timeout_secs: u64,
+    /// Target triple -> where that platform's helper comes from.
+    pub artifacts: HashMap<String, HelperArtifact>,
+}
+
+/// Where one platform's helper binary comes from.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HelperArtifact {
+    /// `path = "helper/kora-pdf-helper"`, relative to the package root. For a
+    /// helper built alongside the package, and for developing one.
+    Path { path: PathBuf },
+    /// `url = "..."` with a mandatory `sha256`. An archive is unpacked and
+    /// `binary` names the executable inside it.
+    Fetch {
+        url: String,
+        sha256: String,
+        binary: Option<String>,
+    },
+}
+
+/// The target triple this build of Kora runs on.
+///
+/// The names match the release matrix, so what a package declares is what the
+/// release artifacts are already called.
+pub fn host_target() -> &'static str {
+    match (std::env::consts::ARCH, std::env::consts::OS) {
+        ("x86_64", "linux") => "x86_64-unknown-linux-gnu",
+        ("aarch64", "linux") => "aarch64-unknown-linux-gnu",
+        ("x86_64", "macos") => "x86_64-apple-darwin",
+        ("aarch64", "macos") => "aarch64-apple-darwin",
+        ("x86_64", "windows") => "x86_64-pc-windows-msvc",
+        ("aarch64", "windows") => "aarch64-pc-windows-msvc",
+        _ => "unsupported",
+    }
+}
+
 /// A parsed `kora.toml`, from the package's point of view.
 ///
 /// A root program usually has no `[package]` section at all; it still has a
@@ -79,6 +133,8 @@ pub struct Manifest {
     /// it. Checked against what it was actually granted, so a shortfall is
     /// reported before the program runs rather than at the first call.
     pub requires: Grants,
+    /// `[package.helper]` — a separate program this package talks to.
+    pub helper: Option<HelperSpec>,
 }
 
 /// Why a manifest could not be read.
@@ -182,6 +238,9 @@ impl Manifest {
             if let Some(requires) = section.get("requires").and_then(|v| v.as_table()) {
                 manifest.requires = Grants::from_toml(requires);
             }
+            if let Some(helper) = section.get("helper").and_then(|v| v.as_table()) {
+                manifest.helper = Some(parse_helper(helper)?);
+            }
         }
 
         if let Some(section) = root.get("dependencies").and_then(|v| v.as_table()) {
@@ -200,6 +259,77 @@ impl Manifest {
             .clone()
             .unwrap_or_else(|| PathBuf::from(DEFAULT_ENTRY))
     }
+}
+
+/// Read `[package.helper]`: the protocol, the timeout, and one entry per
+/// target triple.
+fn parse_helper(table: &toml::map::Map<String, toml::Value>) -> Result<HelperSpec, ManifestError> {
+    let protocol = table
+        .get("protocol")
+        .and_then(|v| v.as_str())
+        .unwrap_or("stdio/v1")
+        .to_string();
+    if protocol != "stdio/v1" {
+        return Err(
+            ManifestError::new(format!("unknown helper protocol `{protocol}`"))
+                .with_hint("this version of Kora speaks `stdio/v1`"),
+        );
+    }
+    let timeout_secs = table
+        .get("timeout_secs")
+        .and_then(toml::Value::as_integer)
+        .filter(|n| *n > 0)
+        .unwrap_or(120) as u64;
+
+    let mut artifacts = HashMap::new();
+    for (target, spec) in table {
+        // Everything that is a table is a target; the scalars above are the
+        // settings. A typo'd setting therefore reads as a target nobody
+        // runs on, which `kora install` reports rather than ignoring.
+        let Some(entry) = spec.as_table() else {
+            continue;
+        };
+        if let Some(path) = entry.get("path").and_then(|v| v.as_str()) {
+            artifacts.insert(
+                target.clone(),
+                HelperArtifact::Path {
+                    path: PathBuf::from(path),
+                },
+            );
+            continue;
+        }
+        let Some(url) = entry.get("url").and_then(|v| v.as_str()) else {
+            return Err(ManifestError::new(format!(
+                "the helper for `{target}` names neither a path nor a url"
+            )));
+        };
+        // A downloaded binary with no hash is a binary nobody can check. The
+        // format has nowhere to put an unpinned one.
+        let Some(sha256) = entry.get("sha256").and_then(|v| v.as_str()) else {
+            return Err(
+                ManifestError::new(format!("the helper for `{target}` has no `sha256`")).with_hint(
+                    "a fetched helper is pinned by hash, so what runs is what was reviewed",
+                ),
+            );
+        };
+        artifacts.insert(
+            target.clone(),
+            HelperArtifact::Fetch {
+                url: url.to_string(),
+                sha256: sha256.to_string(),
+                binary: entry
+                    .get("binary")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string),
+            },
+        );
+    }
+
+    Ok(HelperSpec {
+        protocol,
+        timeout_secs,
+        artifacts,
+    })
 }
 
 fn parse_dep(name: &str, spec: &toml::Value) -> Result<Dep, ManifestError> {

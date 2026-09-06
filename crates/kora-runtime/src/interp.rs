@@ -270,6 +270,10 @@ pub struct Interpreter {
     /// worker per run rather than one per call, since starting an
     /// interpreter is the expensive part.
     pub python: Arc<Mutex<Option<kora_python::Worker>>>,
+    /// Running package helpers, by package. One process per package, reused
+    /// across calls and shared with `parallel for` branches: starting a
+    /// helper per page would cost more than the work it does.
+    pub helpers: Arc<Mutex<HashMap<usize, kora_helper::Worker>>>,
     /// Attached debugger, if any. `None` costs one branch per statement.
     ///
     /// Taken out of the interpreter while it is being called, so the debugger
@@ -418,6 +422,7 @@ impl Interpreter {
             parent_span: Option::None,
             mcp: Arc::new(Mutex::new(HashMap::new())),
             python: Arc::new(Mutex::new(Option::None)),
+            helpers: Arc::new(Mutex::new(HashMap::new())),
             debugger: Option::None,
             debug: debug::Session::default(),
             in_guard: 0,
@@ -740,6 +745,30 @@ impl Interpreter {
                 let value = Value::PyModule {
                     module: Rc::new(module.clone()),
                 };
+                scope.insert(alias.clone(), value.clone());
+                self.globals.insert(alias.clone(), value);
+                Ok(Flow::Normal)
+            }
+            StmtKind::UseHelper { alias } => {
+                let package = self.modules[self.current_module].package;
+                // A helper belongs to a package's manifest, so `use helper`
+                // in a program that declares none has nothing to bind. Said
+                // here rather than at the first call, where the mistake is
+                // three frames away from the line that caused it.
+                if self
+                    .packages
+                    .packages
+                    .get(package.0)
+                    .and_then(|p| p.manifest.helper.as_ref())
+                    .is_none()
+                {
+                    return Err(
+                        RuntimeError::new("this package declares no helper", stmt.span)
+                            .with_hint("add a `[package.helper]` section to its kora.toml")
+                            .in_file(&self.current_file()),
+                    );
+                }
+                let value = Value::Helper { package: package.0 };
                 scope.insert(alias.clone(), value.clone());
                 self.globals.insert(alias.clone(), value);
                 Ok(Flow::Normal)
@@ -1595,6 +1624,15 @@ impl Interpreter {
                             {
                                 let module = module.to_string();
                                 return self.call_python(&module, name, arg_vals, expr.span);
+                            }
+                        }
+                        // `helper.render(...)`: a call out to this
+                        // package's own process.
+                        if let ExprKind::Name(alias) = &object.kind {
+                            if let Ok(Value::Helper { package }) =
+                                self.lookup(alias, scope, object.span)
+                            {
+                                return self.call_helper(package, name, arg_vals, expr.span);
                             }
                         }
                         if let ExprKind::Name(module_alias) = &object.kind {
@@ -3433,6 +3471,8 @@ fn value_to_json(value: &Value) -> serde_json::Value {
         // nor the size: the data text is part of the cassette key, and a key
         // that moves when a file is renamed would miss every recording.
         Value::Image(_) => J::String("<image>".to_string()),
+        Value::Bytes(b) => J::String(format!("<bytes {}>", b.len())),
+        Value::Helper { .. } => J::String("<helper>".to_string()),
         Value::Func { def, .. } => J::String(format!("<function {}>", def.name)),
         Value::Builtin(name) => J::String(format!("<builtin {name}>")),
         Value::Module { name } => J::String(format!("<module {name}>")),
@@ -3564,6 +3604,7 @@ impl Interpreter {
         // slow and wrong.
         let mcp = self.mcp.clone();
         let python = self.python.clone();
+        let helpers = self.helpers.clone();
         let program_name = self.program_name.clone();
         let body: Vec<Stmt> = body.to_vec();
         let budget = self.budget.clone();
@@ -3620,6 +3661,7 @@ impl Interpreter {
                         &parent_span,
                         &mcp,
                         &python,
+                        &helpers,
                     );
                     *slots[index].lock().unwrap() = Some(outcome);
                 });
@@ -3708,6 +3750,7 @@ fn run_one(
     parent_span: &Option<String>,
     mcp: &Arc<Mutex<HashMap<String, kora_mcp::Server>>>,
     python: &Arc<Mutex<Option<kora_python::Worker>>>,
+    helpers: &Arc<Mutex<HashMap<usize, kora_helper::Worker>>>,
 ) -> WorkerResult {
     let mut interp = Interpreter::new();
     interp.restore_modules(module_seed, current_module);
@@ -3744,6 +3787,7 @@ fn run_one(
     interp.tracer = tracer.clone();
     interp.mcp = mcp.clone();
     interp.python = python.clone();
+    interp.helpers = helpers.clone();
     interp.parent_span = parent_span.clone();
     // Each branch counts its own journal steps, so a resumed run replays
     // correctly no matter how the threads interleaved.
@@ -6278,6 +6322,200 @@ impl Interpreter {
         self.journal_record(&site, "python", &encoded_result, span)?;
 
         Ok(python_result_value(&encoded_result))
+    }
+
+    /// `helper.render(...)`: a call out to the package's own program.
+    ///
+    /// A helper is a separate process, which is the whole point: the code on
+    /// the other side is usually a large C library, and a large C library
+    /// parsing a file the program did not write has no business sharing an
+    /// address space with the labels, the journal, and the budget.
+    fn call_helper(
+        &mut self,
+        package: usize,
+        function: &str,
+        args: Vec<Value>,
+        span: Span,
+    ) -> Result<Value, RuntimeError> {
+        self.require_capability(kora_pkg::Capability::Helper, "a helper", span)?;
+
+        // Another process is another sink: a secret released to a model has
+        // not been released to a helper.
+        for arg in &args {
+            if self.deep_label(arg).is_classified() && !arg.label().may_reach("helper") {
+                return Err(RuntimeError::new(
+                    "classified data cannot reach a helper (no declassify in scope)",
+                    span,
+                )
+                .with_hint(
+                    "a helper runs in its own process, so it is its own sink: wrap it in `declassify <value> for helper:` and allow that sink in kora.toml",
+                ));
+            }
+        }
+
+        let Some(resolved) = self.packages.packages.get(package) else {
+            return Err(RuntimeError::new("this package is not resolved", span));
+        };
+        let Some(spec) = resolved.manifest.helper.clone() else {
+            return Err(RuntimeError::new("this package declares no helper", span));
+        };
+        let package_root = resolved.root.clone();
+        let project_root = self
+            .packages
+            .packages
+            .first()
+            .map(|p| p.root.clone())
+            .unwrap_or_else(|| PathBuf::from("."));
+        let program = helper_program(&spec, &package_root, &project_root, span)?;
+
+        // Bytes travel beside the JSON rather than inside it: a rendered page
+        // is megabytes, and base64 would add a third to every one of them.
+        let mut blobs: Vec<Vec<u8>> = Vec::new();
+        let encoded: Vec<serde_json::Value> = args
+            .iter()
+            .map(|value| match value.unlabeled() {
+                Value::Bytes(bytes) => {
+                    blobs.push((**bytes).clone());
+                    serde_json::json!({ "blob": blobs.len() - 1 })
+                }
+                other => value_to_json(other),
+            })
+            .collect();
+
+        let mut workers = self.helpers.lock().unwrap_or_else(|e| e.into_inner());
+        if let std::collections::hash_map::Entry::Vacant(slot) = workers.entry(package) {
+            let mut config = kora_helper::Config::new(program);
+            config.timeout_secs = spec.timeout_secs;
+            let worker = kora_helper::Worker::start(&config)
+                .map_err(|e| RuntimeError::new(e.message, span))?;
+            slot.insert(worker);
+        }
+        let outcome = workers
+            .get_mut(&package)
+            .expect("just started")
+            .call(function, encoded, blobs)
+            .map_err(|e| RuntimeError::new(e.message, span))?;
+        drop(workers);
+
+        let value = match outcome {
+            Ok(response) => helper_ok(&response, function),
+            Err(e) => crate::stdlib::err(e.message),
+        };
+
+        // A helper call is a read of the outside world: it happens live on
+        // every attempt, and the journal records a digest so a resume that
+        // gets a different answer stops rather than continuing against data
+        // the run it is resuming never saw.
+        let site = self.effect_site_for(span, "helper");
+        let digest = {
+            use sha2::{Digest, Sha256};
+            let mut hasher = Sha256::new();
+            hasher.update(value.to_string().as_bytes());
+            format!("{:x}", hasher.finalize())
+        };
+        self.journal_input(&site, "helper", &digest, span)?;
+
+        Ok(value)
+    }
+}
+
+/// Where this platform's helper binary lives, or why it does not.
+fn helper_program(
+    spec: &kora_pkg::HelperSpec,
+    package_root: &Path,
+    project_root: &Path,
+    span: Span,
+) -> Result<PathBuf, RuntimeError> {
+    let target = kora_pkg::host_target();
+    let Some(artifact) = spec.artifacts.get(target) else {
+        let mut declared: Vec<&str> = spec.artifacts.keys().map(String::as_str).collect();
+        declared.sort();
+        return Err(RuntimeError::new(
+            format!("this package's helper has no build for {target}"),
+            span,
+        )
+        .with_hint(if declared.is_empty() {
+            "its kora.toml declares no helper builds at all".to_string()
+        } else {
+            format!("it declares: {}", declared.join(", "))
+        }));
+    };
+
+    let path = match artifact {
+        kora_pkg::HelperArtifact::Path { path } => package_root.join(path),
+        kora_pkg::HelperArtifact::Fetch { sha256, binary, .. } => {
+            let dir = kora_pkg::helper_dir(project_root, sha256);
+            dir.join(binary.as_deref().unwrap_or("helper"))
+        }
+    };
+    if !path.is_file() {
+        return Err(RuntimeError::new(
+            format!("the helper is not installed: {}", path.display()),
+            span,
+        )
+        .with_hint("run `kora install <file.ko>`"));
+    }
+    Ok(path)
+}
+
+/// Turn a helper's answer into `Ok(value)`, resolving payload references.
+///
+/// A helper returns one JSON value and the payloads it refers to by index, so
+/// `{"image": {"blob": 0}}` becomes an image without a megabyte of base64
+/// passing through the middle. Everything a helper returns is `unverified`:
+/// it came from outside.
+fn helper_ok(response: &kora_helper::Response, function: &str) -> Value {
+    match helper_value(&response.value, &response.blobs) {
+        Ok(value) => crate::stdlib::ok(value.with_label(Label::UNVERIFIED)),
+        Err(reason) => crate::stdlib::err(format!("{function}() answered with {reason}")),
+    }
+}
+
+fn helper_value(json: &serde_json::Value, blobs: &[Vec<u8>]) -> Result<Value, String> {
+    use serde_json::Value as J;
+    let blob_at = |marker: &J| -> Result<Vec<u8>, String> {
+        let index = marker
+            .get("blob")
+            .and_then(J::as_u64)
+            .ok_or_else(|| "a payload reference with no index".to_string())?
+            as usize;
+        blobs
+            .get(index)
+            .cloned()
+            .ok_or_else(|| format!("payload {index}, which it did not send"))
+    };
+
+    match json {
+        J::Object(fields) if fields.contains_key("image") => {
+            let marker = &fields["image"];
+            let bytes = blob_at(marker)?;
+            let source = marker
+                .get("source")
+                .and_then(J::as_str)
+                .unwrap_or("a helper");
+            match crate::media::Image::detect(bytes, source) {
+                Ok(image) => Ok(Value::Image(Rc::new(image))),
+                Err(reason) => Err(reason),
+            }
+        }
+        J::Object(fields) if fields.contains_key("bytes") => {
+            Ok(Value::Bytes(Rc::new(blob_at(&fields["bytes"])?)))
+        }
+        J::Array(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for item in items {
+                out.push(helper_value(item, blobs)?);
+            }
+            Ok(Value::List(Rc::new(RefCell::new(out))))
+        }
+        J::Object(fields) => {
+            let mut out = HashMap::new();
+            for (key, value) in fields {
+                out.insert(key.clone(), helper_value(value, blobs)?);
+            }
+            Ok(Value::Dict(Rc::new(RefCell::new(out))))
+        }
+        other => Ok(json_to_value(other)),
     }
 }
 

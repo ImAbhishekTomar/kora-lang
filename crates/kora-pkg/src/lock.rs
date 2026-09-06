@@ -143,6 +143,17 @@ pub fn deps_dir(root: &Path) -> PathBuf {
     root.join(".kora").join("deps")
 }
 
+/// Where a fetched package helper is unpacked, under the project root.
+///
+/// Keyed by the hash the manifest pinned, so two versions of a helper never
+/// collide and a changed hash is a different directory rather than an
+/// overwrite nobody notices.
+pub fn helper_dir(root: &Path, sha256: &str) -> PathBuf {
+    root.join(".kora")
+        .join("helpers")
+        .join(&sha256[..sha256.len().min(16)])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
