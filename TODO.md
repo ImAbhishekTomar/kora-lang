@@ -5,6 +5,10 @@ principle in [AGENTS.md](AGENTS.md).
 
 ## Current
 
+- [x] **`xml` in the standard library.** A `DOCTYPE` refused outright, so the
+      XXE and billion-laughs class has nowhere to start; namespaces kept as
+      data; character data whole; `children` a list at every length. See
+      "Language and runtime status" below.
 - [x] **`yaml` in the standard library.** The config format, with the
       duplicate key, the Norway problem, and the alias bomb each turned into
       a value the program matches on. See "Language and runtime status" below.
@@ -291,8 +295,24 @@ commit across `parallel for` workers, not a weaker guarantee.
       and the path walk are `json`'s, so there is one set of rules to learn.
       `crates/kora-runtime/tests/yaml_test.rs` (22 tests),
       `examples/23_yaml.ko`, docs, site, and `DECISIONS.md`.
-- [ ] `xml` stdlib module — not implemented (only `fs`, `csv`, `http`, `json`,
-      `yaml`, `glob`, `re`, `sql`, `time`, `env` exist today).
+- [x] **`xml` — the format enterprise data still arrives in, read safely.**
+      A `DOCTYPE` is refused outright rather than configured not to expand:
+      an entity in a DTD can name a local file or an internal URL, which is
+      how a parser becomes a file reader and an HTTP client, and Python
+      needed a whole separate library (`defusedxml`) because `xml.etree`'s
+      defaults could not change. The billion-laughs bomb goes with it, since
+      it needs a DTD too. A namespace is a field rather than a `{uri}` prefix
+      glued to the tag, and a lookup matches the local name, so a document
+      that gains a default namespace does not break every query. `text` is
+      all of an element's character data in document order — everyone else
+      splits it between `.text` and `.tail`, so the obvious read of
+      `<p>Hello <b>world</b>!</p>` loses two thirds of it. And `children` is
+      always a list at any length, against `xmltodict`'s one-child-is-an-
+      object collapse, which makes a program's shape depend on the size of
+      its input. Deliberately no `xml.parse(text, Type)`: in XML a value can
+      live in an attribute or a child element, and guessing which one a field
+      meant would be the same mistake. `crates/kora-runtime/tests/xml_test.rs`
+      (14 tests), `examples/24_xml.ko`, docs, site, and `DECISIONS.md`.
 - [ ] `network` — no dedicated stdlib module beyond `http`.
 - [ ] CLI beautification — no dedicated polish pass tracked yet.
 

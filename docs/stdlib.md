@@ -1,6 +1,6 @@
 # The standard library
 
-Eleven native modules, each backed by a Rust crate. Every one exists to fix a
+Twelve native modules, each backed by a Rust crate. Every one exists to fix a
 specific, well-known defect in its equivalent elsewhere — rewriting a library
 is only worth it if the rewrite fixes what everyone already knows is broken.
 
@@ -415,6 +415,63 @@ duplicate-key error above.
 `.nan` are `Err` rather than the strings `".inf"` and `".nan"`: they are real
 YAML floats with no Kora value, and a wrong answer is worse than a missing
 one. See [`examples/23_yaml.ko`](../examples/23_yaml.ko).
+
+---
+
+## `xml`
+
+**What everyone else gets wrong.** Four defects, and none of them fixable
+where they live without breaking documents already in the world:
+
+1. **The parser will read your files and make your requests.** A `DOCTYPE`
+   may define an entity pointing at `/etc/passwd` or at an internal URL, and
+   a parser that resolves it hands an attacker both. Python needed a separate
+   library (`defusedxml`) because `xml.etree`'s defaults could not be
+   changed.
+2. **Namespaces get mangled.** `ElementTree` reports a tag as
+   `{http://example.com}item`, so code strips the brace prefix and then
+   matches an element from the wrong namespace.
+3. **Character data is split in two.** `<p>Hello <b>world</b>!</p>` puts
+   `"Hello "` on `p.text` and `"!"` on `b.tail`, so the obvious read of
+   `p.text` silently loses two thirds of the sentence.
+4. **The shape depends on the data.** `xmltodict` gives one child as an
+   object and two as a list, so a program tested against a two-item feed
+   crashes the day a feed has one item.
+
+| | |
+|---|---|
+| `xml.parse(text)` | `Ok(element)` — the root element |
+| `xml.find(element, "channel.item")` | `Ok(element)` — the first on that path |
+| `xml.find_all(element, "channel.item")` | `Ok(list)` — every one |
+| `xml.text(element)` | `Ok(text)` — all of its character data |
+| `xml.get(element, "attrs.id")` | `Ok(value)` — the `json.get` path walk |
+
+Here a `DOCTYPE` is refused outright, so there is no entity to expand and no
+request to make — and the "billion laughs" bomb goes with it, since that
+needs a DTD too. A namespace is a field of its own, and a lookup matches the
+local name, so a document that gains a default namespace does not break every
+query written against it. `text` is all of an element's character data in
+document order, with no second place for the rest of it to hide. And
+`children` is always a list, of any length, including zero.
+
+An element is an ordinary Kora value:
+
+```python
+{"tag": "item", "ns": None, "attrs": {"id": "1"},
+ "text": "Hello world!", "children": [...]}
+```
+
+A dead end partway through a path is an `Err` naming the segment that had
+nowhere to go; no matches at the *end* of a path is an empty list, because
+"no items in this feed" is an answer and "no `channel` to look inside" is a
+mistake.
+
+There is deliberately no `xml.parse(text, Type)`, unlike `json` and `yaml`:
+in XML a value can live in an attribute or in a child element, and a parser
+that guessed which one a field meant would be making exactly the
+shape-depends-on-the-data mistake above. Walk to what you need and build the
+declared type yourself. Parsed text is `unverified`. See
+[`examples/24_xml.ko`](../examples/24_xml.ko).
 
 ---
 

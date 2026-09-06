@@ -32,6 +32,7 @@ no API key and no model installed.
 | [21_pdf.ko](21_pdf.ko) | reading a PDF: page boundaries kept, and a scan that refuses to look empty | `kora run` |
 | [22_pdf_render.ko](22_pdf_render.ko) | a scan's pages as images, rendered by a package helper rather than by Kora | `kora install`, `kora run` |
 | [23_yaml.ko](23_yaml.ko) | YAML config: a duplicate key, the Norway problem, and an alias bomb, all as values | `kora run`, `kora test` |
+| [24_xml.ko](24_xml.ko) | XML: a DOCTYPE refused, namespaces kept, character data whole, one child still a list | `kora run`, `kora test` |
 
 ## The pattern set
 
