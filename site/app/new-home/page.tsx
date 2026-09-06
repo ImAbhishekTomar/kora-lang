@@ -11,7 +11,7 @@ function SunIcon() {
   return <svg className="figma-sun" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="3" stroke="#8e9aa8" strokeWidth="2" /><path d="M9 1v2M9 15v2M1 9h2M15 9h2M3.22 3.22l1.42 1.42M13.36 13.36l1.42 1.42M14.78 3.22l-1.42 1.42M4.64 13.36l-1.42 1.42" stroke="#8e9aa8" strokeLinecap="round" strokeWidth="2" /></svg>
 }
 
-function Navbar() {
+function Navbar({ lightTheme, onToggleTheme }: { lightTheme: boolean; onToggleTheme: () => void }) {
   const links = [
     ['Docs', '/language'],
     ['Install', '/installation'],
@@ -22,7 +22,7 @@ function Navbar() {
   return <header className="figma-navbar">
     <Link className="figma-logo" href="/"><img src="/logo-kora.png" alt="Kora" /></Link>
     <nav className="figma-nav-links" aria-label="Main navigation">{links.map(([label, href]) => <Link href={href} key={label}>{label}</Link>)}</nav>
-    <div className="figma-nav-actions"><a className="figma-stars" href="https://github.com/ImAbhishekTomar/kora-lang" target="_blank" rel="noreferrer"><span>☆</span> 0 stars</a><button type="button" aria-label="Change theme"><SunIcon /></button></div>
+    <div className="figma-nav-actions"><a className="figma-stars" href="https://github.com/ImAbhishekTomar/kora-lang" target="_blank" rel="noreferrer"><span>☆</span> 0 stars</a><button type="button" aria-label={lightTheme ? 'Switch to dark theme' : 'Switch to light theme'} aria-pressed={lightTheme} onClick={onToggleTheme}><SunIcon /></button></div>
   </header>
 }
 
@@ -144,9 +144,10 @@ function InteractivePanel() {
 
 export default function NewHomePage() {
   const [rightWidth, setRightWidth] = useState(62)
+  const [lightTheme, setLightTheme] = useState(false)
   const dragging = useRef(false)
-  return <main className="figma-landing" onMouseMove={event => { if (dragging.current) setRightWidth(Math.max(30, Math.min(65, 100 - event.clientX / window.innerWidth * 100))) }} onMouseUp={() => { dragging.current = false }}>
-    <Navbar />
+  return <main className={`figma-landing${lightTheme ? ' figma-theme-light' : ''}`} onMouseMove={event => { if (dragging.current) setRightWidth(Math.max(30, Math.min(65, 100 - event.clientX / window.innerWidth * 100))) }} onMouseUp={() => { dragging.current = false }}>
+    <Navbar lightTheme={lightTheme} onToggleTheme={() => setLightTheme(theme => !theme)} />
     <div className="figma-main" style={{ gridTemplateColumns: `${100 - rightWidth}% 4px ${rightWidth}%` }}>
       <section className="figma-left-panel"><HeroInfo /></section>
       <button className="figma-resize" type="button" aria-label="Resize panels" onMouseDown={() => { dragging.current = true }} />
