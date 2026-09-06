@@ -32,7 +32,7 @@ function HeroInfo() {
   return <div className="figma-hero-info">
     <div className="figma-badge"><i />KORA IS A LANGUAGE, NOT A WRAPPER</div>
     <h1>Build AI agents<br />that finish what<br />they start.</h1>
-    <p>Kora is a language for defining reliable AI workflows. Strongly typed, repayable, and safe by design — from prototype to production.</p>
+    <p>Kora is a language for defining reliable AI workflows. Strongly typed, replayable, and safe by design — from prototype to production.</p>
     <div className="figma-hero-actions"><Link className="figma-get-started" href="/start-here">Get Started <ArrowRight dark /></Link><Link className="figma-explore" href="/language">Explore Guides</Link></div>
   </div>
 }
@@ -49,7 +49,7 @@ const editorLines: ReactNode[] = [
   <><b>use</b> fs</>,
   <>&nbsp;</>,
   <><b>type </b><strong>Receipt</strong>:</>,
-  <>    <em>merchant</em>: <strong className="blue">str</strong> <span className="blue">@description</span>(<span className="orange">"This is a salaer name"</span>)</>,
+  <>    <em>merchant</em>: <strong className="blue">str</strong> <span className="blue">@description</span>(<span className="orange">"This is a seller name"</span>)</>,
   <>    <b>classified </b><em>amount</em>: <strong className="blue">float</strong> <span className="comment"># Protected by the compiler: cannot be read directly</span></>,
   <>    <em>currency</em>: <strong className="blue">str</strong></>,
   <>    <em>review_reason</em>: <strong className="blue">str</strong></>,

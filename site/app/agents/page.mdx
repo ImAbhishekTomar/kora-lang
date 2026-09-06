@@ -1,0 +1,38 @@
+---
+title: Agents and budgets
+description: Build bounded agents with explicit spending and parallel work.
+---
+
+# Agents and budgets
+
+An `agent` is a function that can carry its own budget and call tools or other
+agents. A budget is lexical, shared with child work, and returns `Exhausted`
+when it runs out.
+
+```kora
+agent classify(ticket: str) -> str:
+    budget: max_tokens = 2000, max_steps = 4
+    result: str = analyze(ticket, "Classify this support ticket")
+    match result:
+        case Ok(answer):
+            return answer
+        case Exhausted(meter):
+            return f"budget exhausted: {meter}"
+        case Uncertain(reason):
+            return f"needs review: {reason}"
+        case Failed(why):
+            return f"provider failed: {why}"
+```
+
+Set a shared budget around a workflow:
+
+```kora
+def main():
+    with budget(max_tokens = 10_000, max_calls = 20):
+        results = parallel for ticket in tickets:
+            return classify(ticket)
+```
+
+Each branch has an isolated heap, and results return in input order. Add
+`max_time` or `max_seconds` when a workflow needs a deadline. Inspect usage
+with `tokens_spent()`, `tokens_remaining()`, and `calls_spent()`.
