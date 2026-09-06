@@ -5,6 +5,26 @@ principle in [AGENTS.md](AGENTS.md).
 
 ## Current
 
+- [x] **A model is named the way its provider names it.** `[models]` entries
+      are written out — `{ name = "openrouter/free", endpoint = "...",
+      api_key_env = "..." }` — so the name is copied from the provider's docs
+      rather than respelled with a Kora prefix, the endpoint belongs to the
+      entry (two services in one project), and an entry with no key variable
+      sends no `Authorization` header at all. `api` picks the request shape,
+      `"openai"` or `"ollama"`; nothing else about a provider is in the
+      compiler. The `provider:model` shorthand still resolves, and cassette
+      keys are unchanged, so existing projects and recordings keep working.
+
+- [x] **Any OpenAI-compatible gateway, without a provider per vendor.**
+      `[models.openai] endpoint` sends the `openai` provider's request to a
+      different base URL, and `api_key_env` names the variable holding that
+      gateway's key. OpenRouter, Groq, Together, and a self-hosted vLLM all
+      speak the same wire format, so they are configuration rather than four
+      more schemes to parse. Streaming and the tool loop go through the same
+      two settings, and a missing key is reported under the variable the
+      config asked for. Verified end to end against OpenRouter on both the
+      text and the vision path, `--record` and `--replay`.
+
 - [x] **Show the live GitHub star count on the docs homepage.** The server
       fetches `stargazers_count` from the repository API with a one-hour cache
       and falls back to `0` if GitHub is unavailable.

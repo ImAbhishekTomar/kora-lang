@@ -147,18 +147,18 @@ need the provider configuration described below.
 
 ## Model setup
 
-The deterministic core works without a model. For `analyze`, choose OpenAI or a local Ollama model in `kora.toml`:
+The deterministic core works without a model. For `analyze`, name one in `kora.toml` — the model's name exactly as its provider writes it, where the request goes, and which variable holds the key:
 
 ```toml
 [models]
-default = "local:llama3.2:latest"
-smart = "openai:gpt-4o"
-
-[models.local]
-endpoint = "http://localhost:11434"
+default = { name = "llama3.2:latest", endpoint = "http://localhost:11434", api = "ollama" }
+smart   = { name = "gpt-4o", api_key_env = "OPENAI_API_KEY" }
+cheap   = { name = "openrouter/free", endpoint = "https://openrouter.ai/api/v1", api_key_env = "OPENROUTER_API_KEY" }
 ```
 
-For OpenAI, export `OPENAI_API_KEY`. For Ollama, start Ollama locally and make sure the selected model is available.
+`api` is the request shape: `"openai"` (the default, spoken by nearly every hosted provider and gateway) or `"ollama"`. Nothing else about a provider is built into Kora, so OpenAI, OpenRouter, Groq, Together, and a self-hosted vLLM are all configuration.
+
+Export whichever key variable you named. A local server that wants no key needs none: leave `api_key_env` out and no `Authorization` header is sent.
 
 ## First run
 
