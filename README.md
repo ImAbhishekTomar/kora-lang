@@ -151,7 +151,7 @@ not GitHub, and killing the process mid-`ask_human` loses nothing.
 | | |
 |---|---|
 | [Language reference](docs/language.md) | syntax, semantics, and how it differs from Python |
-| [Standard library](docs/stdlib.md) | the eight modules and the defect each one fixes |
+| [Standard library](docs/stdlib.md) | the ten modules and the defect each one fixes |
 | [CLI reference](docs/cli.md) | commands, flags, `kora.toml`, editor setup |
 | [Decisions](DECISIONS.md) | why the language is the way it is, and what was traded away |
 | [DECISIONS.md](DECISIONS.md) | the frozen design and why each call was made |
@@ -549,8 +549,8 @@ Early development, pre-alpha, built for personal use first. Everything
 documented here works and is covered by tests; the test suite never touches
 the network.
 
-Not built yet: classes, list comprehensions, documents (PDF) as values, and
-`try`/`except`. See
+Not built yet: classes, list comprehensions, PDF pages as images (a PDF's
+*text* is in, with `pdf`), and `try`/`except`. See
 [DECISIONS.md](DECISIONS.md) for what is planned and what is deliberately
 excluded.
 

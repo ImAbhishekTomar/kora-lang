@@ -218,7 +218,7 @@ fn exists(_interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Val
 
 /// Validate the path argument: it must be verified data, and must not climb
 /// out of the working tree.
-fn checked_path(args: &[Value], func: &str, span: Span) -> Result<String, RuntimeError> {
+pub(super) fn checked_path(args: &[Value], func: &str, span: Span) -> Result<String, RuntimeError> {
     let Some(value) = args.first() else {
         return Err(RuntimeError::new(format!("{func}() needs a path"), span));
     };
@@ -242,7 +242,7 @@ fn checked_path(args: &[Value], func: &str, span: Span) -> Result<String, Runtim
 }
 
 /// io::Error messages omit the path, which is the first thing you want.
-fn describe_io(path: &str, e: &std::io::Error) -> String {
+pub(super) fn describe_io(path: &str, e: &std::io::Error) -> String {
     match e.kind() {
         std::io::ErrorKind::NotFound => format!("no such file: {path}"),
         std::io::ErrorKind::PermissionDenied => format!("permission denied: {path}"),

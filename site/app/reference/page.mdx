@@ -483,6 +483,10 @@ rows = sql.query("app.db", "select * from users where id = ?", [user_id])
 
 `env.get(name)` reads an environment variable and `env.has(name)` checks whether it exists. Secret-looking names are classified automatically.
 
+### `pdf`
+
+`pdf.text(path)` returns every page joined, `pdf.pages(path)` keeps the pages separate, and `pdf.info(path)` reports `page_count`, `encrypted`, and `has_text_layer`. A document whose pages are pictures is an `Err`, not an empty string, so a scan is never mistaken for an empty document. Text is `unverified`.
+
 ### Packages
 
 A package is named, not pathed. Where it comes from and what it may do live in

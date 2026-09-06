@@ -222,6 +222,7 @@ const MODULES: &[(&str, &[&str])] = &[
     ("time", &["now", "format", "elapsed"]),
     ("re", &["matches", "find", "find_all", "replace", "split"]),
     ("notes", &["read", "write"]),
+    ("pdf", &["text", "pages", "info"]),
 ];
 
 impl Checker<'_> {

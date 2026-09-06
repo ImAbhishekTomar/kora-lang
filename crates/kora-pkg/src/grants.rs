@@ -45,6 +45,9 @@ impl Capability {
             // The notes store is filesystem-backed (`.kora/notes/<run-id>.json`),
             // so a dependency needs the same grant `fs` does to touch it.
             "notes" => Some(Capability::Fs),
+            // `pdf` opens a file by path and nothing else, so it is the same
+            // authority `fs.read` is, under a different name.
+            "pdf" => Some(Capability::Fs),
             "sql" => Some(Capability::Sql),
             "env" => Some(Capability::Env),
             _ => None,

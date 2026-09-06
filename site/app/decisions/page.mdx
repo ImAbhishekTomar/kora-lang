@@ -1126,6 +1126,7 @@ Per module, the specific defect being fixed:
 | `fs` | path traversal from untrusted input; silent overwrite; partial writes on crash; `listdir`/`glob` return filesystem order, which differs per machine; `mimetypes` trusts the extension | paths from unverified data are refused; writes are atomic (temp + rename); overwrite is explicit; listings are sorted and return full paths; `fs.image` reads the type from the magic bytes |
 | `time` | naive datetimes with no zone, then DST arithmetic bugs | every instant is zone-aware; there is no naive type; `now()` is journaled |
 | `re` | catastrophic backtracking (ReDoS) | linear-time engine, no backtracking to exploit |
+| `pdf` | a scan extracts as `""` with no error, so a pipeline writes empty records; pages are concatenated, so nothing can say which page a clause was on; a page that will not parse silently truncates the document | no text layer is `Err`, and `pdf.info` says `has_text_layer` before the call; `pdf.pages` keeps page boundaries; the page count comes from the document catalogue, so an unreadable page is named rather than dropped |
 
 **1. Native stdlib, Rust-backed.** Users cannot write `use serde::Deserialize`
 in a `.ko` file, but the interpreter is Rust, so a crate becomes a Kora module
@@ -1142,7 +1143,7 @@ modules and their backing crates:
 | `time` | `chrono` / `jiff` | better |
 | `re` | `regex` | no catastrophic backtracking |
 | `s3`, `aws` | `aws-sdk-rust` | official |
-| `pdf` | `lopdf`, `pdf-extract` | weaker than PyPDF; would make documents values the way images already are |
+| `pdf` | `lopdf`, `pdf-extract` | **text landed**; weaker than PyPDF at exotic encodings. Rendering a page to pixels is *not* in: it needs a full renderer (fonts, shading) with a C++ library behind it, which is a separate decision from parsing |
 | `search` | `tantivy` | Lucene-class |
 
 Known gaps: scipy, sklearn, matplotlib, torch/transformers, and niche SaaS

@@ -35,8 +35,11 @@ The current codebase includes:
   tool a second time.
 - Classified data, scoped `declassify`, sink policies, and audit output.
 - Safe terminal output: `print` and `write` redact classified leaves using a project-configurable marker.
-- Native `json`, `csv`, `fs`, `http`, `sql`, `time`, `re`, and `env` modules,
-  with `fs.image` and `fs.glob` for working over a folder of files.
+- Native `json`, `csv`, `fs`, `http`, `sql`, `time`, `re`, `env`, `notes`, and
+  `pdf` modules, with `fs.image` and `fs.glob` for working over a folder of
+  files. `pdf` reads a document's text and keeps its page boundaries, and says
+  whether there is a text layer at all, so a scan is never mistaken for an
+  empty document.
 - Python sidecar and MCP tool integrations through project configuration,
   with a deadline on every MCP request. A tool server that does not answer
   comes back as `Failed(reason)` instead of ending the run, and tool calls are
@@ -61,6 +64,10 @@ enforcement, and a general event-stream API.
 
 `xml`, `yaml`, and a dedicated `network` module remain unbuilt. The existing
 `http` module stays the network boundary until a narrower, safer API is ready.
+
+PDF *rendering* is the other gap: `pdf` reads text, but turning a page into an
+image needs a full renderer with a C++ library behind it, so a scanned document
+still passes through a renderer outside Kora before `fs.image`.
 
 ### Complete the package ecosystem when there is demand
 

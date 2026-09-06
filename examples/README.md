@@ -29,6 +29,7 @@ no API key and no model installed.
 | [18_notes.ko](18_notes.ko) | a durable run's own scratch space, journaled reads and all | `kora run --durable` |
 | [19_durable_pipeline.ko](19_durable_pipeline.ko) | a pipeline you can kill: every row's write happens exactly once | `kora run --durable` |
 | [20_time_budget.ko](20_time_budget.ko) | `max_seconds`: one deadline shared across a fan-out, and running out as a value | `kora run` |
+| [21_pdf.ko](21_pdf.ko) | reading a PDF: page boundaries kept, and a scan that refuses to look empty | `kora run` |
 
 ## The pattern set
 

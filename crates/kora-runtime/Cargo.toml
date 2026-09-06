@@ -20,6 +20,8 @@ regex = { workspace = true }
 rusqlite = { workspace = true }
 ureq = { workspace = true }
 sha2 = { workspace = true }
+pdf-extract = { workspace = true }
+lopdf = { workspace = true }
 
 # Only for `flock`, so a durable run cannot be resumed twice at once. Windows
 # gets the same guarantee from an unshared file handle and needs nothing.
@@ -28,5 +30,7 @@ libc = "0.2"
 
 [dev-dependencies]
 kora-types.workspace = true
+# Tests build their own PDFs rather than committing opaque binary fixtures.
+lopdf.workspace = true
 kora-mcp.workspace = true
 kora-python.workspace = true

@@ -186,6 +186,22 @@ commit across `parallel for` workers, not a weaker guarantee.
 
 ## Development
 
+### `pdf`: documents that say what they are (in progress)
+
+- [x] `pdf.text`, `pdf.pages`, `pdf.info` in `crates/kora-runtime/src/stdlib/pdf.rs`,
+      backed by `pdf-extract` and `lopdf`. Pure Rust, no native blob.
+- [x] A document with no text layer is `Err`, not `""`; `has_text_layer` is
+      reported up front so the vision path is taken deliberately.
+- [x] Page count read from the document catalogue, so an unreadable page is
+      named instead of silently truncating the document.
+- [x] Parsing runs inside `catch_unwind`: a malformed file is a value, not a
+      dead run. `pdf` maps to the `fs` capability for packages.
+- [x] `examples/21_pdf.ko`, `crates/kora-runtime/tests/pdf_test.rs`, docs,
+      site, and `DECISIONS.md`.
+- [ ] PDF rendering (a page as an image). Needs PDFium, which means a C++
+      library in the release matrix and a decision recorded about where the
+      "no native code" line actually sits. Separate change.
+
 - [x] Refresh the documentation welcome page with a more playful guided
       experience, responsive styling, and reduced-motion-safe animation.
 - [x] Add dedicated Configuration, Packages, and Developer guide pages, and

@@ -1,0 +1,86 @@
+# Reading a PDF: the answers that are usually silent.
+#
+# Most documents handed to an agent are PDFs, and the usual libraries fail at
+# them quietly -- an empty string for a scan, a concatenated blob with no page
+# numbers, a crash on a malformed file. Each one here is a value the program
+# has to match.
+#
+#   python3 scripts/make_example_pdfs.py   # rebuilds the two documents below
+#   kora run examples/21_pdf.ko
+
+use pdf
+use re
+
+HANDBOOK = "examples/documents/handbook.pdf"
+SCANNED = "examples/documents/scanned.pdf"
+
+def main():
+    # 1. Ask what the document is before deciding how to read it. `pypdf` has
+    #    no answer to this, so programs extract first and guess from an empty
+    #    string afterwards.
+    match pdf.info(HANDBOOK):
+        case Ok(facts):
+            print(f"1. handbook: {facts["page_count"]} pages, text layer: {facts["has_text_layer"]}")
+        case Err(why):
+            print(f"1. {why}")
+
+    # 2. Pages stay separate, so an answer can say where it came from.
+    match pdf.pages(HANDBOOK):
+        case Ok(pages):
+            number = 1
+            for page in pages:
+                match re.find("[0-9]+\\. Refunds[^\\n]*", page):
+                    case Ok(clause):
+                        print(f"2. page {number}: {clause}")
+                    case Err(_):
+                        pass
+                number += 1
+        case Err(why):
+            print(f"2. {why}")
+
+    # 3. `pdf.text` is the joined form, for when the boundary does not matter.
+    match pdf.text(HANDBOOK):
+        case Ok(text):
+            print(f"3. whole document: {len(text)} characters")
+        case Err(why):
+            print(f"3. {why}")
+
+    # 4. The defect this module exists for. A document whose pages are
+    #    pictures extracts as "" everywhere else, and the run writes empty
+    #    records until someone reads the output. Here it is an error, and
+    #    `has_text_layer` said so before the call was made.
+    match pdf.info(SCANNED):
+        case Ok(facts):
+            if facts["has_text_layer"]:
+                print("4. unreachable")
+            else:
+                print("4. scanned.pdf has no text layer -- this is the vision path")
+        case Err(why):
+            print(f"4. {why}")
+
+    match pdf.text(SCANNED):
+        case Ok(text):
+            print("5. unreachable: an empty extraction is not a success")
+        case Err(why):
+            print(f"5. {why}")
+
+    # 6. A file that is not a PDF is told apart by its bytes, not its name.
+    match pdf.pages("examples/receipts/sample.txt"):
+        case Ok(pages):
+            print("6. unreachable")
+        case Err(why):
+            print(f"6. {why}")
+
+test "a document with a text layer reads back its pages":
+    match pdf.pages(HANDBOOK):
+        case Ok(pages):
+            assert len(pages) == 2, "the handbook has two pages"
+        case Err(why):
+            assert False, why
+
+test "a document without a text layer is an error, not an empty string":
+    match pdf.text(SCANNED):
+        case Ok(text):
+            assert False, "an empty extraction must not look like success"
+        case Err(why):
+            assert "no text layer" in why, why
