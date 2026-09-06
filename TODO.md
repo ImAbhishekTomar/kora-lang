@@ -429,9 +429,32 @@ impossible, and the CLI's own failure-to-print-an-error paths. The honest
 target is high coverage of behaviour, and the gaps worth closing next are
 named by size rather than by percentage:
 
-- [ ] `interp.rs` — the biggest remaining absolute gap (~1500 regions). Needs
-      language-level tests for agents, `parallel for` edge cases, and the
-      mock/test machinery, not more unit tests.
+- [x] `interp.rs` — was the biggest remaining absolute gap (~1600 missed
+      regions). **78.75% -> 81.05% regions, 76.55% -> 79.51% lines**, closed
+      with language-level tests rather than unit tests, because the gap was
+      never the happy path: it was the message each wrong program gets, and a
+      message is a feature. Three new suites:
+      - `interp_errors_test.rs` (21) — the diagnostics a program walks into.
+        "cannot add str and int" with the fix in the hint, `in` on a string
+        with a non-string on the left, a loop over an int naming what *can*
+        be looped, every zero divisor rather than only `/`, and the `tools=`
+        argument checked before any model is reached, so that error does not
+        depend on whether a provider happens to be up.
+      - `tool_loop_errors_test.rs` (11) — the tool loop's failure paths,
+        against a real fake provider that asks for a tool forever, since a
+        mock and a cassette both stand in for the whole call and never enter
+        the loop. The turn limit, a budget exhausted mid-loop naming its
+        meter, a model call missing an argument, a classified tool result
+        refused at the model sink *and* allowed through once declassified,
+        and a handler that returns the wrong kind of thing.
+      - `parallel_semantics_test.rs` (9) — what a branch yields, spends, and
+        prints: a branch that never returns is `None` and stays in position,
+        an unterminated `write` survives the worker, a worker cannot write
+        back into the scope that spawned it, and a declared type built in a
+        branch comes back whole.
+- [ ] `interp.rs`, what is left — the debugger paths (`kora-dap` exercises
+      them by hand), durable-journal step-mismatch branches, and telemetry
+      span builders. Worth less than their line count suggests.
 - [ ] `kora-pkg` `commands.rs` / `edit.rs` — dependency resolution and
       manifest editing, ~470 regions between them.
 - [ ] `kora-lsp` and `kora-dap` — editor and debugger servers, exercised by
