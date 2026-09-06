@@ -15,6 +15,14 @@
 # because a crash is exactly the moment when whether the write landed is
 # unknown to the program and known to the journal.
 #
+# The cost of that promise is two synced appends per write, and a sync is
+# milliseconds of waiting on a disk. Inside a `parallel for` those syncs are
+# coalesced -- one `fsync` covers every record the workers beside it appended,
+# which is sound because a sync flushes the whole file, not one record. The
+# guarantee is untouched: every record is still on the disk before the program
+# acts on it. A sequential loop like the one below has nobody to batch with
+# and is unchanged.
+#
 # Reads are the other half. `fs.read` is not replayed from the journal (a
 # pipeline's input is routinely bigger than every other effect put together),
 # but a digest of it is: change the input between the crash and the resume and

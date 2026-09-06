@@ -44,6 +44,7 @@ use std::collections::HashMap;
 use std::fs::File;
 use std::io::Write as _;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Condvar, Mutex};
 
 use serde::{Deserialize, Serialize};
 
@@ -280,6 +281,9 @@ pub struct Journal {
     file: Option<File>,
     /// Held, not read: dropping it releases the run to another process.
     _lock: Option<lock::RunLock>,
+    /// Group commit, for the records that go through `record_batched`.
+    /// `None` when this journal is not durable and there is nothing to sync.
+    syncer: Option<Arc<Syncer>>,
     /// Recorded effects, indexed for replay lookup.
     recorded: HashMap<(Scope, usize), Entry>,
     /// Where each slot sits in `run.entries`, so recording an outcome over
@@ -306,6 +310,159 @@ pub enum Lookup {
     Fresh { scope: Scope, seq: usize },
 }
 
+/// Coalesces `fsync`s across concurrent workers: group commit.
+///
+/// The cost this exists to remove: a journaled write is two synced appends
+/// (the attempt, then its outcome), and a sync is milliseconds of waiting on
+/// the disk rather than microseconds of work. A `parallel for` writing rows
+/// therefore spent nearly all of its wall clock in `fsync`, one worker at a
+/// time, at roughly a hundred rows a second.
+///
+/// The fix is the one a database uses, and it is *not* syncing less often:
+/// every record still reaches the disk before the program acts on it. What
+/// changes is that a sync one worker is already performing also covers the
+/// records other workers appended beside it. One `fsync` for eight workers
+/// costs what one `fsync` for one worker did.
+///
+/// It works because `fsync` is not per-record: it flushes the whole file. So
+/// a worker that appended its bytes and then waits for *someone's* sync that
+/// started afterwards has exactly the guarantee it would have got by syncing
+/// itself.
+#[derive(Debug)]
+pub struct Syncer {
+    /// An independent handle on the same file, so a sync can happen without
+    /// holding the lock that appends take. That is the whole point: if the
+    /// sync held the journal's lock, no second worker could append during it
+    /// and there would be nothing to batch.
+    file: File,
+    state: Mutex<SyncState>,
+    woken: Condvar,
+}
+
+#[derive(Debug, Default)]
+struct SyncState {
+    /// Records whose bytes have been written to the file.
+    appended: u64,
+    /// Records known to be on the disk.
+    synced: u64,
+    /// Whether a worker is inside `sync_data` right now.
+    syncing: bool,
+    /// How many workers are inside `sync_through`. Used only to decide
+    /// whether waiting for stragglers can pay: with one writer there is
+    /// nobody to batch with, and yielding would be pure cost.
+    waiters: u64,
+}
+
+impl Syncer {
+    fn new(file: File) -> Syncer {
+        Syncer {
+            file,
+            state: Mutex::new(SyncState::default()),
+            woken: Condvar::new(),
+        }
+    }
+
+    /// Claim a ticket for a record whose bytes are already written.
+    ///
+    /// Called with the journal's own lock held, so the bytes and the ticket
+    /// stay in step: a ticket of N means every record up to N has been
+    /// written to the file.
+    fn appended(&self) -> u64 {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.appended += 1;
+        state.appended
+    }
+
+    /// Block until record `ticket` is on the disk.
+    ///
+    /// Either by performing the sync, or by waiting for one another worker is
+    /// already performing that will cover it.
+    fn sync_through(&self, ticket: u64) -> Result<(), JournalError> {
+        let mut state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        state.waiters += 1;
+        loop {
+            if state.synced >= ticket {
+                state.waiters -= 1;
+                return Ok(());
+            }
+            if state.syncing {
+                // Someone else is syncing. It may or may not cover this
+                // ticket -- it captured its target before this record was
+                // appended -- so the loop re-checks rather than assuming.
+                state = self.woken.wait(state).unwrap_or_else(|e| e.into_inner());
+                continue;
+            }
+            // With another worker already waiting, a moment spent letting it
+            // append pays for itself many times over: one `fsync` costs
+            // milliseconds and covers however many records are queued when it
+            // starts. With no other waiter there is nobody to batch with, and
+            // the yield would be pure cost -- so a single-writer run does not
+            // pay it.
+            if state.waiters > 1 {
+                drop(state);
+                std::thread::yield_now();
+                state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+                if state.synced >= ticket {
+                    state.waiters -= 1;
+                    return Ok(());
+                }
+                if state.syncing {
+                    continue;
+                }
+            }
+            // Become the leader. The target is read *before* the sync, so it
+            // only ever claims records whose bytes were written first;
+            // anything appended during the sync waits for the next one.
+            let target = state.appended;
+            state.syncing = true;
+            drop(state);
+
+            let result = self.file.sync_data();
+
+            state = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.syncing = false;
+            if result.is_ok() {
+                state.synced = state.synced.max(target);
+            }
+            // Woken whether it worked or not: a failed sync must not leave
+            // every other worker waiting on a leader that is never coming.
+            self.woken.notify_all();
+            if let Err(e) = result {
+                state.waiters -= 1;
+                return Err(JournalError::Io(e));
+            }
+        }
+    }
+}
+
+/// A record appended but not yet known to be on the disk.
+///
+/// Returned by [`Journal::record_batched`] so the caller can drop the
+/// journal's lock *before* waiting for the sync — which is what lets other
+/// workers append into the same sync. Nothing may act on the effect until
+/// [`Commit::wait`] has returned.
+#[must_use = "an appended record is not durable until the commit is waited on; \
+              drop the journal lock, then call `wait()`"]
+#[derive(Debug)]
+pub struct Commit {
+    inner: Option<(Arc<Syncer>, u64)>,
+}
+
+impl Commit {
+    /// Nothing to wait for: this journal is not durable.
+    fn none() -> Commit {
+        Commit { inner: None }
+    }
+
+    /// Block until this record is on the disk.
+    pub fn wait(self) -> Result<(), JournalError> {
+        match self.inner {
+            Some((syncer, ticket)) => syncer.sync_through(ticket),
+            None => Ok(()),
+        }
+    }
+}
+
 impl Journal {
     /// A journal that records nothing — the default for a plain `kora run`.
     pub fn disabled() -> Journal {
@@ -313,6 +470,7 @@ impl Journal {
             run: Run::new(String::new(), String::new()),
             file: None,
             _lock: None,
+            syncer: None,
             recorded: HashMap::new(),
             positions: HashMap::new(),
             cursors: HashMap::new(),
@@ -364,10 +522,19 @@ impl Journal {
             positions.insert(key, index);
         }
         let unconsumed = recorded.len();
+        // A second handle on the same file, so a sync can run without the
+        // lock that appends take. Without it there is nothing to batch: one
+        // worker's sync would block every other worker's append.
+        let syncer = file
+            .try_clone()
+            .ok()
+            .map(|handle| Arc::new(Syncer::new(handle)));
+
         Ok(Journal {
             run,
             file: Some(file),
             _lock: Some(held),
+            syncer,
             recorded,
             positions,
             cursors: HashMap::new(),
@@ -488,6 +655,48 @@ impl Journal {
         })
     }
 
+    /// `record`, but handing the `fsync` back to the caller as a [`Commit`].
+    ///
+    /// Same guarantee, different place to wait for it: the bytes are written
+    /// here, and the caller drops the journal's lock before calling
+    /// [`Commit::wait`]. That gap is the whole optimization — it is where
+    /// other workers get to append into the same sync.
+    ///
+    /// Used by the write path (`fs.write`, `fs.append`, `sql.execute` and
+    /// their reads), which is where a `parallel for` produces thousands of
+    /// synced records. Every other effect keeps using `record`, whose sync
+    /// happens inline: a model call waits on a network round trip that dwarfs
+    /// its own `fsync`, so batching it would add a lock dance for nothing.
+    pub fn record_batched(
+        &mut self,
+        scope: Scope,
+        seq: usize,
+        site: &str,
+        effect: Effect,
+    ) -> Result<Commit, JournalError> {
+        let entry = Entry {
+            scope: scope.clone(),
+            seq,
+            site: site.to_string(),
+            effect,
+        };
+        let key = (scope, seq);
+        self.recorded.insert(key.clone(), entry.clone());
+        match self.positions.get(&key) {
+            Some(index) => self.run.entries[*index] = entry.clone(),
+            None => {
+                self.positions.insert(key, self.run.entries.len());
+                self.run.entries.push(entry.clone());
+            }
+        }
+        self.write_batched(&Record::Entry {
+            scope: entry.scope,
+            seq: entry.seq,
+            site: entry.site,
+            effect: entry.effect,
+        })
+    }
+
     /// Answer the question this run is parked on, and mark it runnable again.
     ///
     /// The answer is an ordinary journal entry at the slot the suspended step
@@ -549,6 +758,26 @@ impl Journal {
         };
         append(file, record)
     }
+
+    /// `write`, without the sync: the bytes go out and a [`Commit`] carries
+    /// the obligation to wait for them.
+    fn write_batched(&mut self, record: &Record) -> Result<Commit, JournalError> {
+        if !self.durable {
+            return Ok(Commit::none());
+        }
+        self.run.updated = timestamp();
+        let (Some(file), Some(syncer)) = (self.file.as_mut(), self.syncer.as_ref()) else {
+            return Ok(Commit::none());
+        };
+        append_only(file, record)?;
+        // Claimed after the bytes are written, and while this journal's lock
+        // is still held, so a ticket of N always means every record up to N
+        // has reached the file.
+        let ticket = syncer.appended();
+        Ok(Commit {
+            inner: Some((syncer.clone(), ticket)),
+        })
+    }
 }
 
 /// Serialize one record and append it.
@@ -558,13 +787,18 @@ impl Journal {
 /// the line is also forced to the physical disk before the program is
 /// allowed to continue — see [`must_sync`].
 fn append(file: &mut File, record: &Record) -> Result<(), JournalError> {
-    let mut line = serde_json::to_string(record).map_err(JournalError::Encode)?;
-    line.push('\n');
-    file.write_all(line.as_bytes()).map_err(JournalError::Io)?;
+    append_only(file, record)?;
     if must_sync(record) {
         file.sync_data().map_err(JournalError::Io)?;
     }
     Ok(())
+}
+
+/// The bytes, without the sync. Whoever calls this owes the sync.
+fn append_only(file: &mut File, record: &Record) -> Result<(), JournalError> {
+    let mut line = serde_json::to_string(record).map_err(JournalError::Encode)?;
+    line.push('\n');
+    file.write_all(line.as_bytes()).map_err(JournalError::Io)
 }
 
 /// Whether this record has to be on the disk before the program continues.
@@ -1308,5 +1542,108 @@ mod tests {
         };
         j.record(scope, seq, "a.ko:1", model_effect("x")).unwrap();
         assert!(!j.is_durable());
+    }
+
+    // --- group commit ---
+
+    #[test]
+    fn a_batched_record_is_on_the_disk_once_its_commit_is_waited() {
+        // The guarantee, unchanged: the sync moved, it did not go away.
+        let path = scratch("batched");
+        let _ = std::fs::remove_file(&path);
+        let mut j = Journal::open(Run::new("b1".into(), "a.ko".into()), path.clone()).unwrap();
+        let root = Scope::root();
+        let Lookup::Fresh { scope, seq } = j.next(&root, "a.ko:1").unwrap() else {
+            panic!("expected fresh")
+        };
+        let commit = j
+            .record_batched(scope, seq, "a.ko:1", model_effect("written"))
+            .unwrap();
+        commit.wait().unwrap();
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("written"), "the record must be in the file");
+    }
+
+    #[test]
+    fn one_sync_covers_every_record_appended_before_it() {
+        // What makes the batching worth anything: a worker whose record was
+        // already written when someone else's sync started does not need a
+        // sync of its own. Both tickets are satisfied here, and the second
+        // `wait` returns without another `fsync` because `synced` already
+        // covers it.
+        let path = scratch("covers");
+        let _ = std::fs::remove_file(&path);
+        let mut j = Journal::open(Run::new("b2".into(), "a.ko".into()), path).unwrap();
+        let root = Scope::root();
+
+        let mut commits = Vec::new();
+        for i in 0..4 {
+            let Lookup::Fresh { scope, seq } = j.next(&root, &format!("a.ko:{i}")).unwrap() else {
+                panic!("expected fresh")
+            };
+            commits.push(
+                j.record_batched(scope, seq, &format!("a.ko:{i}"), model_effect("x"))
+                    .unwrap(),
+            );
+        }
+        let syncer = j.syncer.clone().expect("a durable journal has a syncer");
+        assert_eq!(syncer.state.lock().unwrap().appended, 4);
+
+        // Waiting the last one syncs everything before it.
+        commits.pop().unwrap().wait().unwrap();
+        assert_eq!(
+            syncer.state.lock().unwrap().synced,
+            4,
+            "one sync covers every record already written"
+        );
+        // The earlier ones are then already satisfied.
+        for commit in commits {
+            commit.wait().unwrap();
+        }
+        assert_eq!(
+            syncer.state.lock().unwrap().synced,
+            4,
+            "and no more were needed"
+        );
+    }
+
+    #[test]
+    fn concurrent_waiters_all_return_and_the_file_holds_every_record() {
+        // The condvar hand-off under real threads: whoever leads, everybody
+        // must be released, and nobody may return before their own record is
+        // on the disk.
+        let path = scratch("concurrent");
+        let _ = std::fs::remove_file(&path);
+        let mut j = Journal::open(Run::new("b3".into(), "a.ko".into()), path.clone()).unwrap();
+        let root = Scope::root();
+
+        let mut commits = Vec::new();
+        for i in 0..16 {
+            let Lookup::Fresh { scope, seq } = j.next(&root, &format!("a.ko:{i}")).unwrap() else {
+                panic!("expected fresh")
+            };
+            commits.push(
+                j.record_batched(scope, seq, &format!("a.ko:{i}"), model_effect("y"))
+                    .unwrap(),
+            );
+        }
+
+        std::thread::scope(|s| {
+            for commit in commits {
+                s.spawn(move || commit.wait().unwrap());
+            }
+        });
+
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(
+            text.lines().filter(|l| l.contains("\"y\"")).count(),
+            16,
+            "every record reached the file"
+        );
+        let syncer = j.syncer.clone().expect("a durable journal has a syncer");
+        let state = syncer.state.lock().unwrap();
+        assert_eq!(state.synced, 16);
+        assert_eq!(state.waiters, 0, "every waiter left the queue");
     }
 }

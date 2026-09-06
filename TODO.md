@@ -5,6 +5,36 @@ principle in [AGENTS.md](AGENTS.md).
 
 ## Current
 
+- [x] **Group commit: a write-heavy fan-out is no longer one `fsync` at a
+      time.** A journaled write is two synced appends (the attempt, then its
+      outcome), and a sync is milliseconds of waiting on the disk rather than
+      microseconds of work — so a `parallel for` writing rows spent nearly
+      all of its wall clock inside `fsync`, one worker at a time. The fix is
+      the one a database uses and is emphatically *not* syncing less often:
+      every record still reaches the disk before the program acts on it, and
+      the ordering that makes a write exactly-once (the attempt durable
+      *before* the write runs) is untouched. What changed is that a sync one
+      worker is already performing now also covers the records other workers
+      appended beside it, which works because `fsync` flushes the whole file
+      rather than one record.
+      Two details carry it: the sync happens outside the journal's lock, on a
+      second handle to the same file (a sync holding that lock would stop
+      every other worker from appending, leaving nothing to batch); and a
+      worker about to lead a sync yields first so a worker still finishing
+      its write can join the same one — skipped when nobody else is waiting,
+      so a single-writer run pays nothing for a batching opportunity it
+      cannot have.
+      **400 rows from a `parallel for`: 4.79s to 0.82s, 5.8x** (82 to 488
+      rows a second), 131 syncs instead of 800. A sequential loop is
+      unchanged, deliberately: one thread has nobody to batch with.
+      Converted only the write path (`journal_write_start`, `journal_record`,
+      `journal_input`); every other effect keeps its inline sync, so no
+      guarantee it had was touched. `Commit` is `#[must_use]` so a record
+      cannot be appended and left unsynced by accident.
+      New: a kill-and-resume crash test against the real binary on a
+      *parallel* pipeline (the sequential one could not have caught this),
+      and three journal tests for the syncer itself including one under real
+      threads.
 - [x] **`parallel for ... first`: a fan-out that stops when the work is done.**
       The half of cancellation a deadline does not cover. `budget:
       max_seconds` stops a scope when time runs out; `first` stops one when a
@@ -204,9 +234,10 @@ exactly-once for the model's tokens but not for the customer's rows.
       against edited input stopped.
 - [x] Docs, site, `DECISIONS.md`, and `examples/19_durable_pipeline.ko`.
 
-Still open, and deliberately not in this pass: per-write cost is two fsyncs,
-capping pure-write throughput near a hundred rows a second. The fix is group
-commit across `parallel for` workers, not a weaker guarantee.
+Closed since: per-write cost was two fsyncs, capping pure-write throughput
+near a hundred rows a second. Group commit now coalesces the syncs of workers
+running beside each other -- **4.79s to 0.82s on 400 rows from a
+`parallel for`, 5.8x** -- without weakening the guarantee. See "Current".
 
 ## Development
 
@@ -371,7 +402,7 @@ remain; **Build** means it is not implemented yet.
 | P0 | Streaming | **Partial** | `str` streaming with `on token`, replay chunks, `write`, crash-safe durable resume, budget accounting, and retry state, all covered by live-transport tests | Tool streaming, parallel streaming, and per-token in-flight enforcement |
 | P0 | Timeouts + cancellation | **Partial** | Model, HTTP, and MCP timeouts; `budget: max_seconds` bounding a scope and every `parallel for` branch under it; `parallel for ... first` stopping a fan-out the moment one branch answers, journaled so a resume keeps the same winner; handler can stop reading | Interrupt work already in flight, and define cleanup guarantees |
 | P0 | Retry/backoff | **Have** | Jittered model retries and HTTP retries; MCP handshake retries | Add shared retry policy, observability for attempts, and cancellation-aware backoff |
-| P1 | Durable execution | **Partial** | Append-only replay journal for model calls, tools, writes, human input, output, time, and Python; per-effect fsync, run locking, torn-tail recovery, interrupted-stream semantics | Group commit for write-heavy fan-out, and retention/compaction |
+| P1 | Durable execution | **Partial** | Append-only replay journal for model calls, tools, writes, human input, output, time, and Python; per-effect fsync with group commit across `parallel for` workers, run locking, torn-tail recovery, interrupted-stream semantics | Retention and compaction |
 | P1 | Checkpoint/resume | **Partial** | Replay-based resume, `ask_human` suspension, exactly-once writes, and crash-injection tests against the real binary | Add explicit checkpoints, resumable in-flight effects, and versioned state migration |
 | P1 | Human approval | **Have** | `ask_human`, durable suspension, classified-data checks | Add approval identity, expiry, denial/revocation, and audit metadata |
 | P1 | Guardrails | **Partial** | Labels, declassification, unverified data direction, schema validation, budgets | Complete `unverified` enforcement, policy composition, prompt/output controls, and configurable safety policies |

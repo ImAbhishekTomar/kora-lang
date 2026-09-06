@@ -51,6 +51,28 @@ def main():
     print("done")
 "#;
 
+/// The same pipeline, fanned out.
+///
+/// Group commit only changes the concurrent path -- it coalesces the
+/// `fsync`s of workers running beside each other -- so the exactly-once
+/// guarantee has to be proven here and not only on the sequential loop
+/// above. Each branch does enough arithmetic to stay alive long enough to be
+/// killed in the middle.
+const PARALLEL_PIPELINE: &str = r#"
+use fs
+
+def main():
+    parallel for n in range(200):
+        match fs.append("OUT", f"r{n}\n"):
+            case Ok(_):
+                total = 0
+                for i in range(60000):
+                    total = total + i
+            case Err(why):
+                print(why)
+    print("done")
+"#;
+
 /// A path as a Kora string literal.
 ///
 /// Windows separators are backslashes, and a backslash in Kora source starts
@@ -463,4 +485,85 @@ fn a_killed_stream_resumes_without_a_second_request_or_a_second_piece() {
         ["failed".to_string(), "after".to_string()],
         "the program sees the interrupted stream as a failure and carries on"
     );
+}
+
+#[test]
+fn a_killed_parallel_pipeline_resumes_without_writing_any_row_twice() {
+    // The guarantee group commit must not have weakened. Batching an `fsync`
+    // across workers is only sound if every record is still on the disk
+    // before the write it describes is performed; if that ordering slipped,
+    // a kill in the middle would let a resumed run repeat a row, and this is
+    // where it would show.
+    let scratch = Scratch::new("parallel-resume");
+    let out = scratch.0.join("out.txt");
+    let program = scratch.write(
+        "parallel.ko",
+        &PARALLEL_PIPELINE.replace("OUT", &ko_path(&out)),
+    );
+
+    let mut child = Command::new(env!("CARGO_BIN_EXE_kora"))
+        .arg("run")
+        .arg(&program)
+        .arg("--durable")
+        .spawn()
+        .unwrap();
+
+    // Kill once the fan-out is underway but not finished, waiting on the
+    // file rather than on a timer so this does not depend on machine speed.
+    //
+    // The window has to be wide because the branches run concurrently: every
+    // worker appends its row before doing its work, so rows arrive in bursts
+    // of however many workers the machine has, not one at a time. A narrow
+    // window here is a test that passes on one machine and hangs on another.
+    let start = std::time::Instant::now();
+    loop {
+        let written = lines(&out).len();
+        if (20..160).contains(&written) {
+            break;
+        }
+        assert!(
+            start.elapsed() < std::time::Duration::from_secs(60),
+            "the fan-out never reached the middle: {written} lines written"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+    child.kill().unwrap();
+    child.wait().unwrap();
+
+    let killed_at = lines(&out);
+    assert!(
+        killed_at.len() < 200,
+        "the test killed the run too late to prove anything: {} lines",
+        killed_at.len()
+    );
+
+    let id = only_run_id(&program);
+    Command::new(env!("CARGO_BIN_EXE_kora"))
+        .arg("run")
+        .arg(&program)
+        .arg("--durable")
+        .arg("--resume")
+        .arg(&id)
+        .output()
+        .unwrap();
+
+    // No row twice. Branch order is not promised across threads, so this
+    // checks the multiset rather than the sequence -- which is the real
+    // guarantee anyway: exactly once, not in any particular order.
+    let finished = lines(&out);
+    let mut seen: Vec<String> = finished.clone();
+    seen.sort();
+    let mut unique = seen.clone();
+    unique.dedup();
+    assert_eq!(
+        seen, unique,
+        "a row was written twice across the kill: {finished:?}"
+    );
+    // And every row that was written before the kill survived it.
+    for row in killed_at {
+        assert!(
+            finished.contains(&row),
+            "row {row} written before the kill is missing after the resume: {finished:?}"
+        );
+    }
 }
