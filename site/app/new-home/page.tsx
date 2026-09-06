@@ -87,6 +87,25 @@ function InteractivePanel() {
       <article><strong>02</strong><h2>Replayable runs</h2><p>Deterministic execution you can inspect, share, and replay.</p></article>
       <article><strong>03</strong><h2>Safe data flow</h2><p>Explicit data boundaries and policies to protect what matters.</p></article>
     </section>
+    <section className="figma-detail-sections" aria-label="Kora capabilities">
+      <article>
+        <small>LANGUAGE / 01</small>
+        <h2>Build agent workflows that read like programs.</h2>
+        <p>Use ordinary control flow with typed model calls, explicit budgets, and outcomes you can handle instead of hidden failures.</p>
+        <div className="figma-detail-pills"><span>typed</span><span>durable</span><span>composable</span></div>
+      </article>
+      <article>
+        <small>RUNTIME / 02</small>
+        <h2>Trace every step. Resume without losing the run.</h2>
+        <div className="figma-trace-list"><div><i />plan <em>812ms</em></div><div><i />tool.web <em>1.23s</em></div><div><i className="warning" />provider.retry <em>replayed</em></div><div><i />return <em>complete</em></div></div>
+      </article>
+      <article>
+        <small>SAFETY / 03</small>
+        <h2>Classified data stays inside its boundary.</h2>
+        <p>The compiler tracks sensitive values through the workflow and requires an explicit declassification before they reach a protected sink.</p>
+        <div className="figma-policy-card"><span>classified</span><b>→</b><span>declassify</span><b>→</b><span>approved sink</span></div>
+      </article>
+    </section>
   </div>
 }
 
