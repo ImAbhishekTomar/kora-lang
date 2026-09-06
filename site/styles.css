@@ -244,6 +244,7 @@ body:has(.figma-landing) { overflow:hidden; }
 .figma-theme-light { --figma-lime:#5f7000; --figma-muted:#4d5757; }.figma-theme-light .figma-get-started,.figma-theme-light .figma-eval-row button { background:#b8d000; }.figma-theme-light .figma-detail-pills span { border-color:rgba(95,112,0,.4); color:#5f7000; }.figma-theme-light .figma-policy-card,.figma-theme-light .figma-legacy-content strong,.figma-theme-light .figma-detail-sections small { color:#5f7000; }.figma-theme-light .figma-code-editor strong { color:#5f7000; }
 .figma-theme-light .figma-explore { border-color:#b8c89b; background:#ffffff; color:#5f7000; }
 .figma-theme-light .figma-stars { color:#121212 !important; }.figma-theme-light .figma-stars span { color:#9a7200; }
+@media (max-width:800px) { .figma-landing { min-height:100dvh; }.figma-navbar { position:relative; }.figma-main { display:block; min-height:0; overflow-x:hidden; overflow-y:auto; }.figma-left-panel { min-height:calc(100dvh - 82px); overflow:visible; }.figma-right-panel { min-height:auto; overflow:visible; } }
 
 /* Internals page */
 .internals-page {
