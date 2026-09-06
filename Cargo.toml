@@ -48,6 +48,9 @@ toml = "0.8"
 toml_edit = "0.22"
 regex = "1"
 sha2 = "0.10"
+# Unpacking a package helper. Only ever reading an archive, never writing one.
+tar = "0.4"
+flate2 = "1"
 # Text extraction only. Pure Rust, no native blob: rendering a page to pixels
 # is a separate decision with a C++ library behind it.
 pdf-extract = "0.12"

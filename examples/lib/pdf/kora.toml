@@ -1,0 +1,46 @@
+[package]
+name = "pdf_render"
+version = "0.1.0"
+
+# What this package needs from whoever imports it. It reads nothing itself:
+# the *program* hands it bytes, and it hands those to its helper.
+[package.requires]
+helper = true
+
+# The helper: a separate program that links PDFium, so the Kora compiler does
+# not. A released package names a URL and the hash of the artifact, and
+# `kora install` fetches only this platform's build, only when a program
+# actually imports the package:
+#
+#   [package.helper.aarch64-apple-darwin]
+#   url = "https://github.com/.../kora-pdf-helper-0.1.0-aarch64-apple-darwin.tar.gz"
+#   sha256 = "..."
+#   binary = "kora-pdf-helper"
+#
+# This copy is built from source beside the package instead, which is what
+# developing a helper looks like:
+#
+#   cd examples/lib/pdf/helper && cargo build --release
+#
+# and PDFium itself goes next to the built binary. See helper/README.md.
+[package.helper]
+protocol = "stdio/v1"
+timeout_secs = 120
+
+[package.helper.aarch64-apple-darwin]
+path = "helper/target/release/kora-pdf-helper"
+
+[package.helper.x86_64-apple-darwin]
+path = "helper/target/release/kora-pdf-helper"
+
+[package.helper.aarch64-unknown-linux-gnu]
+path = "helper/target/release/kora-pdf-helper"
+
+[package.helper.x86_64-unknown-linux-gnu]
+path = "helper/target/release/kora-pdf-helper"
+
+[package.helper.x86_64-pc-windows-msvc]
+path = "helper/target/release/kora-pdf-helper.exe"
+
+[package.helper.aarch64-pc-windows-msvc]
+path = "helper/target/release/kora-pdf-helper.exe"

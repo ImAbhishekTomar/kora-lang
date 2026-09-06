@@ -1,0 +1,37 @@
+# pdf_render: a PDF's pages as images, for the vision path.
+#
+# `pdf` in the standard library reads a document's *text*. When there is no
+# text layer — a scan, a photographed invoice, a signed form — the pages have
+# to become pictures before a model can read them, and that needs a real
+# renderer with a large C++ library behind it. That library lives in this
+# package's helper, in its own process, and never inside Kora.
+#
+# The program hands over bytes. This package never opens a file, which is why
+# its `[package.requires]` asks for `helper` and not `fs`.
+
+use helper
+
+# One image per page, in order, or an empty list.
+#
+# `dpi` is the resolution the pages are drawn at: 150 is comfortable for a
+# vision model, 300 for small print, and higher mostly costs memory. A
+# document with more than `max_pages` pages is refused rather than rendered,
+# so a five-hundred-page filing cannot quietly become five hundred images.
+def pages(document: bytes, dpi: int, max_pages: int) -> list:
+    match helper.render(dpi, max_pages, document):
+        case Ok(images):
+            return images
+        case Err(why):
+            return []
+
+# The same call, with the reason kept when it fails.
+def try_pages(document: bytes, dpi: int, max_pages: int):
+    return helper.render(dpi, max_pages, document)
+
+# How many pages, without drawing any of them.
+def page_count(document: bytes) -> int:
+    match helper.page_count(document):
+        case Ok(count):
+            return count
+        case Err(why):
+            return 0

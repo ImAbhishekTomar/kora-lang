@@ -176,6 +176,7 @@ across threads does its work in a different sequence on every host.
 | `fs.read(path)` | `Ok(text)` — `unverified` |
 | `fs.lines(path)` | `Ok(list)` — `unverified` |
 | `fs.image(path)` | `Ok(image)` — `unverified` |
+| `fs.bytes(path)` | `Ok(bytes)` — `unverified` |
 | `fs.list(dir)` | `Ok(list of paths)` — sorted |
 | `fs.glob(pattern)` | `Ok(list of paths)` — sorted |
 | `fs.write(path, text)` | `Ok(None)` — atomic |
@@ -219,6 +220,11 @@ loop ends up reading the wrong directory. Unlike file *contents*, listed
 paths are verified: the program named the directory and the shape of the
 names, and every result was matched against it, which is the same narrowing
 that lifts `unverified` elsewhere.
+
+`fs.bytes` is for a file that is not text. `fs.read` decodes as UTF-8 and
+fails on a PDF, a font, or an archive, and forcing one through a lossy decode
+hands back something that no longer round-trips. Bytes exist to be given to
+something that understands them — a package helper, usually.
 
 `fs.image` reads PNG, JPEG, GIF, and WebP. The type comes from the file's
 magic bytes, not its extension — `mimetypes.guess_type` trusts the filename,

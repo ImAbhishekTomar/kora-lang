@@ -483,9 +483,24 @@ rows = sql.query("app.db", "select * from users where id = ?", [user_id])
 
 `env.get(name)` reads an environment variable and `env.has(name)` checks whether it exists. Secret-looking names are classified automatically.
 
+### Package helpers
+
+A package may declare one helper: a separate program it carries heavy work out to, for things that cannot be written in Kora — rendering a PDF page, decoding a video. `use helper` binds the declaring package's own helper, the importer decides whether it may run through a `helper` grant, and a fetched helper is pinned by `sha256` and recorded in `kora.sums`. Kora never loads native code into itself: a helper is a process, so a crash in it is an `Err`, a hang is killed, and it only ever sees the bytes it was handed.
+
+```kora
+use helper
+
+def pages(document: bytes, dpi: int) -> list:
+    match helper.render(dpi, 20, document):
+        case Ok(images):
+            return images
+        case Err(why):
+            return []
+```
+
 ### `pdf`
 
-`pdf.text(path)` returns every page joined, `pdf.pages(path)` keeps the pages separate, and `pdf.info(path)` reports `page_count`, `encrypted`, and `has_text_layer`. A document whose pages are pictures is an `Err`, not an empty string, so a scan is never mistaken for an empty document. Text is `unverified`.
+`pdf.text(path)` returns every page joined, `pdf.pages(path)` keeps the pages separate, and `pdf.info(path)` reports `page_count`, `encrypted`, and `has_text_layer`. A document whose pages are pictures is an `Err`, not an empty string, so a scan is never mistaken for an empty document. Text is `unverified`. Rendering a page to an image is a package (`pdf_render`), not a stdlib call.
 
 ### Packages
 

@@ -25,6 +25,10 @@ pub struct Installed {
     pub lock_changed: bool,
     /// Commits recorded in the checksum log for the first time.
     pub newly_recorded: usize,
+    /// Package helpers downloaded this run.
+    pub helpers: Vec<crate::helper::Fetched>,
+    /// Helpers that could not be installed, with the reason.
+    pub helper_failures: Vec<crate::helper::Failed>,
 }
 
 /// Resolve `entry`, fetching any git dependency that is not on disk.
@@ -156,6 +160,32 @@ pub fn install(entry: &Path, jobs: usize, write_lock: bool) -> Installed {
         }
     };
 
+    // A helper is fetched only for a package the program actually reaches,
+    // and only for this platform: a program that imports none downloads
+    // nothing, which is the point of putting the binary in a package rather
+    // than in the compiler.
+    let mut helpers = Vec::new();
+    let mut helper_failures = Vec::new();
+    for package in resolution.needed() {
+        let Some(spec) = package.manifest.helper.as_ref() else {
+            continue;
+        };
+        let name = package
+            .name
+            .clone()
+            .unwrap_or_else(|| "this program".into());
+        match crate::helper::install(&name, spec, &root_dir) {
+            Ok(Some(fetched)) => {
+                // Recorded beside every dependency's hash, so what this URL
+                // has served is answerable later rather than only now.
+                sums.record(&fetched.url, &fetched.sha256, &fetched.sha256);
+                helpers.push(fetched);
+            }
+            Ok(None) => {}
+            Err(failed) => helper_failures.push(failed),
+        }
+    }
+
     let lock_changed = lock.render() != before;
     if write_lock && lock_changed {
         let _ = lock.write(&root_dir);
@@ -171,6 +201,8 @@ pub fn install(entry: &Path, jobs: usize, write_lock: bool) -> Installed {
         failed,
         lock_changed,
         newly_recorded,
+        helpers,
+        helper_failures,
     }
 }
 

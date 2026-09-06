@@ -198,9 +198,16 @@ commit across `parallel for` workers, not a weaker guarantee.
       dead run. `pdf` maps to the `fs` capability for packages.
 - [x] `examples/21_pdf.ko`, `crates/kora-runtime/tests/pdf_test.rs`, docs,
       site, and `DECISIONS.md`.
-- [ ] PDF rendering (a page as an image). Needs PDFium, which means a C++
-      library in the release matrix and a decision recorded about where the
-      "no native code" line actually sits. Separate change.
+- [x] PDF rendering, as a package rather than a compiler feature. Kora gained
+      package *helpers* (`crates/kora-helper`, `[package.helper]`,
+      `use helper`, `fs.bytes`, the `helper` grant); PDFium lives in
+      `examples/lib/pdf/helper`, in its own process and its own workspace, so
+      nothing in the compiler's build links it.
+- [ ] Publish the `pdf_render` helper as per-platform artifacts, so the
+      package names a url and sha256 instead of a build path. Until then the
+      example builds the helper from source.
+- [ ] OS-level sandboxing for helpers (seccomp, `sandbox_init`). A helper is
+      isolated from the interpreter today, not confined by the system.
 
 - [x] Refresh the documentation welcome page with a more playful guided
       experience, responsive styling, and reduced-motion-safe animation.

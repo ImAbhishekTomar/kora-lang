@@ -1135,7 +1135,7 @@ modules and their backing crates:
 | `time` | `chrono` / `jiff` | better |
 | `re` | `regex` | no catastrophic backtracking |
 | `s3`, `aws` | `aws-sdk-rust` | official |
-| `pdf` | `lopdf`, `pdf-extract` | **text landed**; weaker than PyPDF at exotic encodings. Rendering a page to pixels is *not* in: it needs a full renderer (fonts, shading) with a C++ library behind it, which is a separate decision from parsing |
+| `pdf` | `lopdf`, `pdf-extract` | **text landed**; rendering is the `pdf_render` package, through a helper, not a stdlib module; weaker than PyPDF at exotic encodings. Rendering a page to pixels is *not* in: it needs a full renderer (fonts, shading) with a C++ library behind it, which is a separate decision from parsing |
 | `search` | `tantivy` | Lucene-class |
 
 Known gaps: scipy, sklearn, matplotlib, torch/transformers, and niche SaaS
@@ -1325,6 +1325,71 @@ commitment, not a coding decision, and committing code cannot make it.
 them — that is, a real third-party ecosystem rather than a handful of
 first-party ones. Until then the two local logs cover everyone who exists.
 
+### Package helpers: compiled work in its own process
+
+**The gap.** Rendering a PDF page needs a real renderer — fonts, shading,
+transparency — and no production-grade pure-Rust one exists. Neither does one
+in Go, or Java. Everyone who rasterizes a PDF wraps PDFium, MuPDF, or
+Poppler. So "rewrite it in Kora" is not available for this, and will not be
+for the next capability like it either.
+
+**What it is.** A package may declare one *helper*: a program Kora starts,
+sends a request to over a pipe, and kills. It speaks `stdio/v1` — a
+length-prefixed JSON header and raw payloads, so a rendered page does not pay
+a third of its size in base64 — and the caller writes `use helper` inside the
+package that declared it.
+
+**Why a process and not a library.** This is the same refusal as below,
+applied rather than restated. A `.so` loaded into the interpreter runs with
+the interpreter's rights and never passes a grant check. A helper has its own
+address space, so PDFium — half a million lines of C++ parsing a file the
+program did not write — cannot reach the labels, the journal, or the budget
+even when it is exploited. Chrome does not run PDFium in its browser process
+either; it runs it in a sandboxed renderer. A separate process is the weakest
+version of that isolation, and it is still categorically stronger than
+linking.
+
+Three properties follow, and each one is a thing an in-process library cannot
+offer:
+
+- **A crash is a value.** The child dies, the call is `Err`, the run
+  continues.
+- **A hang is survivable.** The helper is killed on a timeout. An in-process
+  loop cannot be interrupted at all.
+- **It sees only what it is handed.** Kora opens the file and sends bytes; a
+  helper is never told a path. `fs.bytes` exists for this, because a PDF has
+  no honest `str` form.
+
+**Why not in the compiler.** Linking PDFium into `kora` would grow every
+release artifact by about 7 MB, add a per-platform binary to a release matrix
+that is currently pure cargo, and charge that to everyone who never opens a
+PDF. The capability belongs to the people who want it.
+
+**Why not the Python sidecar.** It would work — `pypdfium2` ships wheels with
+PDFium inside — and it was the cheapest path. It was rejected because "no
+`use python` means no Python needed" is a promise the language makes, and
+spending it to read a PDF is a bad trade. The sidecar stays for what it is
+good at.
+
+**Why not WASM, yet.** WASM is the better sandbox and remains the end state
+(below). It needs a runtime compiled into the compiler, which grows the binary
+for everyone and is a subsystem rather than a module. A helper reaches the
+same capability today at native speed, with the isolation of a process rather
+than of a sandbox. That difference is the honest cost of this decision: a
+helper is an ordinary program with ordinary operating-system rights, so trust
+rests on the pinned hash and on who published the package, not on
+confinement. OS-level sandboxing can be added later without changing the
+package API.
+
+**How trust is anchored.** A fetched helper carries a mandatory `sha256`;
+the manifest format has nowhere to put an unpinned one. `kora install`
+downloads only this platform's entry, only for a package the program actually
+imports, refuses bytes that hash to anything else, and records what arrived in
+`kora.sums`. Nothing is executed to install it — the `postinstall` class stays
+closed. Whether a helper may run at all is the importer's decision, through a
+`helper` grant like `net` or `fs`, and a helper is its own sink for
+classified data.
+
 ### WASM components for native packages
 
 **The gap.** A package is `.ko` source. Someone who wants to ship a fast PDF
@@ -1343,12 +1408,17 @@ network; one that does not, physically cannot reach it — the same rule `.ko`
 packages already follow, enforced by the sandbox rather than by our checks.
 Being language-agnostic is a bonus; being unable to escape is the reason.
 
-**Why it is deferred.** Nothing needs it yet. MCP covers tools, the Python
-sidecar covers the long tail, and the component tooling is still young.
+**Why it is still deferred.** Package helpers now cover the capability gap —
+see above — at native speed and with no runtime compiled into `kora`. What
+WASM adds over a helper is confinement rather than capability: a component
+cannot escape, while a helper is an ordinary process that merely cannot reach
+into the interpreter. That is worth having, and it is worth having *once*, as
+a general extension point, rather than being rushed for one package.
 
-**What would start it.** A package that genuinely cannot be written in Kora or
-reached through MCP or Python — a codec, a parser, something CPU-bound enough
-that the sidecar's per-call serialization dominates.
+**What would start it.** A helper that needs to be confined rather than
+merely separated — one running code whose publisher is not trusted — or
+enough helpers that per-platform artifacts become the ecosystem's main
+friction, which one `.wasm` would remove.
 
 ## Parked / non-goals
 

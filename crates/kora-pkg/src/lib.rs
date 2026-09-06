@@ -15,6 +15,7 @@ mod edit;
 mod fetch;
 mod grants;
 pub(crate) mod hash;
+pub(crate) mod helper;
 mod install;
 pub(crate) mod lock;
 pub(crate) mod manifest;
@@ -29,6 +30,7 @@ pub use edit::Change;
 pub use fetch::{all as fetch_all, default_jobs, Fetched, Request};
 pub use grants::{Capability, Grants};
 pub use hash::tree as hash_tree;
+pub use helper::{install as install_helper, Failed as HelperFailed, Fetched as HelperFetched};
 pub use install::{install, Installed};
 pub use lock::{deps_dir, helper_dir, Lock, Locked};
 pub use manifest::{

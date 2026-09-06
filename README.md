@@ -549,8 +549,9 @@ Early development, pre-alpha, built for personal use first. Everything
 documented here works and is covered by tests; the test suite never touches
 the network.
 
-Not built yet: classes, list comprehensions, PDF pages as images (a PDF's
-*text* is in, with `pdf`), and `try`/`except`. See
+Not built yet: classes, list comprehensions, and `try`/`except`. PDF text is
+in (`pdf`); rendering a page to an image is a package with a helper process
+(`examples/lib/pdf`), not part of the compiler. See
 [DECISIONS.md](DECISIONS.md) for what is planned and what is deliberately
 excluded.
 

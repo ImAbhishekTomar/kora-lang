@@ -24,6 +24,7 @@ and the constructs Python has no equivalent for.
 - [Durability](#durability)
 - [Modules](#modules)
 - [Packages](#packages)
+- [Package helpers](#package-helpers)
 - [Tests](#tests)
 - [Built-in functions](#built-in-functions)
 - [Differences from Python](#differences-from-python)
@@ -1083,6 +1084,69 @@ A tool call is never retried. Generating twice costs tokens; calling a tool
 twice may open two issues or charge a card twice, and a timeout is exactly the
 case where whether it ran is unknown. Starting a server is retried, because
 nothing has run yet.
+
+### Package helpers
+
+Some work belongs in a package but cannot be written in Kora: rasterizing a
+PDF page, decoding a video, anything with a large C library under it. A
+package declares a *helper* — a separate program Kora starts, talks to, and
+kills.
+
+```toml
+# in the package's own kora.toml
+[package.helper]
+protocol = "stdio/v1"
+timeout_secs = 120
+
+[package.helper.aarch64-apple-darwin]
+url = "https://.../helper-0.1.0-aarch64-apple-darwin.tar.gz"
+sha256 = "8f43..."
+binary = "kora-pdf-helper"
+```
+
+```python
+use helper
+use fs
+
+def pages(document: bytes, dpi: int) -> list:
+    match helper.render(dpi, 20, document):
+        case Ok(images):
+            return images
+        case Err(why):
+            return []
+```
+
+`use helper` binds the calling package's own helper and no other. The
+importer decides whether it may run at all:
+
+```toml
+[dependencies.pdf_render]
+path = "examples/lib/pdf"
+grants = { helper = true }
+```
+
+Why a process rather than a library. A `.so` loaded into the interpreter runs
+with the interpreter's rights, passes no capability check, and shares an
+address space with every label, budget, and journal entry the run holds. A
+helper cannot: it gets bytes rather than paths, so it can only see what it was
+handed; it is killed when it stops answering, so it cannot hang the run; and a
+crash in it is an `Err`, not a dead program. Kora never loads native code into
+itself, and that is not a setting.
+
+`kora install` fetches only the entry for the machine it runs on, and only
+when a program actually imports the package — so a program that does not use
+it downloads nothing. A fetched helper must carry a `sha256`: the manifest
+format has nowhere to put an unpinned one, and what arrived is recorded in
+`kora.sums` beside every dependency's hash. Nothing is executed to install it.
+
+Everything a helper returns is `unverified`, and a helper is its own sink:
+classified data reaching one needs `declassify ... for helper`. Calls are
+journaled like reads, so a resumed run that gets a different answer stops
+rather than continuing against data the original never saw.
+
+`fs.bytes(path)` is how a program hands one a file: a PDF or a font has no
+honest `str` form, so bytes are their own value. `bytes` and `image` are type
+names a signature may use, like `str` and `int`.
 
 ### Python
 

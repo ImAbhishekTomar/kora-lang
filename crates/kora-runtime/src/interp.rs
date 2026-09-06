@@ -1226,6 +1226,8 @@ impl Interpreter {
             "bool" => matches!(v, Value::Bool(_)),
             "list" => matches!(v, Value::List(_)),
             "dict" => matches!(v, Value::Dict(_)),
+            "bytes" => matches!(v, Value::Bytes(_)),
+            "image" => matches!(v, Value::Image(_)),
             name => match v {
                 Value::Object { type_name, .. } => type_name.as_str() == self.qualify_type(name),
                 _ => {

@@ -1,0 +1,20 @@
+# Deliberately its own workspace: this crate links PDFium, and nothing in the
+# Kora compiler's build should ever have to. Built and released separately,
+# and named in the package's kora.toml by hash.
+[workspace]
+
+[package]
+name = "kora-pdf-helper"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "Renders PDF pages to PNG for the Kora `pdf-render` package"
+
+[dependencies]
+serde_json = "1"
+pdfium-render = "0.9"
+image = { version = "0.25", default-features = false, features = ["png"] }
+
+[profile.release]
+opt-level = 2
+strip = true

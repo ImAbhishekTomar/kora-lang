@@ -116,6 +116,15 @@ kora install program.ko
 kora install --jobs 4 program.ko
 ```
 
+A package may also carry a *helper*: one program it talks to for work that
+cannot be written in Kora, such as rendering a PDF page. `kora install`
+fetches the entry for this machine's platform and no other, verifies it
+against the `sha256` the manifest pinned, unpacks it into
+`.kora/helpers/<hash>/`, and records what arrived in `kora.sums`. A helper
+whose bytes hash to anything else is refused rather than run, and nothing is
+executed to install one. A program that imports no package with a helper
+downloads nothing at all.
+
 Sources land in `.kora/deps/<repository>@<commit>/`, `kora.lock` records what
 was resolved, and `kora.sums` records what each commit contained the first
 time it was seen. Both files are committed; `.kora/` is not. Fetching is IO-bound, so the default width is not the core
@@ -338,6 +347,15 @@ openai      = { allow = ["internal"], deny = ["classified"] }
 name    = "receipts"
 version = "0.1.0"
 entry   = "src/lib.ko"              # the default
+
+[package.helper]                    # a program this package carries work out
+protocol    = "stdio/v1"            # to. Only when it has one
+timeout_secs = 120                  # one call; the helper is killed after it
+
+[package.helper.aarch64-apple-darwin]
+url    = "https://.../helper-aarch64-apple-darwin.tar.gz"
+sha256 = "8f43..."                  # mandatory: there is no unpinned form
+binary = "kora-pdf-helper"          # which file in the archive to run
 
 [install]
 jobs = 16                           # parallel fetches; IO-bound, so not the

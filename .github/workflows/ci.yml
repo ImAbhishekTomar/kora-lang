@@ -114,7 +114,7 @@ jobs:
       - name: Build
         run: cargo build --locked
       - name: Check every example
-        run: ./target/debug/kora check examples/*.ko examples/lib/*.ko examples/lib/greet/src/*.ko examples/patterns/*.ko
+        run: ./target/debug/kora check examples/*.ko examples/lib/*.ko examples/lib/greet/src/*.ko examples/lib/pdf/src/*.ko examples/patterns/*.ko
       - name: Run the Kora test suite
         run: |
           set -euo pipefail

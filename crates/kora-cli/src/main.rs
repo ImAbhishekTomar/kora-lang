@@ -491,6 +491,24 @@ fn install_packages(path: &str, jobs: Option<usize>) -> ExitCode {
     for url in &outcome.fetched {
         ui::status("fetched", &url.to_string());
     }
+    for helper in &outcome.helpers {
+        ui::status(
+            "installed",
+            &format!("{}'s helper ({})", helper.package, helper.path.display()),
+        );
+    }
+    for failed in &outcome.helper_failures {
+        eprintln!(
+            "{} cannot install {}'s helper from {}",
+            ui::err(),
+            failed.package,
+            failed.url
+        );
+        for line in failed.why.lines().take(4) {
+            eprintln!("   {}", line.trim());
+        }
+        eprintln!();
+    }
     for (url, why) in &outcome.failed {
         eprintln!("{} cannot fetch {url}", ui::err());
         for line in why.lines().take(4) {
@@ -511,7 +529,7 @@ fn install_packages(path: &str, jobs: Option<usize>) -> ExitCode {
     }
 
     let used = outcome.resolution.needed().len();
-    if outcome.failed.is_empty() {
+    if outcome.failed.is_empty() && outcome.helper_failures.is_empty() {
         ui::done(&format!(
             "{used} package{} in use",
             if used == 1 { "" } else { "s" }
@@ -519,7 +537,7 @@ fn install_packages(path: &str, jobs: Option<usize>) -> ExitCode {
     }
 
     let problems = report_package_problems(&outcome.resolution);
-    if outcome.failed.is_empty() && !problems {
+    if outcome.failed.is_empty() && outcome.helper_failures.is_empty() && !problems {
         ExitCode::SUCCESS
     } else {
         ExitCode::from(1)

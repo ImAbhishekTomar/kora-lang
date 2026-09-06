@@ -891,7 +891,12 @@ impl Checker<'_> {
                 n
             }
         };
-        const PRIMITIVES: &[&str] = &["str", "int", "float", "bool", "list", "dict", "None"];
+        // `image` and `bytes` are values a program can hold and hand on, so
+        // a signature can say so. Neither has fields to declare, which is why
+        // they sit here rather than in a `type` block.
+        const PRIMITIVES: &[&str] = &[
+            "str", "int", "float", "bool", "list", "dict", "None", "bytes", "image",
+        ];
         if !PRIMITIVES.contains(&name.as_str()) && !self.type_names.contains(name) {
             self.analysis.diagnostics.push(
                 Diagnostic::error(span, format!("`{name}` is not a declared type"))
