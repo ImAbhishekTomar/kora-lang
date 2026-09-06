@@ -875,6 +875,7 @@ impl Parser {
         let var = self.expect_ident("loop variable after `for`")?;
         self.expect(&TokenKind::In, "expected `in` after loop variable")?;
         let iter = self.expression()?;
+        let first = self.first_modifier();
         let body = self.block("parallel for body")?;
         Ok(Stmt {
             kind: StmtKind::ParallelFor {
@@ -882,6 +883,7 @@ impl Parser {
                 iter,
                 body,
                 collect_into,
+                first,
             },
             span,
         })
@@ -1211,6 +1213,19 @@ impl Parser {
     /// Contextual `stream` after an annotated assignment. It stays a normal
     /// identifier everywhere else, so existing programs may keep a variable
     /// named `stream`.
+    /// `first` after the iterable of a `parallel for`.
+    ///
+    /// Contextual, like `stream` and `on`: it is only a keyword in this one
+    /// position, so a program that already uses `first` as a variable or a
+    /// function name keeps working.
+    fn first_modifier(&mut self) -> bool {
+        let is_first = matches!(self.peek_kind(), TokenKind::Ident(name) if name == "first");
+        if is_first {
+            self.advance();
+        }
+        is_first
+    }
+
     fn stream_modifier(&mut self) -> bool {
         let is_stream = matches!(self.peek_kind(), TokenKind::Ident(name) if name == "stream");
         if is_stream {

@@ -5,6 +5,23 @@ principle in [AGENTS.md](AGENTS.md).
 
 ## Current
 
+- [x] **`parallel for ... first`: a fan-out that stops when the work is done.**
+      The half of cancellation a deadline does not cover. `budget:
+      max_seconds` stops a scope when time runs out; `first` stops one when a
+      branch has answered, which is what every "race these providers" and
+      "search until you find it" program actually wants. The loop yields one
+      value rather than a list; a branch that falls off the end of its body
+      has not answered and does not stop the race; a race nobody wins is
+      `None`. The winner is the earliest in *input* order, not the earliest
+      to finish, because an answer that depends on which core was free cannot
+      be replayed — and for the same reason it is journaled, only the second
+      effect after `max_seconds` that has to be. A branch already running is
+      not interrupted, stated as the honest limit it is. `first` is
+      contextual, like `stream`, and deliberately kept out of the editor
+      keyword list because `first` is a common variable name.
+      `crates/kora-runtime/tests/race_test.rs` (18 tests, four of them
+      driving a real durable resume), `examples/25_race.ko`, docs, site,
+      `DECISIONS.md`.
 - [x] **`xml` in the standard library.** A `DOCTYPE` refused outright, so the
       XXE and billion-laughs class has nowhere to start; namespaces kept as
       data; character data whole; `children` a list at every length. See
@@ -352,7 +369,7 @@ remain; **Build** means it is not implemented yet.
 | P0 | Structured output | **Have** | Declared Kora types become validated model JSON schemas | Add schema evolution/versioning and better provider compatibility diagnostics |
 | P0 | Async/concurrency | **Partial** | Real OS-thread `parallel for` with isolated worker heaps | Add explicit cancellation, backpressure, bounded queues, fair scheduling, and a clear async/event model |
 | P0 | Streaming | **Partial** | `str` streaming with `on token`, replay chunks, `write`, crash-safe durable resume, budget accounting, and retry state, all covered by live-transport tests | Tool streaming, parallel streaming, and per-token in-flight enforcement |
-| P0 | Timeouts + cancellation | **Partial** | Model, HTTP, and MCP timeouts; `budget: max_seconds` bounding a scope and every `parallel for` branch under it; handler can stop reading | Interrupt work already in flight, let a program stop a fan-out early, and define cleanup guarantees |
+| P0 | Timeouts + cancellation | **Partial** | Model, HTTP, and MCP timeouts; `budget: max_seconds` bounding a scope and every `parallel for` branch under it; `parallel for ... first` stopping a fan-out the moment one branch answers, journaled so a resume keeps the same winner; handler can stop reading | Interrupt work already in flight, and define cleanup guarantees |
 | P0 | Retry/backoff | **Have** | Jittered model retries and HTTP retries; MCP handshake retries | Add shared retry policy, observability for attempts, and cancellation-aware backoff |
 | P1 | Durable execution | **Partial** | Append-only replay journal for model calls, tools, writes, human input, output, time, and Python; per-effect fsync, run locking, torn-tail recovery, interrupted-stream semantics | Group commit for write-heavy fan-out, and retention/compaction |
 | P1 | Checkpoint/resume | **Partial** | Replay-based resume, `ask_human` suspension, exactly-once writes, and crash-injection tests against the real binary | Add explicit checkpoints, resumable in-flight effects, and versioned state migration |
@@ -375,12 +392,12 @@ remain; **Build** means it is not implemented yet.
 ### Suggested capability build order
 
 - [ ] **P0 correctness gate:** streaming accounting, retry state, durable
-      crash semantics, live transport tests, and a time budget
-      (`max_seconds`) have shipped. What remains under "cancellation" is the
-      half a deadline does not cover: interrupting work already in flight,
-      and a way for a program to stop a fan-out early (first-success-wins).
-      Both are the same "did it happen" problem that makes a tool call
-      unretryable, and worth solving once, deliberately.
+      crash semantics, live transport tests, a time budget (`max_seconds`),
+      and stopping a fan-out early (`parallel for ... first`) have shipped.
+      What remains under "cancellation" is the one half that is genuinely
+      hard: interrupting work already in flight. It is the same "did it
+      happen" problem that makes a tool call unretryable, and it is stated as
+      an honest limit in three places rather than papered over.
 - [ ] **P1 reliability layer:** explicit checkpoints remain; fsync policy,
       run locking, exactly-once writes, interrupted-stream semantics, and
       fault-injection tests have shipped.

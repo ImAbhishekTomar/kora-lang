@@ -59,6 +59,18 @@ The current codebase includes:
 
 ## Coming next
 
+### Finish cancellation
+
+`parallel for ... first` has shipped: a fan-out now stops the moment one
+branch answers, and the winner is journaled so a resumed run keeps the
+decision the live run made rather than racing again.
+
+What remains is the half that is genuinely hard — interrupting a branch
+already running. Today no *further* work is started, but a request already
+sent runs to its own transport timeout. That is the same "did it happen"
+problem that makes a tool call unretryable, and it will be solved once,
+deliberately, rather than approximated.
+
 ### Stabilize streaming and workflows
 
 Streaming prose works for a single `str` call, including inside a durable run,

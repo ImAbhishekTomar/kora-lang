@@ -338,6 +338,15 @@ results = parallel for ticket in tickets:
     triage(ticket)
 ```
 
+Add `first` after the iterable to stop as soon as one branch returns a value. The loop then yields that one value rather than a list, and no further branches are started.
+
+```kora
+answer = parallel for mirror in mirrors first:
+    return fetch(mirror)
+```
+
+The winner is the earliest in *input* order, not the earliest to finish: an answer that depended on which core was free could not be replayed. Under `--durable` the winner is journaled for the same reason `max_seconds` journals its refusal. A branch already running is not interrupted — no further work is started, but a request already sent runs to its own timeout. A race nobody wins is `None`. `first` is contextual, so a program that already uses it as a name keeps working.
+
 ### `with budget(...)`
 
 Places a nested spending fence around a block.

@@ -154,6 +154,21 @@ pub enum Effect {
     /// holds at replay time rather than what the live run actually read,
     /// which could differ if another process wrote to the same store meanwhile.
     Memory { key: String, value_json: String },
+    /// Which branch of a `parallel for ... first` produced the answer, and
+    /// what it was.
+    ///
+    /// Journaled for the reason `max_seconds` is, and no other meter is: the
+    /// answer is not re-derivable. Which branches got started before one of
+    /// them returned depends on how the threads were scheduled, so a replay
+    /// would race differently and could answer differently — or answer at
+    /// all where the first run did not. Recording the winner makes a resumed
+    /// run continue from the same decision the live run made, which is the
+    /// whole contract of a durable run.
+    ///
+    /// The index is kept alongside the value because it is what makes a
+    /// trace readable ("provider 2 won"), and because a value alone cannot
+    /// distinguish two branches that returned equal answers.
+    Race { index: usize, value_json: String },
 }
 
 /// A journaled copy of one tool call and its result, kept by a

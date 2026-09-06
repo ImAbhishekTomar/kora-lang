@@ -983,6 +983,59 @@ This is also why the budget check now runs *after* the journal lookup rather
 than before. A replayed call returns what it returned; only a call that is
 genuinely fresh consults a meter.
 
+### A fan-out stops when the work is done, not only when time runs out
+
+`budget: max_seconds` bounds a scope by the clock. The other half of
+cancellation is stopping because the answer arrived, and it had no spelling:
+a program racing three providers had to run all three and throw two away.
+
+`parallel for x in xs first:` is that spelling. It is a modifier on the loop
+rather than a `stop()` a branch calls, for the reason a cancellation token was
+already rejected: something that reaches out of the branch it was called in is
+ambient authority, and the loop is the thing that owns starting the work. It
+reuses the machinery that is already there — the same work-stealing over the
+same shared budget — and adds one atomic flag checked where the next item is
+taken.
+
+**The loop yields one value, not a list.** A race is asking a question, and
+the answer is not a list with holes where the branches that never ran would
+have been. A branch that falls off the end of its body has not answered, so it
+does not stop the race; a race nobody wins is `None`, which is exactly what
+such a branch produces, so there is no separate empty case to remember.
+
+**The winner is the earliest in input order, not the earliest to finish.**
+This is the design's one real surprise, and it is deliberate. Wall-clock
+"first" makes the answer a function of how the threads happened to be
+scheduled, and a language that replays its own runs cannot have that: the
+same program on the same inputs would answer differently on a busier machine.
+Input order is the same rule `parallel for` already follows when it folds
+results back, so a race reads like the sequential loop it replaces.
+
+**It is journaled, and it is the second effect that has to be.** The first was
+`max_seconds`, for the same reason: a replay cannot re-derive the decision. It
+runs against a warm cache on a differently loaded machine, so racing again
+could pick a different branch — or answer at all where the live run did not.
+The winner's index is recorded beside its value, because a value alone cannot
+distinguish two branches that returned equal answers, and because "provider 2
+won" is what makes a trace readable. A race with no winner is journaled too:
+otherwise a resume would find the slot empty, race again, and diverge by the
+other door.
+
+**What it deliberately does not do.** It does not interrupt a branch already
+running. No further work is *started*, but a request already sent runs to its
+own transport timeout — the same honest limit `max_seconds` has, and the same
+reason: interrupting an in-flight call is the "did it happen" problem that
+makes a tool call unretryable, and it should be solved once, deliberately, if
+it is solved at all. This ships the half that is solvable without pretending
+to have solved the other.
+
+**`first` is contextual, and stays out of the grammar file.** Like `stream`
+and `on`, it is a keyword only in that one position, so a program that already
+uses `first` as a variable or a function name keeps working. It is
+deliberately *not* added to the editor's keyword list: `first` is a common
+name, and colouring every one of them as a keyword would contradict the
+promise the contextual parse makes. A missing highlight is the smaller wrong.
+
 ### An effect is identified by which call it is, not which line
 
 Effect identity is what the journal checks on resume and what a cassette is

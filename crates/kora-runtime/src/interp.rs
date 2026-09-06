@@ -950,10 +950,11 @@ impl Interpreter {
                 iter,
                 body,
                 collect_into,
+                first,
             } => {
                 let iterable = self.eval(iter, scope)?;
                 let items = self.iterate(iterable, iter.span)?;
-                let results = self.run_parallel(var, items, body, scope, stmt.span)?;
+                let results = self.run_parallel(var, items, body, scope, *first, stmt.span)?;
                 if let Some(name) = collect_into {
                     scope.insert(name.clone(), results);
                 }
@@ -3576,10 +3577,32 @@ impl Interpreter {
         items: Vec<Value>,
         body: &[Stmt],
         scope: &Scope,
+        first: bool,
         span: Span,
     ) -> Result<Value, RuntimeError> {
         if items.is_empty() {
-            return Ok(Value::List(Rc::new(RefCell::new(Vec::new()))));
+            return Ok(match first {
+                // Nothing to race, so there is no first: `None`, the same
+                // value a branch that returns nothing produces.
+                true => Value::None,
+                false => Value::List(Rc::new(RefCell::new(Vec::new()))),
+            });
+        }
+
+        // A `first` race is not re-derivable: which branches got started
+        // before one of them returned depends on how the threads were
+        // scheduled, so a replay would race again and could answer
+        // differently -- or answer at all where the live run did not. In a
+        // durable run the winner is read back from the journal instead, the
+        // same way `max_seconds` records its refusal rather than re-deciding
+        // against a clock that runs faster the second time.
+        let mut race_slot = RaceSlot::NotDurable;
+        if first {
+            let site = self.effect_site(span, "race");
+            match self.race_slot(&site, span)? {
+                RaceSlot::Replayed(value) => return Ok(value),
+                slot => race_slot = slot,
+            }
         }
 
         // Snapshot everything a worker may read, as portable copies.
@@ -3628,6 +3651,13 @@ impl Interpreter {
         let portable_items: Vec<Portable> = items.iter().map(Portable::from_value).collect();
         let next = std::sync::atomic::AtomicUsize::new(0);
         let total = portable_items.len();
+        // Set by the first branch to produce a value under `first`. Checked
+        // before a worker takes its next item, so no further work is
+        // started. A branch already in flight is not interrupted -- the same
+        // honest limit `max_seconds` documents, and for the same reason:
+        // stopping a request already sent is the "did it happen" problem
+        // that makes a tool call unretryable.
+        let stop = std::sync::atomic::AtomicBool::new(false);
         let slots: Vec<std::sync::Mutex<Option<WorkerResult>>> =
             (0..total).map(|_| std::sync::Mutex::new(None)).collect();
 
@@ -3635,6 +3665,9 @@ impl Interpreter {
         std::thread::scope(|s| {
             for _ in 0..worker_count {
                 s.spawn(|| loop {
+                    if stop.load(std::sync::atomic::Ordering::Relaxed) {
+                        break;
+                    }
                     let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     if index >= total {
                         break;
@@ -3665,6 +3698,12 @@ impl Interpreter {
                         &python,
                         &helpers,
                     );
+                    // A value, not merely a finished branch: a body that
+                    // falls off its end has not answered the question the
+                    // race was asking.
+                    if first && matches!(&outcome.value, Ok(v) if !matches!(v, Portable::None)) {
+                        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                    }
                     *slots[index].lock().unwrap() = Some(outcome);
                 });
             }
@@ -3673,8 +3712,14 @@ impl Interpreter {
         // Fold worker results back in deterministic input order, so a parallel
         // run reads exactly like a sequential one.
         let mut collected = Vec::with_capacity(total);
+        // For a race: the earliest branch *in input order* that produced a
+        // value, not the earliest to finish. Two runs on the same inputs
+        // otherwise disagree about who won purely on scheduling, and a
+        // language that replays its own runs cannot afford an answer that
+        // depends on which core was free.
+        let mut winner: Option<(usize, Value)> = None;
         let mut first_error: Option<RuntimeError> = None;
-        for slot in slots {
+        for (index, slot) in slots.into_iter().enumerate() {
             let Some(result) = slot.into_inner().unwrap_or_else(|e| e.into_inner()) else {
                 continue;
             };
@@ -3684,7 +3729,13 @@ impl Interpreter {
             self.output.extend(result.output);
             self.declassify_sites.extend(result.declassify_sites);
             match result.value {
-                Ok(v) => collected.push(v.into_value()),
+                Ok(v) => {
+                    let value = v.into_value();
+                    if first && winner.is_none() && !matches!(value, Value::None) {
+                        winner = Some((index, value.clone()));
+                    }
+                    collected.push(value);
+                }
                 Err(e) => {
                     if first_error.is_none() {
                         first_error = Some(e);
@@ -3712,6 +3763,16 @@ impl Interpreter {
             }
             return Err(e);
         }
+        if first {
+            let (index, value) = match winner {
+                Some(w) => w,
+                // Every branch ran and none answered. `None`, matching a
+                // plain branch that falls off the end of its body.
+                None => (usize::MAX, Value::None),
+            };
+            self.journal_race(race_slot, index, &value, span)?;
+            return Ok(value);
+        }
         Ok(Value::List(Rc::new(RefCell::new(collected))))
     }
 }
@@ -3724,6 +3785,16 @@ struct WorkerResult {
     tokens_out: u64,
     model_calls: u64,
     declassify_sites: Vec<DeclassifySite>,
+}
+
+/// What the journal had to say about one `parallel for ... first`.
+enum RaceSlot {
+    /// Not a durable run: nothing to replay and nothing to record.
+    NotDurable,
+    /// A resume that already ran this race; here is what it decided.
+    Replayed(Value),
+    /// Fresh, holding the position the answer will be recorded into.
+    Fresh { scope: journal::Scope, seq: usize },
 }
 
 /// Execute one iteration of a `parallel for` body in a private interpreter.
@@ -5541,6 +5612,59 @@ impl Interpreter {
     /// replay must see the value the live run saw, not whatever the store
     /// holds by the time replay runs, which could have moved on if something
     /// else wrote to it meanwhile.
+    /// The journal's answer for a `parallel for ... first`.
+    ///
+    /// One `next()` per race, taken here: the slot it hands back is carried
+    /// to `journal_race` and recorded into, so a race occupies exactly one
+    /// position and the effects after it keep theirs.
+    fn race_slot(&mut self, site: &str, span: Span) -> Result<RaceSlot, RuntimeError> {
+        let mut journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
+        if !journal.is_durable() {
+            return Ok(RaceSlot::NotDurable);
+        }
+        let lookup = journal
+            .next(&self.scope, site)
+            .map_err(|e| RuntimeError::new(e.to_string(), span))?;
+        drop(journal);
+        match lookup {
+            Lookup::Replayed(Effect::Race { value_json, .. }) => {
+                Ok(RaceSlot::Replayed(decode_labeled_json(&value_json)))
+            }
+            Lookup::Replayed(other) => Err(RuntimeError::new(
+                format!(
+                    "journal step is {other:?}, but the program reached a `parallel for ... first`"
+                ),
+                span,
+            )),
+            Lookup::Fresh { scope, seq } => Ok(RaceSlot::Fresh { scope, seq }),
+        }
+    }
+
+    /// Record which branch won, so a resume continues from the same decision.
+    fn journal_race(
+        &mut self,
+        slot: RaceSlot,
+        index: usize,
+        value: &Value,
+        span: Span,
+    ) -> Result<(), RuntimeError> {
+        let RaceSlot::Fresh { scope, seq } = slot else {
+            return Ok(());
+        };
+        let mut journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
+        journal
+            .record(
+                scope,
+                seq,
+                &self.effect_site(span, "race"),
+                Effect::Race {
+                    index,
+                    value_json: encode_labeled_json(value),
+                },
+            )
+            .map_err(|e| RuntimeError::new(e.to_string(), span))
+    }
+
     pub fn journal_memory_read(
         &mut self,
         key: &str,
