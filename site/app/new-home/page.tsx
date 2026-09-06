@@ -91,7 +91,7 @@ function InteractivePanel() {
 }
 
 export default function NewHomePage() {
-  const [rightWidth, setRightWidth] = useState(58)
+  const [rightWidth, setRightWidth] = useState(62)
   const dragging = useRef(false)
   return <main className="figma-landing" onMouseMove={event => { if (dragging.current) setRightWidth(Math.max(30, Math.min(65, 100 - event.clientX / window.innerWidth * 100))) }} onMouseUp={() => { dragging.current = false }}>
     <Navbar />
