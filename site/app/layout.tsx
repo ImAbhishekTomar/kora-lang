@@ -5,7 +5,8 @@ import '../styles.css'
 
 export const metadata = {
   title: { default: 'Kora', template: '%s – Kora' },
-  description: 'Friendly documentation for Kora, an agent-first programming language.'
+  description: 'Friendly documentation for Kora, an agent-first programming language.',
+  icons: { icon: '/icon.svg' }
 }
 
 export default async function RootLayout({ children }: { children: React.ReactNode }) {
