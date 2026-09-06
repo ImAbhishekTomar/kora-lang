@@ -727,7 +727,7 @@ dependencies = [
 
 [[package]]
 name = "kora-cli"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "kora-dap",
  "kora-lsp",
@@ -740,7 +740,7 @@ dependencies = [
 
 [[package]]
 name = "kora-dap"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "kora-runtime",
  "kora-syntax",
@@ -749,7 +749,7 @@ dependencies = [
 
 [[package]]
 name = "kora-helper"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "libc",
  "serde",
@@ -758,7 +758,7 @@ dependencies = [
 
 [[package]]
 name = "kora-lsp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "kora-syntax",
  "kora-types",
@@ -770,7 +770,7 @@ dependencies = [
 
 [[package]]
 name = "kora-mcp"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -778,7 +778,7 @@ dependencies = [
 
 [[package]]
 name = "kora-models"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "regex",
  "serde",
@@ -788,7 +788,7 @@ dependencies = [
 
 [[package]]
 name = "kora-pkg"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "flate2",
  "kora-syntax",
@@ -801,7 +801,7 @@ dependencies = [
 
 [[package]]
 name = "kora-python"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "serde",
  "serde_json",
@@ -809,7 +809,7 @@ dependencies = [
 
 [[package]]
 name = "kora-runtime"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "kora-helper",
  "kora-mcp",
@@ -834,11 +834,11 @@ dependencies = [
 
 [[package]]
 name = "kora-syntax"
-version = "0.2.0"
+version = "0.3.0"
 
 [[package]]
 name = "kora-types"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "kora-pkg",
  "kora-syntax",
