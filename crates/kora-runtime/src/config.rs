@@ -17,6 +17,13 @@ pub struct Config {
     pub models: HashMap<String, String>,
     /// Per-provider settings.
     pub openai_max_output_tokens: Option<u32>,
+    /// `[models.openai] endpoint` — the base URL for OpenAI-wire calls.
+    /// `None` means OpenAI itself; anything else is a compatible gateway.
+    pub openai_endpoint: Option<String>,
+    /// `[models.openai] api_key_env` — which variable holds that key. The
+    /// name is configured, never the key: a secret in a checked-in file is
+    /// the leak this avoids.
+    pub openai_api_key_env: Option<String>,
     pub local_endpoint: Option<String>,
     /// `[models] timeout_secs` — how long one model call may take. A vision
     /// call on a local model runs far longer than a text one, so this is a
@@ -53,6 +60,8 @@ impl Default for Config {
         Self {
             models: HashMap::new(),
             openai_max_output_tokens: None,
+            openai_endpoint: None,
+            openai_api_key_env: None,
             local_endpoint: None,
             model_timeout_secs: None,
             model_max_retries: None,
@@ -267,6 +276,14 @@ impl Config {
                                 .get("max_output_tokens")
                                 .and_then(|v| v.as_integer())
                                 .map(|v| v as u32);
+                            config.openai_endpoint = table
+                                .get("endpoint")
+                                .and_then(|v| v.as_str())
+                                .map(str::to_string);
+                            config.openai_api_key_env = table
+                                .get("api_key_env")
+                                .and_then(|v| v.as_str())
+                                .map(str::to_string);
                         } else if key == "local" {
                             config.local_endpoint = table
                                 .get("endpoint")
@@ -301,6 +318,8 @@ impl Config {
                 if let Some(max) = self.openai_max_output_tokens {
                     model.max_output_tokens = max;
                 }
+                model.endpoint.clone_from(&self.openai_endpoint);
+                model.api_key_env.clone_from(&self.openai_api_key_env);
             }
             kora_models::Provider::Ollama => {
                 model.endpoint.clone_from(&self.local_endpoint);
@@ -391,6 +410,36 @@ program_max_tokens = 2_000_000
         let c = Config::parse(SAMPLE).unwrap();
         let m = c.resolve_model("openai:gpt-4o-mini").unwrap();
         assert_eq!(m.model, "gpt-4o-mini");
+    }
+
+    #[test]
+    fn an_openai_compatible_gateway_is_configured_not_hardcoded() {
+        // OpenRouter, Groq, Together, a local vLLM: all speak the OpenAI wire
+        // format, so they are the `openai` provider with a different base URL
+        // and a key of their own. Nothing about them is a new provider.
+        let c = Config::parse(
+            r#"
+[models]
+default = "openai:anthropic/claude-sonnet-4"
+
+[models.openai]
+endpoint = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+"#,
+        )
+        .unwrap();
+        let m = c.default_model().unwrap();
+        assert_eq!(m.model, "anthropic/claude-sonnet-4");
+        assert_eq!(m.endpoint.as_deref(), Some("https://openrouter.ai/api/v1"));
+        assert_eq!(m.api_key_env.as_deref(), Some("OPENROUTER_API_KEY"));
+    }
+
+    #[test]
+    fn openai_without_a_gateway_keeps_its_defaults() {
+        let c = Config::parse(SAMPLE).unwrap();
+        let m = c.resolve_model("smart").unwrap();
+        assert_eq!(m.endpoint, None);
+        assert_eq!(m.api_key_env, None);
     }
 
     #[test]

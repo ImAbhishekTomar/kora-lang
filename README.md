@@ -89,8 +89,11 @@ Those work with no API key and no model running: the model calls replay from
 committed cassettes.
 
 To call a model for real you need either an `OPENAI_API_KEY` or a running
-[Ollama](https://ollama.com). Point `[models] default` in `kora.toml` at
-whichever you have:
+[Ollama](https://ollama.com). Any OpenAI-compatible gateway (OpenRouter,
+Groq, Together, a self-hosted vLLM) counts as the first one: set
+`[models.openai] endpoint` to its base URL and `api_key_env` to the variable
+holding its key. Point `[models] default` in `kora.toml` at whichever you
+have:
 
 ```bash
 kora run --record --report examples/01_expense_check.ko   # calls the model, saves a cassette

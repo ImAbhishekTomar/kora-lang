@@ -327,6 +327,8 @@ max_retries = 2                     # three attempts; 0 turns retrying off
 
 [models.openai]
 max_output_tokens = 4096            # bounds worst-case budget reservation
+endpoint    = "https://api.openai.com/v1"   # any OpenAI-compatible gateway
+api_key_env = "OPENAI_API_KEY"              # which variable holds the key
 
 [models.local]
 endpoint = "http://localhost:11434"
@@ -378,8 +380,26 @@ redact = true                       # labeled values never reach the exporter
 ```
 
 Model references are `provider:model`. `local:` and `ollama:` mean Ollama;
-`openai:` means the API. Everything after the first colon is the model name,
-so tags like `local:llama3.1:8b` survive intact.
+`openai:` means the OpenAI wire format. Everything after the first colon is
+the model name, so tags like `local:llama3.1:8b` survive intact.
+
+`openai:` names a wire format, not a vendor. Point `[models.openai] endpoint`
+at any gateway that speaks `/chat/completions` — OpenRouter, Groq, Together,
+a self-hosted vLLM — and name the variable holding that gateway's key with
+`api_key_env`. The key itself is never written in `kora.toml`, which is a
+checked-in file:
+
+```toml
+[models]
+default = "openai:anthropic/claude-sonnet-4"   # the gateway's model id
+
+[models.openai]
+endpoint    = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+```
+
+A missing key is reported under the name the config asked for, not
+`OPENAI_API_KEY`.
 
 ---
 

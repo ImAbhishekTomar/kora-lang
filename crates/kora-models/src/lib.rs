@@ -93,10 +93,18 @@ pub struct ModelConfig {
     pub provider: Provider,
     /// e.g. "gpt-4o" or "llama3.1:8b"
     pub model: String,
-    /// Ollama base URL override; default http://localhost:11434
+    /// Base URL override. Ollama defaults to http://localhost:11434; an
+    /// OpenAI-provider model defaults to https://api.openai.com/v1, and
+    /// pointing it elsewhere is how any OpenAI-compatible gateway
+    /// (OpenRouter, Groq, Together, a local vLLM) is reached.
     pub endpoint: Option<String>,
-    /// OpenAI; read from OPENAI_API_KEY if None.
+    /// OpenAI; read from [`api_key_env`](Self::api_key_env) if None.
     pub api_key: Option<String>,
+    /// Which environment variable holds the OpenAI-provider key. `None`
+    /// means `OPENAI_API_KEY`. A gateway keeps its own key under its own
+    /// name, and naming the variable is what lets one project talk to two
+    /// providers without either key masquerading as the other.
+    pub api_key_env: Option<String>,
     /// Default 4096.
     pub max_output_tokens: u32,
     /// How long to wait for one response. There is no "off": a request that

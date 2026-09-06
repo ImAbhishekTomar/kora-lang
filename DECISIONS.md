@@ -249,6 +249,19 @@ design changes and should be deliberate.
 ## Models
 
 - Providers: OpenAI (API key) + Ollama (localhost HTTP) from Phase 2.
+- **The `openai` provider is a wire format, not a vendor.** `[models.openai]
+  endpoint` points it at anything that speaks OpenAI's `/chat/completions`
+  — OpenRouter, Groq, Together, a self-hosted vLLM — and `api_key_env` names
+  the variable holding that gateway's key. One flag rather than one provider
+  per vendor: a `openrouter:` scheme would be a second name for a request
+  Kora already knows how to build, and the list of gateways speaking this
+  format only grows.
+- The *name* of the key variable is configuration; the key never is. A
+  gateway key belongs to that gateway, so `OPENAI_API_KEY` is a default and
+  not a rule, and an error names the variable the config actually asked for
+  — sending someone to export a key they do not have is worse than saying
+  nothing. `kora.toml` is checked in, so it holds the name and never the
+  secret.
 - `local_model` sink = Ollama. In-process GPU inference (llama.cpp/candle) is
   parked (Phase 7, optional — measure first).
 - Model choice/config: call-site > block > agent > main > kora.toml. The

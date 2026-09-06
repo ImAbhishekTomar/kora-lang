@@ -160,6 +160,17 @@ endpoint = "http://localhost:11434"
 
 For OpenAI, export `OPENAI_API_KEY`. For Ollama, start Ollama locally and make sure the selected model is available.
 
+The `openai` provider is the OpenAI *wire format*, so any compatible gateway works — point it somewhere else and name its key variable:
+
+```toml
+[models]
+default = "openai:anthropic/claude-sonnet-4"
+
+[models.openai]
+endpoint    = "https://openrouter.ai/api/v1"
+api_key_env = "OPENROUTER_API_KEY"
+```
+
 ## First run
 
 ```bash

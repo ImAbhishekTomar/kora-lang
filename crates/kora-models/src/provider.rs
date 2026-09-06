@@ -58,6 +58,7 @@ pub fn parse_model_spec(spec: &str) -> Result<ModelConfig, ModelError> {
         model: model.to_string(),
         endpoint: None,
         api_key: None,
+        api_key_env: None,
         max_output_tokens: 4096,
         timeout_secs: DEFAULT_TIMEOUT_SECS,
         max_retries: DEFAULT_MAX_RETRIES,
@@ -99,6 +100,36 @@ pub(crate) fn backoff_fits(
         Some(end) => std::time::Instant::now() + delay < end,
         None => true,
     }
+}
+
+/// The key for an OpenAI-provider call, and the name of the variable it came
+/// from.
+///
+/// The variable is named by the config rather than fixed, because the
+/// provider is a wire format, not a vendor: one project can hold an OpenAI
+/// key and an OpenRouter key at once, and each model must read its own.
+fn openai_key(config: &ModelConfig) -> Result<String, ModelError> {
+    let var = config.api_key_env.as_deref().unwrap_or("OPENAI_API_KEY");
+    config
+        .api_key
+        .clone()
+        .or_else(|| std::env::var(var).ok())
+        .filter(|k| !k.trim().is_empty())
+        .ok_or_else(|| {
+            ModelError::new(format!(
+                "{var} not set (export it, or set api_key in kora.toml)"
+            ))
+        })
+}
+
+/// Where an OpenAI-wire call is sent. The default is OpenAI itself; an
+/// `[models.openai] endpoint` points the same wire format at a gateway.
+fn openai_base(config: &ModelConfig) -> &str {
+    config
+        .endpoint
+        .as_deref()
+        .unwrap_or(OPENAI_BASE)
+        .trim_end_matches('/')
 }
 
 pub(crate) fn step_with(
@@ -228,14 +259,7 @@ fn openai(
     req: &AnalyzeRequest,
     transport: &Transport,
 ) -> Result<Step, ModelError> {
-    let key = config
-        .api_key
-        .clone()
-        .or_else(|| std::env::var("OPENAI_API_KEY").ok())
-        .filter(|k| !k.trim().is_empty())
-        .ok_or_else(|| {
-            ModelError::new("OPENAI_API_KEY not set (export it, or set api_key in kora.toml)")
-        })?;
+    let key = openai_key(config)?;
 
     let mut body = json!({
         "model": config.model,
@@ -261,7 +285,7 @@ fn openai(
         ("Authorization", format!("Bearer {key}")),
         ("Content-Type", "application/json".to_string()),
     ];
-    let url = format!("{OPENAI_BASE}/chat/completions");
+    let url = format!("{}/chat/completions", openai_base(config));
     let text = transport(&url, &headers, &body)?;
     let response: Value = serde_json::from_str(&text).map_err(|e| {
         ModelError::new(format!(
@@ -387,16 +411,7 @@ pub(crate) fn stream_request(
     }
     match config.provider {
         Provider::OpenAI => {
-            let key = config
-                .api_key
-                .clone()
-                .or_else(|| std::env::var("OPENAI_API_KEY").ok())
-                .filter(|k| !k.trim().is_empty())
-                .ok_or_else(|| {
-                    ModelError::new(
-                        "OPENAI_API_KEY not set (export it, or set api_key in kora.toml)",
-                    )
-                })?;
+            let key = openai_key(config)?;
             let body = json!({
                 "model": config.model,
                 "max_completion_tokens": config.max_output_tokens,
@@ -415,7 +430,7 @@ pub(crate) fn stream_request(
                 },
             });
             Ok(StreamRequest {
-                url: format!("{OPENAI_BASE}/chat/completions"),
+                url: format!("{}/chat/completions", openai_base(config)),
                 headers: vec![
                     ("Authorization", format!("Bearer {key}")),
                     ("Content-Type", "application/json".to_string()),
@@ -766,6 +781,48 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("DATA:"));
+    }
+
+    #[test]
+    fn openai_endpoint_override_reaches_gateway() {
+        // The OpenAI provider is a wire format, not a vendor: an endpoint
+        // sends the same request to any compatible gateway, and the key it
+        // carries comes from that gateway's own variable.
+        let reply = r#"{
+            "choices":[{"message":{"content":"{\"summary\":\"ok\",\"count\":2,\"__uncertain__\":\"\"}"}}],
+            "usage":{"prompt_tokens":1,"completion_tokens":1}
+        }"#;
+        let (transport, seen) = recording(reply);
+        let mut config = parse_model_spec("openai:anthropic/claude-sonnet-4").unwrap();
+        // A trailing slash in the configured base must not double up.
+        config.endpoint = Some("https://openrouter.ai/api/v1/".into());
+        config.api_key_env = Some("KORA_TEST_GATEWAY_KEY".into());
+        std::env::set_var("KORA_TEST_GATEWAY_KEY", "gateway-key");
+
+        step_with(&config, &request(), &*transport).unwrap();
+        let (url, body) = seen.borrow().clone().unwrap();
+        assert_eq!(url, "https://openrouter.ai/api/v1/chat/completions");
+        // The model name keeps its slashes; only the provider prefix is cut.
+        assert_eq!(body["model"], "anthropic/claude-sonnet-4");
+        std::env::remove_var("KORA_TEST_GATEWAY_KEY");
+    }
+
+    #[test]
+    fn named_key_variable_is_reported_when_missing() {
+        // The error names the variable the config asked for, not the default
+        // one -- otherwise it sends people to export a key they do not have.
+        // A named variable is the only one consulted, so the default key
+        // in the ambient environment cannot rescue this call.
+        std::env::remove_var("KORA_TEST_ABSENT_KEY");
+        let (transport, _seen) = recording("{}");
+        let mut config = parse_model_spec("openai:gpt-4o").unwrap();
+        config.api_key_env = Some("KORA_TEST_ABSENT_KEY".into());
+        let err = step_with(&config, &request(), &*transport).unwrap_err();
+        assert!(
+            err.message.contains("KORA_TEST_ABSENT_KEY not set"),
+            "{}",
+            err.message
+        );
     }
 
     #[test]
