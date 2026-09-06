@@ -210,7 +210,7 @@ body:has(.kora-new-landing) article { padding:0 !important; }
 
 /* Exact Figma Make composition for the alternate landing page. */
 body:has(.figma-landing) :is(.nextra-navbar,.nextra-sidebar,.nextra-toc,article>main>*) { display:none !important; }
-body:has(.figma-landing) article { padding:0 !important; }
+/* body:has(.figma-landing) article { padding:0 !important; } */
 body:has(.figma-landing) { overflow:hidden; }
 @font-face { font-family:'Figma Geist'; font-style:normal; font-weight:100 900; src:url('https://static.figma.com/font/Geist_wght__1') format('woff2'); }
 @font-face { font-family:'Figma Geist Mono'; font-style:normal; font-weight:400; src:url('https://static.figma.com/font/GeistMono_wght__1') format('woff2'); }
@@ -232,6 +232,13 @@ body:has(.figma-landing) { overflow:hidden; }
 @media (max-width:800px) { .figma-landing { height:100dvh; min-height:100dvh; overflow:hidden; }.figma-navbar { flex-wrap:wrap; padding:1rem; }.figma-nav-links { order:3; flex-basis:100%; justify-content:flex-start; overflow:auto; }.figma-nav-actions { margin-left:auto; }.figma-stars,.figma-discord { display:none; }.figma-main { display:flex; min-height:0; flex-direction:column; }.figma-left-panel { min-height:0; flex:0 0 auto; padding:2rem 1.25rem; }.figma-resize { display:none; }.figma-right-panel { min-height:0; flex:1; padding:2rem 1.25rem 3rem; }.figma-hero-info h1 { font-size:clamp(2.5rem,11vw,4rem); }.figma-placeholder-grid { min-height:20rem; }.figma-interactive { max-width:none; }.figma-legacy-content { grid-template-columns:1fr; } }
 @media (max-width:520px) { .figma-nav-links { gap:1rem; }.figma-nav-links a { font-size:.75rem; }.figma-logo { font-size:1.3rem; }.figma-hero-actions { width:100%; flex-direction:column; align-items:stretch; }.figma-hero-actions a { justify-content:space-between; }.figma-hero-info>p { font-size:.95rem; }.figma-eval-row { flex-wrap:wrap; }.figma-eval-row small { flex-basis:100%; } }
 
+.figma-terminal-caret { width:.45rem; height:1rem; margin-left:.2rem; background:#c2d708; animation:figma-caret-blink .9s steps(1) infinite; }
+.figma-terminal-output { width:100%; box-sizing:border-box; margin:0; border-top:1px solid #1e1e2f; padding:1rem; color:#d9dfe4; font:400 .75rem/1.7 'Figma Geist Mono',monospace; white-space:pre-wrap; }
+.figma-eval-row button:disabled { cursor:wait; opacity:.78; }
+.figma-eval-row button span { display:inline-block; }
+.figma-run-spinner { animation:figma-spinner .8s linear infinite; }
+@keyframes figma-caret-blink { 50% { opacity:0; } }
+@keyframes figma-spinner { to { transform:rotate(360deg); } }
 
 /* Internals page */
 .internals-page {

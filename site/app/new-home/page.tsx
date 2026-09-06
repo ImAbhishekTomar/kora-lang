@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useRef, useState, type ReactNode } from 'react'
+import { useEffect, useRef, useState, type ReactNode } from 'react'
 
 function ArrowRight({ dark = false }: { dark?: boolean }) {
   return <svg className="figma-small-icon" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 7h8M8 4l3 3-3 3" stroke={dark ? '#121212' : '#c2d708'} strokeLinecap="round" strokeWidth="2" /></svg>
@@ -38,8 +38,8 @@ function TerminalHeader({ colored = false }: { colored?: boolean }) {
   return <div className="figma-terminal-header">{colored ? <><i className="red" /><i className="yellow" /><i className="green" /></> : <><i /><i /><i /></>}</div>
 }
 
-function Terminal({ command = false }: { command?: boolean }) {
-  return <div className="figma-terminal"><TerminalHeader />{command ? <div className="figma-terminal-command"><span>$</span> kora run agent_classify_receipt.ko</div> : <div className="figma-terminal-body"><div><span>$</span> brew tap ImAbhishekTomar/tap</div><div><span>$</span> brew install imabhishektomar/tap/kora</div></div>}</div>
+function Terminal({ command = false, output = '', running = false }: { command?: boolean; output?: string; running?: boolean }) {
+  return <div className="figma-terminal"><TerminalHeader />{command ? <><div className="figma-terminal-command"><span>$</span> kora run agent_classify_receipt.ko{running && <i className="figma-terminal-caret" aria-hidden="true" />}</div>{output && <pre className="figma-terminal-output" aria-live="polite">{output}</pre>}</> : <div className="figma-terminal-body"><div><span>$</span> brew tap ImAbhishekTomar/tap</div><div><span>$</span> brew install imabhishektomar/tap/kora</div></div>}</div>
 }
 
 const editorLines: ReactNode[] = [
@@ -78,10 +78,42 @@ function CodeEditor() {
   return <div className="figma-code-editor"><div className="figma-editor-header"><div className="figma-window-controls"><i className="red" /><i className="yellow" /><i className="green" /></div><div><strong>K</strong> agent_classify_receipt.ko</div><span /></div><pre>{editorLines.map((line, index) => <code key={index}><small>{index + 1}</small><span>{line}</span></code>)}</pre></div>
 }
 
+const mockRunOutput = `✓ Loaded agent_classify_receipt.ko
+→ Reading examples/receipts/sample.txt
+→ Running analyze: Extract receipt fields
+✓ merchant: Kora Coffee
+✓ amount: classified (protected)
+✓ currency: USD
+✓ Run complete in 812ms`
+
 function InteractivePanel() {
+  const [runState, setRunState] = useState<'idle' | 'running' | 'complete'>('idle')
+  const [output, setOutput] = useState('')
+
+  useEffect(() => {
+    if (runState !== 'running') return
+    let cursor = 0
+    setOutput('')
+    const timer = window.setInterval(() => {
+      cursor += 1
+      setOutput(mockRunOutput.slice(0, cursor))
+      if (cursor >= mockRunOutput.length) {
+        window.clearInterval(timer)
+        setRunState('complete')
+      }
+    }, 22)
+    return () => window.clearInterval(timer)
+  }, [runState])
+
+  const runKora = () => {
+    if (runState === 'running') return
+    setOutput('')
+    setRunState('running')
+  }
+
   return <div className="figma-interactive">
-    <Terminal /><CodeEditor /><Terminal command />
-    <div className="figma-eval-row"><button type="button"><span>▷</span> Run Kora</button><small>Click to see evaluation metrics report</small></div>
+    <Terminal /><CodeEditor /><Terminal command output={output} running={runState === 'running'} />
+    <div className="figma-eval-row"><button type="button" disabled={runState === 'running'} onClick={runKora}><span className={runState === 'running' ? 'figma-run-spinner' : ''}>{runState === 'running' ? '◌' : '▷'}</span> {runState === 'running' ? 'Running...' : runState === 'complete' ? 'Run Again' : 'Run Kora'}</button><small>{runState === 'running' ? 'Streaming output...' : runState === 'complete' ? 'Run completed successfully' : 'Click to run this example'}</small></div>
     <section className="figma-legacy-content" aria-label="Why Kora">
       <article><strong>01</strong><h2>Typed model calls</h2><p>Define inputs and outputs. Catch issues at compile time, not at runtime.</p></article>
       <article><strong>02</strong><h2>Replayable runs</h2><p>Deterministic execution you can inspect, share, and replay.</p></article>
