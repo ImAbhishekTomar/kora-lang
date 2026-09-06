@@ -68,8 +68,14 @@ enforcement, and a general event-stream API.
 
 ### Fill the deliberate standard-library gaps
 
-`xml`, `yaml`, and a dedicated `network` module remain unbuilt. The existing
-`http` module stays the network boundary until a narrower, safer API is ready.
+`yaml` has shipped: config is where a program is one step from doing
+something consequential, so it refuses a duplicate key, reads the YAML 1.2
+core schema (no Norway problem), and meters alias expansion against a node
+budget so a "billion laughs" file is a value rather than an out-of-memory
+kill.
+
+`xml` and a dedicated `network` module remain unbuilt. The existing `http`
+module stays the network boundary until a narrower, safer API is ready.
 
 PDF *rendering* is not a stdlib gap any more, and deliberately not a stdlib
 feature: it lives in the `pdf_render` package, which carries PDFium in a

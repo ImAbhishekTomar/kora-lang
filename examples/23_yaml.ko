@@ -1,0 +1,149 @@
+# Reading YAML: the three ways every other library lies about it.
+#
+# YAML is where deployment config, CI pipelines, and manifests live, so a
+# program that reads one is usually a step away from doing something
+# consequential. Each defect below is a real, well-known behaviour of PyYAML,
+# js-yaml, and gopkg.in/yaml.v3 that cannot be fixed there without breaking
+# files already in the world. Here each one is a value to match on.
+#
+#   kora run examples/23_yaml.ko
+
+use yaml
+
+type Service:
+    image: str
+    port: int
+
+def main():
+    # 1. A duplicate key is an error, not the last one silently winning.
+    #    Everywhere else, appending `admin: true` to the end of a file is an
+    #    edit that no diff of the parsed result would show.
+    tampered = "user: ada\nadmin: false\nadmin: true\n"
+    match yaml.parse(tampered):
+        case Ok(_):
+            print("1. unreachable")
+        case Err(why):
+            print(f"1. {why}")
+
+    # 2. The Norway problem. YAML 1.1 reads `NO` as false, so a country list
+    #    loses Norway. Kora reads the 1.2 core schema: only `true` and
+    #    `false` are booleans.
+    match yaml.parse("region: NO\nship: yes\ndebug: true\n"):
+        case Ok(doc):
+            match yaml.get(doc, "region"):
+                case Ok(region):
+                    print(f"2. region is still {region}")
+                case Err(why):
+                    print(f"2. {why}")
+        case Err(why):
+            print(f"2. {why}")
+
+    # 3. An anchor that multiplies. The "billion laughs" bomb is nine lines
+    #    that expand to gigabytes; a library that resolves aliases eagerly
+    #    will try. Expansion is metered here, so this is an error rather than
+    #    an out-of-memory kill.
+    bomb = "a: &a [x,x,x,x,x,x,x,x,x]\n"
+    bomb += "b: &b [*a,*a,*a,*a,*a,*a,*a,*a,*a]\n"
+    bomb += "c: &c [*b,*b,*b,*b,*b,*b,*b,*b,*b]\n"
+    bomb += "d: &d [*c,*c,*c,*c,*c,*c,*c,*c,*c]\n"
+    bomb += "e: &e [*d,*d,*d,*d,*d,*d,*d,*d,*d]\n"
+    bomb += "f: &f [*e,*e,*e,*e,*e,*e,*e,*e,*e]\n"
+    bomb += "g: &g [*f,*f,*f,*f,*f,*f,*f,*f,*f]\n"
+    match yaml.parse(bomb):
+        case Ok(_):
+            print("3. unreachable")
+        case Err(why):
+            print(f"3. {why}")
+
+    # 4. An ordinary anchor is not the enemy: the budget is a ceiling on
+    #    hostile expansion, not a ban on the feature every compose file uses.
+    #    An explicit key overrides a merged one, in either order.
+    compose = "defaults: &defaults\n"
+    compose += "  image: nginx\n"
+    compose += "  port: 80\n"
+    compose += "web:\n"
+    compose += "  <<: *defaults\n"
+    compose += "  port: 8080\n"
+    match yaml.parse(compose):
+        case Ok(doc):
+            match yaml.get(doc, "web.image"):
+                case Ok(image):
+                    print(f"4. web inherited image {image}")
+                case Err(why):
+                    print(f"4. {why}")
+        case Err(why):
+            print(f"4. {why}")
+
+    # 5. A declared type is checked here, and a mismatch names its path --
+    #    the same shape checking `json.parse` does, for the same reason: the
+    #    alternative is an attribute error three functions away.
+    match yaml.parse("image: nginx\nport: eighty\n", Service):
+        case Ok(_):
+            print("5. unreachable")
+        case Err(why):
+            print(f"5. {why}")
+
+    match yaml.parse("image: nginx\nport: 80\n", Service):
+        case Ok(service):
+            print(f"5. {service.image} listens on {service.port}")
+        case Err(why):
+            print(f"5. {why}")
+
+    # 6. A manifest bundle is several documents. Taking the first one
+    #    silently is how half a bundle gets applied, so `yaml.parse` refuses
+    #    and `yaml.documents` reads them all -- each checked against the type,
+    #    with the path naming which one failed.
+    bundle = "image: nginx\nport: 80\n---\nimage: redis\nport: 6379\n"
+    match yaml.parse(bundle):
+        case Ok(_):
+            print("6. unreachable")
+        case Err(why):
+            print(f"6. {why}")
+
+    match yaml.documents(bundle, Service):
+        case Ok(services):
+            for service in services:
+                print(f"6. {service.image}:{service.port}")
+        case Err(why):
+            print(f"6. {why}")
+
+    # 7. A parsed value is `unverified`: a config file is a standard carrier
+    #    for a value that ends up on a command line. Writing one back out
+    #    refuses classified data, the same way `json.stringify` does.
+    match yaml.stringify({"image": "nginx", "port": 80}):
+        case Ok(text):
+            print(f"7. wrote {len(text)} characters of YAML")
+        case Err(why):
+            print(f"7. {why}")
+
+test "a duplicate key never parses":
+    match yaml.parse("a: 1\na: 2\n"):
+        case Ok(_):
+            assert False
+        case Err(_):
+            assert True
+
+test "NO is a string, not false":
+    match yaml.parse("region: NO\n"):
+        case Ok(doc):
+            match yaml.get(doc, "region"):
+                case Ok(region):
+                    assert region == "NO"
+                case Err(_):
+                    assert False
+        case Err(_):
+            assert False
+
+test "a declared type is checked":
+    match yaml.parse("image: nginx\nport: 80\n", Service):
+        case Ok(service):
+            assert service.port == 80
+        case Err(_):
+            assert False
+
+test "a bundle needs yaml.documents":
+    match yaml.documents("image: a\nport: 1\n---\nimage: b\nport: 2\n", Service):
+        case Ok(services):
+            assert len(services) == 2
+        case Err(_):
+            assert False

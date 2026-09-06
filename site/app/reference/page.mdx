@@ -502,6 +502,12 @@ def pages(document: bytes, dpi: int) -> list:
 
 `pdf.text(path)` returns every page joined, `pdf.pages(path)` keeps the pages separate, and `pdf.info(path)` reports `page_count`, `encrypted`, and `has_text_layer`. A document whose pages are pictures is an `Err`, not an empty string, so a scan is never mistaken for an empty document. Text is `unverified`. Rendering a page to an image is a package (`pdf_render`), not a stdlib call.
 
+### `yaml`
+
+`yaml.parse(text)` reads one document, `yaml.parse(text, Type)` checks it against a declared type the way `json.parse` does, and `yaml.documents(text[, Type])` reads a `---`-separated file. `yaml.get` is the same path walk as `json.get`; `yaml.stringify(value)` writes YAML and refuses classified data.
+
+Three behaviours differ from every mainstream YAML library, deliberately. A duplicate key is an `Err` naming the key and its line, rather than the last one silently winning. Only `true` and `false` are boolean, so `NO`, `yes`, and `off` stay strings (the Norway problem). And alias expansion is metered against a node budget, so a "billion laughs" file is a value to match on rather than an out-of-memory kill. Merge keys (`<<: *defaults`) work, with an explicit key overriding a merged one in either order. A multi-document file handed to `yaml.parse` is an `Err` naming the count, because applying half a bundle silently is worse than stopping. Parsed values are `unverified`.
+
 ### Packages
 
 A package is named, not pathed. Where it comes from and what it may do live in

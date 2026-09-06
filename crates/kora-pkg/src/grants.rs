@@ -39,7 +39,7 @@ impl Capability {
 
     /// The capability a stdlib module needs, if any.
     ///
-    /// `json`, `csv`, `re`, and `time` compute over values the caller already
+    /// `json`, `yaml`, `csv`, `re`, and `time` compute over values the caller already
     /// has; there is nothing to gate. The rest reach outside the program.
     pub fn for_module(module: &str) -> Option<Capability> {
         match module {
