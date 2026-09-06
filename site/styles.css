@@ -167,6 +167,47 @@ section#community > div.landing-feature-list:nth-of-type(1) > article { padding:
   .landing-trace small { display:none; }
 }
 
+/* Figma-inspired alternate landing page. The original `/` landing remains unchanged. */
+body:has(.kora-new-landing) :is(.nextra-navbar,.nextra-sidebar,.nextra-toc,article>main>*) { display:none !important; }
+body:has(.kora-new-landing) article { padding:0 !important; }
+.kora-new-landing { --new-bg:#111111; --new-surface:#1b1b1b; --new-surface-2:#090909; --new-line:#333333; --new-ink:#f3f2ee; --new-muted:#a9aaa5; --new-lime:#d2ed05; min-height:100dvh; overflow:hidden; background:radial-gradient(circle at 88% 36%,rgba(210,237,5,.08),transparent 26%),var(--new-bg); color:var(--new-ink); font-family:Arial,Helvetica,sans-serif; }
+.new-landing-nav,.new-landing-hero,.new-landing-features,.new-landing-footer { width:min(1180px,calc(100% - 5rem)); margin-inline:auto; }
+.new-landing-nav { display:flex; min-height:5.4rem; align-items:center; gap:2.6rem; border-bottom:1px solid var(--new-line); }
+.new-landing-logo { display:flex; align-items:center; gap:.55rem; color:var(--new-ink); font-family:'Iowan Old Style','Palatino Linotype',Georgia,serif; font-size:1.65rem; font-weight:700; letter-spacing:-.06em; text-decoration:none; }
+.new-landing-logo img { width:1.75rem; height:1.75rem; }
+.new-landing-nav nav { display:flex; flex:1; gap:1.8rem; align-items:center; }
+.new-landing-nav nav a,.new-landing-nav-actions a { color:var(--new-muted); font-size:.75rem; font-weight:600; text-decoration:none; transition:color .2s ease; }
+.new-landing-nav nav a:hover,.new-landing-nav-actions a:hover { color:var(--new-ink); }
+.new-landing-nav-actions { display:flex; align-items:center; gap:.8rem; }
+.new-landing-nav-actions a:first-child { display:inline-flex; align-items:center; gap:.25rem; color:var(--new-ink); }
+.new-landing-icon-link { display:grid; place-items:center; width:2rem; height:2rem; border:1px solid var(--new-line); border-radius:5px; }
+.new-landing-menu { display:none; border:0; background:none; color:var(--new-ink); }
+.new-landing-hero { display:grid; grid-template-columns:minmax(0,.85fr) minmax(0,1.15fr); min-height:28rem; align-items:center; gap:4.8rem; padding:4.3rem 0 3.7rem; }
+.new-landing-hero-copy { max-width:31rem; }
+.new-landing-eyebrow { display:inline-flex; gap:.4rem; align-items:center; margin:0 0 1.2rem; color:var(--new-lime); font:700 .58rem/1 ui-monospace,SFMono-Regular,Menlo,monospace; letter-spacing:.07em; text-transform:uppercase; }
+.new-landing-eyebrow span { font-size:.8rem; }
+.new-landing-hero h1 { margin:0; color:var(--new-ink); font-family:'Iowan Old Style','Palatino Linotype',Georgia,serif; font-size:clamp(3.7rem,6.2vw,6.1rem); font-weight:600; letter-spacing:-.085em; line-height:.88; }
+.new-landing-hero h1 em { color:var(--new-lime); font-style:normal; }
+.new-landing-intro { max-width:29rem; margin:1.5rem 0 0; color:var(--new-muted); font-size:.88rem; line-height:1.55; }
+.new-landing-actions { display:flex; gap:.7rem; margin-top:1.7rem; }
+.new-landing-actions a { display:inline-flex; align-items:center; gap:.8rem; border:1px solid var(--new-lime); border-radius:4px; padding:.7rem .9rem; color:var(--new-ink); font-size:.7rem; font-weight:700; text-decoration:none; }
+.new-landing-actions a:hover { transform:translateY(-2px); }
+.new-landing-primary { background:var(--new-lime); color:#151800 !important; }
+.new-landing-secondary svg { color:var(--new-lime); }
+.new-landing-hero-demo { display:flex; align-items:center; justify-content:flex-end; }
+.new-landing-code-stack { width:min(100%,35rem); filter:drop-shadow(0 1.5rem 3rem rgba(0,0,0,.4)); }
+.new-landing-terminal-bar { display:flex; height:1.8rem; align-items:center; gap:.3rem; border:1px solid #282828; border-bottom:0; border-radius:4px 4px 0 0; background:#080808; padding:0 .65rem; color:#858585; }
+.new-landing-terminal-bar span { width:.4rem; height:.4rem; border-radius:50%; background:#555; }
+.new-landing-terminal-bar code { margin-left:.65rem; color:#80837b; font: .56rem ui-monospace,SFMono-Regular,Menlo,monospace; }
+.new-landing-code-panel { border:1px solid #282828; background:linear-gradient(135deg,#161616,#080808); padding:1.05rem .9rem; font:.66rem/1.85 ui-monospace,SFMono-Regular,Menlo,monospace; }
+.code-line { display:grid; grid-template-columns:1.5rem 1fr; min-height:1.25rem; }.code-line i { color:#454545; font-style:normal; }.code-line span { color:#d5d5d0; white-space:nowrap; }.code-line em { color:#a7ce47; font-style:normal; }.code-purple { color:#e47bd0; font-weight:400; }.code-blue { color:#7fc3ff; font-weight:400; }.code-yellow { color:#f1cb76; font-weight:400; }.code-green { color:#9de68e; font-weight:400; }
+.new-landing-result-bar { border-top:0; border-bottom:0; border-radius:0; }.new-landing-output { display:flex; align-items:center; gap:.55rem; border:1px solid #282828; background:#121212; padding:.72rem .8rem; color:#d9d9d3; font-size:.7rem; }.new-landing-output small { margin-left:auto; color:#777; font: .6rem ui-monospace,SFMono-Regular,Menlo,monospace; }.new-landing-output-check { display:grid; place-items:center; width:1rem; height:1rem; border:1px solid var(--new-lime); border-radius:50%; color:var(--new-lime); }.new-landing-run-action { display:flex; align-items:center; gap:.65rem; margin-top:.8rem; }.new-landing-run-action button { display:inline-flex; align-items:center; gap:.35rem; border:0; border-radius:3px; background:var(--new-lime); padding:.45rem .65rem; color:#111500; font-size:.6rem; font-weight:700; }.new-landing-run-action span { color:#777; font-size:.56rem; }
+.new-landing-features { display:grid; grid-template-columns:repeat(4,1fr); gap:.8rem; }.new-landing-features article { min-height:9rem; border:1px solid #292929; background:var(--new-surface); padding:1.2rem 1rem; }.new-landing-features article svg { color:var(--new-lime); }.new-landing-features h2 { margin:1.15rem 0 .4rem; color:var(--new-ink); font-family:'Iowan Old Style','Palatino Linotype',Georgia,serif; font-size:1rem; font-weight:500; }.new-landing-features p { margin:0; color:#858782; font-size:.67rem; line-height:1.5; }
+.new-landing-footer { display:flex; align-items:center; justify-content:space-between; gap:1rem; margin-top:2.8rem; border-top:1px solid var(--new-line); padding:1.2rem 0 1.5rem; color:#777; font-size:.65rem; }.new-landing-footer span:first-child { display:flex; align-items:center; gap:.35rem; color:var(--new-ink); font-weight:700; }.new-landing-footer span:first-child svg { color:var(--new-lime); }.new-landing-footer a { display:inline-flex; align-items:center; gap:.25rem; color:var(--new-lime); text-decoration:none; }
+@media (max-width:900px) { .new-landing-nav,.new-landing-hero,.new-landing-features,.new-landing-footer { width:min(100% - 3rem,720px); }.new-landing-nav { gap:1.5rem; }.new-landing-nav nav { gap:1rem; }.new-landing-hero { grid-template-columns:1fr; gap:2.5rem; padding:3.5rem 0 2.7rem; }.new-landing-hero-demo { justify-content:flex-start; }.new-landing-code-stack { width:min(100%,38rem); } }
+@media (max-width:650px) { .kora-new-landing { overflow:auto; }.new-landing-nav,.new-landing-hero,.new-landing-features,.new-landing-footer { width:calc(100% - 2rem); }.new-landing-nav { min-height:4.5rem; }.new-landing-nav nav { display:none; }.new-landing-nav-actions a:first-child,.new-landing-icon-link { display:none; }.new-landing-menu { display:block; }.new-landing-nav-actions { margin-left:auto; }.new-landing-hero { gap:2rem; padding:3rem 0 2.2rem; }.new-landing-hero h1 { font-size:clamp(3.2rem,15vw,4.5rem); }.new-landing-intro { font-size:.85rem; }.new-landing-actions { flex-direction:column; }.new-landing-actions a { justify-content:space-between; }.new-landing-code-panel { overflow:auto; }.new-landing-features { grid-template-columns:repeat(2,1fr); }.new-landing-features article { min-height:9.5rem; }.new-landing-footer { flex-wrap:wrap; margin-top:2rem; }.new-landing-footer span:nth-child(2) { order:3; flex-basis:100%; } }
+@media (max-width:390px) { .new-landing-features { grid-template-columns:1fr; }.new-landing-hero h1 { font-size:3.15rem; } }
+
 /* Internals page */
 .internals-page {
   --i-text: var(--kora-ink);
