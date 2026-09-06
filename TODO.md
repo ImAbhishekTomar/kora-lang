@@ -5,6 +5,10 @@ principle in [AGENTS.md](AGENTS.md).
 
 ## Current
 
+- [x] **Show the live GitHub star count on the docs homepage.** The server
+      fetches `stargazers_count` from the repository API with a one-hour cache
+      and falls back to `0` if GitHub is unavailable.
+
 - [x] **Stopping a fan-out that is still collecting, and a deadline that
       reaches work already sent.** `parallel for ... first` covers the loop
       that asks a question; `break` covers the loop that is still a map and

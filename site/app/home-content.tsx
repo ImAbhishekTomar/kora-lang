@@ -11,7 +11,7 @@ function SunIcon() {
   return <svg className="figma-sun" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="3" stroke="#8e9aa8" strokeWidth="2" /><path d="M9 1v2M9 15v2M1 9h2M15 9h2M3.22 3.22l1.42 1.42M13.36 13.36l1.42 1.42M14.78 3.22l-1.42 1.42M4.64 13.36l-1.42 1.42" stroke="#8e9aa8" strokeLinecap="round" strokeWidth="2" /></svg>
 }
 
-function Navbar({ lightTheme, onToggleTheme }: { lightTheme: boolean; onToggleTheme: () => void }) {
+function Navbar({ lightTheme, onToggleTheme, starCount }: { lightTheme: boolean; onToggleTheme: () => void; starCount: number }) {
   const [menuOpen, setMenuOpen] = useState(false)
   const links = [
     ['Docs', '/language'],
@@ -23,7 +23,7 @@ function Navbar({ lightTheme, onToggleTheme }: { lightTheme: boolean; onToggleTh
   return <header className="figma-navbar">
     <Link className="figma-logo" href="/"><img src="/logo-kora.png" alt="Kora" /></Link>
     <nav className="figma-nav-links" aria-label="Main navigation">{links.map(([label, href]) => <Link href={href} key={label}>{label}</Link>)}</nav>
-    <div className="figma-nav-actions"><a className="figma-stars" href="https://github.com/ImAbhishekTomar/kora-lang" target="_blank" rel="noreferrer"><span>☆</span> 0 stars</a><button type="button" aria-label={lightTheme ? 'Switch to dark theme' : 'Switch to light theme'} aria-pressed={lightTheme} onClick={onToggleTheme}><SunIcon /></button><button className="figma-mobile-menu-button" type="button" aria-label={menuOpen ? 'Close navigation menu' : 'Open navigation menu'} aria-expanded={menuOpen} onClick={() => setMenuOpen(open => !open)}>☰</button></div>
+    <div className="figma-nav-actions"><a className="figma-stars" href="https://github.com/ImAbhishekTomar/kora-lang" target="_blank" rel="noreferrer"><span>☆</span> {starCount.toLocaleString('en-US')} stars</a><button type="button" aria-label={lightTheme ? 'Switch to dark theme' : 'Switch to light theme'} aria-pressed={lightTheme} onClick={onToggleTheme}><SunIcon /></button><button className="figma-mobile-menu-button" type="button" aria-label={menuOpen ? 'Close navigation menu' : 'Open navigation menu'} aria-expanded={menuOpen} onClick={() => setMenuOpen(open => !open)}>☰</button></div>
     {menuOpen && <nav className="figma-mobile-menu" aria-label="Mobile navigation">{links.map(([label, href]) => <Link href={href} key={label} onClick={() => setMenuOpen(false)}>{label}</Link>)}</nav>}
   </header>
 }
@@ -144,12 +144,12 @@ function InteractivePanel() {
   </div>
 }
 
-export default function NewHomePage() {
+export default function NewHomePage({ starCount }: { starCount: number }) {
   const [rightWidth, setRightWidth] = useState(62)
   const [lightTheme, setLightTheme] = useState(false)
   const dragging = useRef(false)
   return <main className={`figma-landing${lightTheme ? ' figma-theme-light' : ''}`} onMouseMove={event => { if (dragging.current) setRightWidth(Math.max(30, Math.min(65, 100 - event.clientX / window.innerWidth * 100))) }} onMouseUp={() => { dragging.current = false }}>
-    <Navbar lightTheme={lightTheme} onToggleTheme={() => setLightTheme(theme => !theme)} />
+    <Navbar lightTheme={lightTheme} onToggleTheme={() => setLightTheme(theme => !theme)} starCount={starCount} />
     <div className="figma-main" style={{ gridTemplateColumns: `${100 - rightWidth}% 4px ${rightWidth}%` }}>
       <section className="figma-left-panel"><HeroInfo /></section>
       <button className="figma-resize" type="button" aria-label="Resize panels" onMouseDown={() => { dragging.current = true }} />
