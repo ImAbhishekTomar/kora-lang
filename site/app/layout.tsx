@@ -1,4 +1,4 @@
-import { Footer, Layout, Navbar } from 'nextra-theme-docs'
+import { Layout, Navbar } from 'nextra-theme-docs'
 import { getPageMap } from 'nextra/page-map'
 import 'nextra-theme-docs/style.css'
 import '../styles.css'
@@ -21,7 +21,6 @@ export default async function RootLayout({ children }: { children: React.ReactNo
           }
           pageMap={await getPageMap()}
           docsRepositoryBase="https://github.com/ImAbhishekTomar/kora-lang/tree/main"
-          footer={<Footer> Kora · an agent-first programming language</Footer>}
         >
           {children}
         </Layout>
