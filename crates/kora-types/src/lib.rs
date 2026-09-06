@@ -223,6 +223,7 @@ const MODULES: &[(&str, &[&str])] = &[
     ("re", &["matches", "find", "find_all", "replace", "split"]),
     ("notes", &["read", "write"]),
     ("pdf", &["text", "pages", "info"]),
+    ("yaml", &["parse", "documents", "stringify", "get"]),
 ];
 
 impl Checker<'_> {

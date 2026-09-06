@@ -1119,6 +1119,7 @@ Per module, the specific defect being fixed:
 | `time` | naive datetimes with no zone, then DST arithmetic bugs | every instant is zone-aware; there is no naive type; `now()` is journaled |
 | `re` | catastrophic backtracking (ReDoS) | linear-time engine, no backtracking to exploit |
 | `pdf` | a scan extracts as `""` with no error, so a pipeline writes empty records; pages are concatenated, so nothing can say which page a clause was on; a page that will not parse silently truncates the document | no text layer is `Err`, and `pdf.info` says `has_text_layer` before the call; `pdf.pages` keeps page boundaries; the page count comes from the document catalogue, so an unreadable page is named rather than dropped |
+| `yaml` | a duplicate key silently keeps the last one, so appending `admin: true` to a file is an edit no parsed diff shows; YAML 1.1 reads `NO` as `false` (the Norway problem); aliases expand eagerly, so nine lines can exhaust memory ("billion laughs") | a duplicate key is `Err` naming the key and its line; the 1.2 core schema, where only `true`/`false` are boolean; alias expansion metered against a node budget, so a bomb is a value to match on; a multi-document file is `Err` from `yaml.parse` rather than a silently truncated bundle |
 
 **1. Native stdlib, Rust-backed.** Users cannot write `use serde::Deserialize`
 in a `.ko` file, but the interpreter is Rust, so a crate becomes a Kora module

@@ -5,6 +5,9 @@ principle in [AGENTS.md](AGENTS.md).
 
 ## Current
 
+- [x] **`yaml` in the standard library.** The config format, with the
+      duplicate key, the Norway problem, and the alias bomb each turned into
+      a value the program matches on. See "Language and runtime status" below.
 - [x] **Low-noise syntax highlighting.** Added Kora light and dark
       VS Code themes and aligned the grammar and public code preview with
       deliberate colors for literals, constants, comments, and definitions.
@@ -271,8 +274,25 @@ commit across `parallel for` workers, not a weaker guarantee.
       ends, so an in-flight call cannot be stopped at an exact ceiling.
 - [ ] SSE / `events` / `Streams` — no server-sent-events or generic event/stream
       stdlib support yet.
-- [ ] `xml` / `yaml` stdlib modules — not implemented (only `fs`, `csv`,
-      `http`, `json`, `glob`, `re`, `sql`, `time`, `env` exist today).
+- [x] **`yaml` — the config format, without the three ways it lies to you.**
+      A duplicate key is `Err` naming the key and its line, rather than the
+      last one silently winning: appending `admin: true` to a file someone
+      else wrote is otherwise an edit no diff of the parsed result would
+      show. Only `true`/`false` are boolean (YAML 1.2 core schema), so `NO`,
+      `yes`, and `off` stay strings — the Norway problem. Alias expansion is
+      metered against a node budget, so a "billion laughs" file is a value to
+      match on rather than an out-of-memory kill. Built on the event stream
+      rather than the crate's own loader, because that is the only place a
+      budget, a duplicate key, and a non-scalar key can each be reported with
+      the line they appeared on. `yaml.parse` reads one document and refuses a
+      bundle by name (`yaml.documents` reads them all, each checked against a
+      declared type, the path naming which one failed). Merge keys work, with
+      an explicit key overriding a merged one in either order. Shape checking
+      and the path walk are `json`'s, so there is one set of rules to learn.
+      `crates/kora-runtime/tests/yaml_test.rs` (22 tests),
+      `examples/23_yaml.ko`, docs, site, and `DECISIONS.md`.
+- [ ] `xml` stdlib module — not implemented (only `fs`, `csv`, `http`, `json`,
+      `yaml`, `glob`, `re`, `sql`, `time`, `env` exist today).
 - [ ] `network` — no dedicated stdlib module beyond `http`.
 - [ ] CLI beautification — no dedicated polish pass tracked yet.
 
@@ -365,8 +385,8 @@ typed context fence (`with context(max_input_tokens=N,
 reserve_output_tokens=N):`) landing separately. Recommended build order,
 argued rather than assumed:
 
-- [ ] **Notes** (`use notes`) before **sessions** (`use session <name> as
-      <alias>`). This reverses how the two are usually named, but not the
+- [x] **Notes** (`use notes`) shipped, before **sessions** (`use session
+      <name> as <alias>`). This reverses how the two are usually named, but not the
       dependency: a session is a note store addressed by an explicit key
       instead of an implicit one (the current run's own id). Building the
       single-key form first proves the underlying mechanic — a storage tier

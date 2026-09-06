@@ -55,6 +55,10 @@ flate2 = "1"
 # is a separate decision with a C++ library behind it.
 pdf-extract = "0.12"
 lopdf = "0.42"                          # pinned to what pdf-extract uses: two copies in the tree is worse than an older API
+# YAML 1.2, pure Rust, and a parser rather than a serde format: `yaml` reuses
+# `json`'s type coercion, so all it needs from a YAML crate is a document and
+# the line/column where one failed.
+yaml-rust2 = "0.12"
 lsp-server = "0.7"
 lsp-types = "0.95"
 rusqlite = { version = "0.32", features = ["bundled"] }

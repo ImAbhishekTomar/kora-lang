@@ -1,6 +1,6 @@
 # The standard library
 
-Ten native modules, each backed by a Rust crate. Every one exists to fix a
+Eleven native modules, each backed by a Rust crate. Every one exists to fix a
 specific, well-known defect in its equivalent elsewhere — rewriting a library
 is only worth it if the rewrite fixes what everyone already knows is broken.
 
@@ -356,6 +356,65 @@ program did not write. Files above 64 MB are refused by name and size.
 Reading a PDF is text only. Rendering a page to an image is not here, so a
 scanned document still goes through a renderer outside Kora before
 `fs.image`. See [`examples/21_pdf.ko`](../examples/21_pdf.ko).
+
+---
+
+## `yaml`
+
+**What everyone else gets wrong.** Three defects, and none of them can be
+fixed in PyYAML, js-yaml, or `gopkg.in/yaml.v3` without breaking files
+already in the world:
+
+1. **A duplicate key wins silently.** All three keep the last one. Appending
+   `admin: true` to the end of a file someone else wrote is therefore an edit
+   that no diff of the parsed result would show.
+2. **The Norway problem.** YAML 1.1 reads `NO` as `false`, so a country list
+   loses Norway and `region: NO` becomes a boolean.
+3. **An anchor can expand to more data than the file contains.** The
+   "billion laughs" bomb is nine lines of YAML that expand to gigabytes, and
+   every library that resolves aliases eagerly will try.
+
+| | |
+|---|---|
+| `yaml.parse(text)` | `Ok(value)` — one document, untyped |
+| `yaml.parse(text, Type)` | `Ok(typed)` — checked against a declared type |
+| `yaml.documents(text)` | `Ok(list)` — a `---`-separated file |
+| `yaml.documents(text, Type)` | `Ok(list)` — every document checked |
+| `yaml.stringify(value)` | `Ok(text)` |
+| `yaml.get(value, "services.web.port")` | `Ok(value)` |
+
+Here a duplicate key is an `Err` naming the key and the line it repeats on;
+only `true` and `false` are booleans, so `no`, `yes`, `on`, and `off` stay
+the strings they were written as; and alias expansion is metered against a
+node budget, so a hostile file is a value to match on rather than an
+out-of-memory kill.
+
+```python
+match yaml.parse(text, Service):
+    case Ok(s):
+        print(s.port)
+    case Err(why):
+        print(why)      # $.port: expected int, got str
+```
+
+Shape checking is `json`'s, so a mismatch names its path the same way, and
+`yaml.get` is the same path walk. A parsed value is `unverified`: a config
+file is the standard carrier for a value that ends up in a command line.
+
+`yaml.parse` reads **one** document. A file holding several is an `Err`
+naming the count, because taking the first one silently is how half a
+manifest bundle gets applied; `yaml.documents` returns them all, and with a
+declared type the path names which one failed (`$.2.image`).
+
+Merge keys work — `<<: *defaults`, or `<<: [*a, *b]` — because every
+docker-compose file uses them. An explicit key overrides a merged one in
+either order, while two explicit spellings of the same key remain the
+duplicate-key error above.
+
+`yaml.stringify` refuses classified data, like `json.stringify`. `.inf` and
+`.nan` are `Err` rather than the strings `".inf"` and `".nan"`: they are real
+YAML floats with no Kora value, and a wrong answer is worse than a missing
+one. See [`examples/23_yaml.ko`](../examples/23_yaml.ko).
 
 ---
 

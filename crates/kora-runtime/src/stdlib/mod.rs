@@ -31,6 +31,7 @@ pub mod pdf;
 pub mod re;
 pub mod sql;
 pub mod time;
+pub mod yaml;
 
 /// A native function: name, and the implementation.
 pub type NativeFn = fn(&mut Interpreter, Vec<Value>, Span) -> Result<Value, RuntimeError>;
@@ -67,13 +68,14 @@ pub fn module(name: &str) -> Option<Module> {
         "re" => Some(Module::new("re", re::EXPORTS)),
         "notes" => Some(Module::new("notes", notes::EXPORTS)),
         "pdf" => Some(Module::new("pdf", pdf::EXPORTS)),
+        "yaml" => Some(Module::new("yaml", yaml::EXPORTS)),
         _ => None,
     }
 }
 
 /// Module names, for "did you mean" hints.
 pub const MODULE_NAMES: &[&str] = &[
-    "json", "csv", "http", "sql", "env", "fs", "time", "re", "notes", "pdf",
+    "json", "csv", "http", "sql", "env", "fs", "time", "re", "notes", "pdf", "yaml",
 ];
 
 // --- shared helpers for module implementations ---

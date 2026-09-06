@@ -66,7 +66,7 @@ fn parse(interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Value
 ///
 /// The outer `Result` is a real error (the type is not declared); the inner
 /// one is a mismatch, which is data the program should handle.
-fn coerce_to_type(
+pub(crate) fn coerce_to_type(
     interp: &Interpreter,
     json: &J,
     type_name: &str,
@@ -212,7 +212,11 @@ fn stringify(
 ///
 /// A path walk that says exactly where it stopped, instead of raising a
 /// `KeyError` naming only the last segment.
-fn get(_interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
+pub(crate) fn get(
+    _interp: &mut Interpreter,
+    args: Vec<Value>,
+    span: Span,
+) -> Result<Value, RuntimeError> {
     let Some(root) = args.first() else {
         return Err(RuntimeError::new("json.get() needs a value", span));
     };
