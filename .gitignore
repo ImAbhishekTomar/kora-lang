@@ -1,45 +1,49 @@
-# Rust build artifacts
-/target/
-# The pdf-render package's helper is built and released separately; its build
-# directory and the PDFium library it loads are never committed.
-/examples/lib/pdf/helper/target/
+# See https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files for more about ignoring files.
 
-# Documentation site dependencies and build output
-/site/node_modules/
-/site/.next/
-/site/.vercel/
-/site/public/_pagefind/
+# compiled output
+dist
+tmp
+out-tsc
+*.tsbuildinfo
+.expo
+.expo-shared
 
-# Local OS and editor files
+# dependencies
+node_modules
+
+# IDEs and editors
+/.idea
+.project
+.classpath
+.c9/
+*.launch
+.settings/
+*.sublime-workspace
+
+# IDE - VSCode
+.vscode/*
+!.vscode/settings.json
+!.vscode/tasks.json
+!.vscode/launch.json
+!.vscode/extensions.json
+
+# misc
+/.sass-cache
+/connect.lock
+/coverage
+/libpeerconnection.log
+npm-debug.log
+yarn-error.log
+testem.log
+/typings
+
+# System Files
 .DS_Store
-.idea/
+Thumbs.db
 
-# VS Code extension dependencies and packages
-/editors/vscode/node_modules/
-/editors/vscode/*.vsix
+.cursor/rules/nx-rules.mdc
+.github/instructions/nx.instructions.md
 
-# Runtime-generated artifacts
-/cassettes/
-*.trace
-# What examples/19_durable_pipeline.ko writes when it is run.
-/pipeline-out.csv
-
-# Python bytecode cache
-__pycache__/
-# `05_stdlib.ko` writes this next to the working directory when it runs
-/greeting.txt
-# Durable run journals
-.kora/
-# `vendor/` is deliberate and committed, unlike `.kora/`. Not ignored.
-.vercel
-.env*
-site.zip
-ruff.note
-
-# Python bytecode from scripts/
-__pycache__/
-AUDIT_SUMMARY.md
-CODE_COVERAGE_REPORT.md
-COMPILER_AUDIT.md
-COMPILER_AUDIT.html
-QUALITY_ASSESSMENT_REPORT.md
+# Replit
+.cache/
+.local/

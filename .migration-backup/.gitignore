@@ -1,0 +1,45 @@
+# Rust build artifacts
+/target/
+# The pdf-render package's helper is built and released separately; its build
+# directory and the PDFium library it loads are never committed.
+/examples/lib/pdf/helper/target/
+
+# Documentation site dependencies and build output
+/site/node_modules/
+/site/.next/
+/site/.vercel/
+/site/public/_pagefind/
+
+# Local OS and editor files
+.DS_Store
+.idea/
+
+# VS Code extension dependencies and packages
+/editors/vscode/node_modules/
+/editors/vscode/*.vsix
+
+# Runtime-generated artifacts
+/cassettes/
+*.trace
+# What examples/19_durable_pipeline.ko writes when it is run.
+/pipeline-out.csv
+
+# Python bytecode cache
+__pycache__/
+# `05_stdlib.ko` writes this next to the working directory when it runs
+/greeting.txt
+# Durable run journals
+.kora/
+# `vendor/` is deliberate and committed, unlike `.kora/`. Not ignored.
+.vercel
+.env*
+site.zip
+ruff.note
+
+# Python bytecode from scripts/
+__pycache__/
+AUDIT_SUMMARY.md
+CODE_COVERAGE_REPORT.md
+COMPILER_AUDIT.md
+COMPILER_AUDIT.html
+QUALITY_ASSESSMENT_REPORT.md
