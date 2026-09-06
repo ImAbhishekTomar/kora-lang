@@ -79,7 +79,16 @@ function CodeEditor() {
 }
 
 function InteractivePanel() {
-  return <div className="figma-interactive"><Terminal /><CodeEditor /><Terminal command /><div className="figma-eval-row"><button type="button"><span>▷</span> Run Kora</button><small>Click to see evaluation metrics report</small></div></div>
+  return <>
+    <div className="figma-agent-field" aria-hidden="true">
+      <span className="agent-path path-one" /><span className="agent-path path-two" /><span className="agent-path path-three" />
+      <i className="agent-node node-one"><b>01</b><small>REPLAY</small></i>
+      <i className="agent-node node-two"><b>02</b><small>GUARD</small></i>
+      <i className="agent-node node-three"><b>03</b><small>RESUME</small></i>
+      <strong className="agent-field-label">DURABLE AGENTS / SAFE BY DESIGN</strong>
+    </div>
+    <div className="figma-interactive"><Terminal /><CodeEditor /><Terminal command /><div className="figma-eval-row"><button type="button"><span>▷</span> Run Kora</button><small>Click to see evaluation metrics report</small></div></div>
+  </>
 }
 
 export default function NewHomePage() {
