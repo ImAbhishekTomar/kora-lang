@@ -1,6 +1,6 @@
 export default {
   index: 'Welcome',
-  'new-home': 'New landing',
+  'legacy-home': 'Archived landing',
   installation: 'Installation',
   'start-here': 'Getting started',
   cli: 'CLI',

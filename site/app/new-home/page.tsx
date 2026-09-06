@@ -7,21 +7,17 @@ function ArrowRight({ dark = false }: { dark?: boolean }) {
   return <svg className="figma-small-icon" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 7h8M8 4l3 3-3 3" stroke={dark ? '#121212' : '#c2d708'} strokeLinecap="round" strokeWidth="2" /></svg>
 }
 
-function SunIcon() {
-  return <svg className="figma-sun" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="3" stroke="#8e9aa8" strokeWidth="2" /><path d="M9 1v2M9 15v2M1 9h2M15 9h2M3.22 3.22l1.42 1.42M13.36 13.36l1.42 1.42M14.78 3.22l-1.42 1.42M4.64 13.36l-1.42 1.42" stroke="#8e9aa8" strokeLinecap="round" strokeWidth="2" /></svg>
-}
-
 function Navbar() {
-  const links = ['Docs', 'Guides', 'Tutorials', 'Integrations', 'Enterprise', 'Changelog', 'Blog']
+  const links = [
+    ['Docs', '/language'],
+    ['Install', '/installation'],
+    ['Examples', '/start-here'],
+    ['Ecosystem', '/ecosystem'],
+    ['Blog', '#'],
+  ] as const
   return <header className="figma-navbar">
-    <Link className="figma-logo" href="/new-home"><img src="/logo-kora.png" alt="Kora" /></Link>
-    <nav className="figma-nav-links" aria-label="Main navigation">{links.map(link => <Link href={link === 'Docs' ? '/language' : '#'} key={link}>{link}</Link>)}</nav>
-    <div className="figma-nav-actions">
-      <Link href="/start-here">Join Community</Link>
-      <Link className="figma-discord" href="/start-here"><span className="figma-message-icon">⌁</span> Discord</Link>
-      <a className="figma-stars" href="https://github.com/ImAbhishekTomar/kora-lang" target="_blank" rel="noreferrer"><span>☆</span> 18.1k stars</a>
-      <button type="button" aria-label="Change theme"><SunIcon /></button>
-    </div>
+    <Link className="figma-logo" href="/"><img src="/logo-kora.png" alt="Kora" /></Link>
+    <nav className="figma-nav-links" aria-label="Main navigation">{links.map(([label, href]) => <Link href={href} key={label}>{label}</Link>)}</nav>
   </header>
 }
 
