@@ -79,7 +79,13 @@ function CodeEditor() {
 }
 
 function InteractivePanel() {
-  return <div className="figma-interactive"><Terminal /><CodeEditor /><Terminal command /><div className="figma-eval-row"><button type="button"><span>▷</span> Run Kora</button><small>Click to see evaluation metrics report</small></div></div>
+  return <>
+    <div className="figma-agent-flow" aria-hidden="true">
+      <small>DURABLE RUN / EXECUTION PATH</small>
+      <div className="figma-flow-track"><span>INPUT</span><i /><span>ANALYZE</span><i /><span>TOOL</span><i /><span>CHECKPOINT</span><i /><span>RESUME</span></div>
+    </div>
+    <div className="figma-interactive"><Terminal /><CodeEditor /><Terminal command /><div className="figma-eval-row"><button type="button"><span>▷</span> Run Kora</button><small>Click to see evaluation metrics report</small></div></div>
+  </>
 }
 
 export default function NewHomePage() {
