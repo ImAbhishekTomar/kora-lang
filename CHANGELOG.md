@@ -1,5 +1,88 @@
 # Changelog
 
+## [0.3.0](https://github.com/ImAbhishekTomar/kora-lang/compare/v0.2.0...v0.3.0) (2026-09-06)
+
+
+### Features
+
+* a deadline that reaches work in flight, and confined package helpers ([55a8fb8](https://github.com/ImAbhishekTomar/kora-lang/commit/55a8fb818cd37c4eab796b0366e07eaf229aa31b))
+* add alternate figma-inspired landing page ([23d7ab9](https://github.com/ImAbhishekTomar/kora-lang/commit/23d7ab9c0f97770f5f0404548f439d3961e2dd11))
+* add compact responsive navigation ([7e5db73](https://github.com/ImAbhishekTomar/kora-lang/commit/7e5db730db45bed32c1bcf44fecd297b63aba461))
+* add static agent execution flow ([43587ae](https://github.com/ImAbhishekTomar/kora-lang/commit/43587ae5e64a273e03a4c2b5b07dca54fbf1b435))
+* add subtle linear graph background ([b0f2f27](https://github.com/ImAbhishekTomar/kora-lang/commit/b0f2f27483e1d9fbbbac16d817e6d7c351609206))
+* added docs internals ([a177d11](https://github.com/ImAbhishekTomar/kora-lang/commit/a177d1149d812b9ab39ed443daf27b0c0ad3307d))
+* an effect is identified by which call it is, not which line ([#37](https://github.com/ImAbhishekTomar/kora-lang/issues/37)) ([5e867e9](https://github.com/ImAbhishekTomar/kora-lang/commit/5e867e99e56fb1681aa809c5f49c27534aab9fe0))
+* **analyze:** document and demonstrate streamed answers ([fb1169a](https://github.com/ImAbhishekTomar/kora-lang/commit/fb1169addcd4dd1097aa9431dd6e97169fc61fa8))
+* **analyze:** stream a str result token by token ([a355cbd](https://github.com/ImAbhishekTomar/kora-lang/commit/a355cbd0a5f048cb711a63f4e8ee4952284193ea))
+* **analyze:** token-by-token streaming for str results ([7379455](https://github.com/ImAbhishekTomar/kora-lang/commit/73794555500a1aaa2dcebcbc97dec13681df0f4c))
+* animate durable agent background ([7526310](https://github.com/ImAbhishekTomar/kora-lang/commit/75263105a5ced3374c0e49b40888913cc604a3a9))
+* **docs:** add version selector to navbar ([a3673de](https://github.com/ImAbhishekTomar/kora-lang/commit/a3673dec9e960a1e28584dcf658a5ab372ef3ee3))
+* **examples:** the orchestrator-worker pattern uses list[Section] directly ([513949e](https://github.com/ImAbhishekTomar/kora-lang/commit/513949e85056c8fedefabe35b3d0ee8b3e114a28))
+* expand right panel product story ([af436f4](https://github.com/ImAbhishekTomar/kora-lang/commit/af436f45de46fa0cb4c8552e59d5d6660b267f57))
+* explain classified amount in preview ([7fcad1c](https://github.com/ImAbhishekTomar/kora-lang/commit/7fcad1cea9b8031788f35967a49c7e9666887822))
+* **lang:** accept an agent as a tool target ([4f406bd](https://github.com/ImAbhishekTomar/kora-lang/commit/4f406bd747de08420db7be221f17a13599acc0f9))
+* **lang:** budget: max_seconds — a scope that runs out of time ([#38](https://github.com/ImAbhishekTomar/kora-lang/issues/38)) ([543bbd2](https://github.com/ImAbhishekTomar/kora-lang/commit/543bbd2df2d6c8f51ddaacbf9c4048e1ac889cf7))
+* **lang:** else (why, kind), or-patterns, and a stream shortcut ([ac14aef](https://github.com/ImAbhishekTomar/kora-lang/commit/ac14aef6cd261d88786e442a43027bd72a5b5eef))
+* **lang:** open the tool loop with on tool_call(name, args) ([a2cd792](https://github.com/ImAbhishekTomar/kora-lang/commit/a2cd792f2432febbb400be8a6844de45d9abc654))
+* **lang:** parallel for ... first — a fan-out that stops when the work is done ([#44](https://github.com/ImAbhishekTomar/kora-lang/issues/44)) ([030da4f](https://github.com/ImAbhishekTomar/kora-lang/commit/030da4f4680aeacdc6f12810ecdc1a6f6a402421))
+* **lang:** with context(...) — a lexical fence on request material ([a7fa938](https://github.com/ImAbhishekTomar/kora-lang/commit/a7fa938b545a1443e2009b0f778af669f5305e39))
+* make landing theme toggle functional ([5d4503e](https://github.com/ImAbhishekTomar/kora-lang/commit/5d4503ea7c3480c2aeaf6c2b3eb3073dec3ddcd9))
+* make new landing page the home route ([662d6a0](https://github.com/ImAbhishekTomar/kora-lang/commit/662d6a0a11fcbb0d7038773d6d9f7f7b3a5efad5))
+* make right panel scrollable with legacy content ([d70408b](https://github.com/ImAbhishekTomar/kora-lang/commit/d70408b617d7532ecb4236ef9455e7f00ddbb069))
+* refine landing page headline and layout ([882186a](https://github.com/ImAbhishekTomar/kora-lang/commit/882186ace9aa0fe8fdb8fc896ae484fd3b3bbcba))
+* **runtime:** interactive input(), and notes — a durable run's own scratch space ([3ff689b](https://github.com/ImAbhishekTomar/kora-lang/commit/3ff689bad03bc0d4c35239dcd6350b01f78ed7ce))
+* **runtime:** journal the with-context pruning decision per turn ([ba67a63](https://github.com/ImAbhishekTomar/kora-lang/commit/ba67a6384c663ee8f5b8e6252b9f1196569f4848))
+* set app favicon ([ea34b74](https://github.com/ImAbhishekTomar/kora-lang/commit/ea34b7437bae7b65f19c862d444dbec22513dd43))
+* show live GitHub star count on docs ([394bd45](https://github.com/ImAbhishekTomar/kora-lang/commit/394bd45c87b6ca5661ff0198323a9fa6818a751d))
+* **stdlib:** xml — the format enterprise data arrives in, read safely ([#43](https://github.com/ImAbhishekTomar/kora-lang/issues/43)) ([c6cea2e](https://github.com/ImAbhishekTomar/kora-lang/commit/c6cea2edee862202e362bc642d4701587a5ebf45))
+* **stdlib:** yaml — the config format, without the three ways it lies to you ([#41](https://github.com/ImAbhishekTomar/kora-lang/issues/41)) ([b9b011f](https://github.com/ImAbhishekTomar/kora-lang/commit/b9b011fc4bd198f2d4d0d268c5c8ea460d8ef107))
+* stream mock kora run output ([f44f6b3](https://github.com/ImAbhishekTomar/kora-lang/commit/f44f6b3cf629517fc5d9bbec7d36489f13b00c6c))
+* **testing:** mocks fall through to the one that matches the call ([7f5c24a](https://github.com/ImAbhishekTomar/kora-lang/commit/7f5c24a150d29f82338d7b3638b02c03e753a223))
+* use supplied Kora wordmark ([6c614ef](https://github.com/ImAbhishekTomar/kora-lang/commit/6c614ef703752490e282a80272844959a95022cd))
+* **vscode:** add Kora light and dark themes with low-noise syntax highlighting ([ba6d6f1](https://github.com/ImAbhishekTomar/kora-lang/commit/ba6d6f1a5a8dffed77ce16a23d30d9cc7ba5538b))
+
+
+### Fixes
+
+* **check:** catch Python-method-call and kwargs mistakes at check time ([fccbfbc](https://github.com/ImAbhishekTomar/kora-lang/commit/fccbfbc0a0095123b7fdadc14dc392ae726b88d8))
+* **ci:** publish package crate before types ([34cca2c](https://github.com/ImAbhishekTomar/kora-lang/commit/34cca2c612733672802b89fa1bc52f89c59b5cbe))
+* connect landing navigation to docs ([b523505](https://github.com/ImAbhishekTomar/kora-lang/commit/b523505252b435d4f8f19b008977195956d36f0d))
+* constrain scrolling to right landing panel ([46e631f](https://github.com/ImAbhishekTomar/kora-lang/commit/46e631f677ff35f6dbe388dd6d140f179c06044f))
+* hide mobile menu on desktop ([8401d59](https://github.com/ImAbhishekTomar/kora-lang/commit/8401d5948ed1aeabd51cb4dfe8f964d6b6929db4))
+* increase github button border contrast ([9bd4006](https://github.com/ImAbhishekTomar/kora-lang/commit/9bd40068c8b4f99f10c02788bfc926bfdc6fa32f))
+* make mobile landing content scroll ([9a9790b](https://github.com/ImAbhishekTomar/kora-lang/commit/9a9790b2e14e2ce326d4b8d2f616d1f3f6fc18d7))
+* mark amount as classified in preview ([b9bb096](https://github.com/ImAbhishekTomar/kora-lang/commit/b9bb0964a2128140a1b8381564c15cf6a86788ef))
+* match alternate landing page to figma export ([b967451](https://github.com/ImAbhishekTomar/kora-lang/commit/b9674519fc9bbf8a558422c82116801334f1ebdc))
+* **models:** decode surrogate pairs in streamed answers ([3cbfc38](https://github.com/ImAbhishekTomar/kora-lang/commit/3cbfc3831fda1cc282d8cb7edf7608be1212140a))
+* **models:** do not fail a stream over an SSE keep-alive ([3ddf8ee](https://github.com/ImAbhishekTomar/kora-lang/commit/3ddf8ee1665372ea2c682aad685a279d723a7810))
+* place classified explanation inline ([77e1c83](https://github.com/ImAbhishekTomar/kora-lang/commit/77e1c83b11aeb97f8ee1c6032b7a133695764dd1))
+* restore github stars link ([524f9e1](https://github.com/ImAbhishekTomar/kora-lang/commit/524f9e1cbdb453ec685de054fcce45fa77d5407c))
+* restore landing theme control ([f8d8ea6](https://github.com/ImAbhishekTomar/kora-lang/commit/f8d8ea665310a3a2021d45e254cefeacb1145635))
+* **runtime:** report the declassified value, not its local alias ([0515d0b](https://github.com/ImAbhishekTomar/kora-lang/commit/0515d0be789d58370aa3c89f5c6f5e6fe5272432))
+* show github stars in light theme ([c8350f6](https://github.com/ImAbhishekTomar/kora-lang/commit/c8350f675f4fe560a56247c1ec91f39053da01c1))
+* **test:** stop pinning dict key order in the tool-call-hook test ([2215e6c](https://github.com/ImAbhishekTomar/kora-lang/commit/2215e6cc9b19d8293c5ab70da2ffe1cc020940f1))
+* trim landing page code preview ([a52363e](https://github.com/ImAbhishekTomar/kora-lang/commit/a52363edf9c012d53ff12f04b7cca45ebf7d5c0e))
+
+
+### Performance
+
+* **durable:** group commit — a write-heavy fan-out is no longer one fsync at a time ([#45](https://github.com/ImAbhishekTomar/kora-lang/issues/45)) ([3f427e1](https://github.com/ImAbhishekTomar/kora-lang/commit/3f427e1fc360db8ef1726774a57f076cd8082a40))
+
+
+### Documentation
+
+* **agents:** add guidelines for using git worktree in feature development ([cc7018c](https://github.com/ImAbhishekTomar/kora-lang/commit/cc7018c76464402356c9df9882839660bf933b20))
+* catch up README, TODO, and the editor to the last four features ([001d1e5](https://github.com/ImAbhishekTomar/kora-lang/commit/001d1e501a86c3837d518254f7fb512d4ac1cc68))
+* clarify classified field protection ([837a019](https://github.com/ImAbhishekTomar/kora-lang/commit/837a019c1187d25fcd839347edeee39d1b532789))
+* clarify classified output and comparison ([ce855a2](https://github.com/ImAbhishekTomar/kora-lang/commit/ce855a2d926357b921def0365a335a3b951bfdac))
+* **decisions:** design the next context-engineering phase ([c11c29a](https://github.com/ImAbhishekTomar/kora-lang/commit/c11c29a326f796da11305d8b4ef18d75e4bc5713))
+* **decisions:** mark unimplemented phase-2 syntax as illustrative ([fc0e8ef](https://github.com/ImAbhishekTomar/kora-lang/commit/fc0e8ef44cdb235386ebeeb2cac35724d03d18ec))
+* group navigation and remove footer ([b034246](https://github.com/ImAbhishekTomar/kora-lang/commit/b0342466cf713e64d026343d87cfcf944758b396))
+* reorganize developer guides ([46fb6df](https://github.com/ImAbhishekTomar/kora-lang/commit/46fb6dfd6cc0ad2821c0075383f5226be993015e))
+* reorganize developer guides ([5f9c570](https://github.com/ImAbhishekTomar/kora-lang/commit/5f9c5706086bcc1ee4286cbc2037423e9bb282f9))
+* resync the prose with the language, and make two drift classes un-driftable ([#46](https://github.com/ImAbhishekTomar/kora-lang/issues/46)) ([7b1c321](https://github.com/ImAbhishekTomar/kora-lang/commit/7b1c321d1b86814a3dee8d2efd27fc2b4f57b3cb))
+* update AGENTS.md and TODO.md with feature development guidelines and capability roadmap ([600e1ea](https://github.com/ImAbhishekTomar/kora-lang/commit/600e1eaffb3b3cc1ac0e95ebd9f6e7cce72b2c13))
+
 ## [0.2.0](https://github.com/ImAbhishekTomar/kora-lang/compare/v0.1.0...v0.2.0) (2026-08-29)
 
 
