@@ -12,7 +12,7 @@ mod validate;
 use std::fmt;
 use std::rc::Rc;
 
-pub use provider::{parse_model_spec, DEFAULT_TIMEOUT_SECS};
+pub use provider::{parse_model_spec, DEFAULT_MAX_RETRIES, DEFAULT_TIMEOUT_SECS};
 pub use schema::TEXT_KEY;
 pub use stream::Flow;
 

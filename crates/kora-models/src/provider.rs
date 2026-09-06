@@ -117,18 +117,49 @@ pub(crate) fn backoff_fits(
 /// The variable is named by the config rather than fixed, because the
 /// provider is a wire format, not a vendor: one project can hold an OpenAI
 /// key and an OpenRouter key at once, and each model must read its own.
-fn openai_key(config: &ModelConfig) -> Result<String, ModelError> {
-    let var = config.api_key_env.as_deref().unwrap_or("OPENAI_API_KEY");
-    config
-        .api_key
-        .clone()
-        .or_else(|| std::env::var(var).ok())
+/// `None` means send no `Authorization` header at all. An endpoint of one's
+/// own that was given no key variable is usually a server that wants none —
+/// a local vLLM, llama.cpp, or an in-house gateway — and inventing an empty
+/// bearer token for it turns a working setup into a 401.
+fn openai_key(config: &ModelConfig) -> Result<Option<String>, ModelError> {
+    if let Some(key) = config.api_key.clone().filter(|k| !k.trim().is_empty()) {
+        return Ok(Some(key));
+    }
+    // A named variable is a promise that a key exists. Missing is an error,
+    // reported under the name the config asked for rather than under the
+    // default one, which would send somebody to export a key they do not
+    // have.
+    if let Some(var) = config.api_key_env.as_deref() {
+        return std::env::var(var)
+            .ok()
+            .filter(|k| !k.trim().is_empty())
+            .map(Some)
+            .ok_or_else(|| ModelError::new(format!("{var} not set (export it, or point `api_key_env` at the variable that holds the key)")));
+    }
+    if let Some(key) = std::env::var("OPENAI_API_KEY")
+        .ok()
         .filter(|k| !k.trim().is_empty())
-        .ok_or_else(|| {
-            ModelError::new(format!(
-                "{var} not set (export it, or set api_key in kora.toml)"
-            ))
-        })
+    {
+        return Ok(Some(key));
+    }
+    match config.endpoint {
+        // An endpoint of one's own, and no key named anywhere: unauthenticated.
+        Some(_) => Ok(None),
+        // OpenAI itself always needs one, so silence here is a mistake worth
+        // naming rather than a request that will come back 401.
+        None => Err(ModelError::new(
+            "OPENAI_API_KEY not set (export it, or set api_key_env in kora.toml)",
+        )),
+    }
+}
+
+/// The headers for one OpenAI-wire request.
+fn openai_headers(key: Option<String>) -> Vec<(&'static str, String)> {
+    let mut headers = vec![("Content-Type", "application/json".to_string())];
+    if let Some(key) = key {
+        headers.push(("Authorization", format!("Bearer {key}")));
+    }
+    headers
 }
 
 /// Where an OpenAI-wire call is sent. The default is OpenAI itself; an
@@ -290,10 +321,7 @@ fn openai(
         body["tools"] = tools_json(&req.tools);
     }
 
-    let headers = [
-        ("Authorization", format!("Bearer {key}")),
-        ("Content-Type", "application/json".to_string()),
-    ];
+    let headers = openai_headers(key);
     let url = format!("{}/chat/completions", openai_base(config));
     let text = transport(&url, &headers, &body)?;
     let response: Value = serde_json::from_str(&text).map_err(|e| {
@@ -440,10 +468,7 @@ pub(crate) fn stream_request(
             });
             Ok(StreamRequest {
                 url: format!("{}/chat/completions", openai_base(config)),
-                headers: vec![
-                    ("Authorization", format!("Bearer {key}")),
-                    ("Content-Type", "application/json".to_string()),
-                ],
+                headers: openai_headers(key),
                 body,
             })
         }
@@ -715,6 +740,23 @@ mod tests {
     type Recorder = (Box<Transport>, Captured);
 
     /// Build a transport that replays `reply` and remembers the request.
+    type CapturedHeaders = std::rc::Rc<RefCell<Option<(String, Vec<(String, String)>)>>>;
+
+    /// Like [`recording`], but keeps the headers rather than the body.
+    fn recording_headers(reply: &'static str) -> (Box<Transport>, CapturedHeaders) {
+        let seen: CapturedHeaders = std::rc::Rc::new(RefCell::new(None));
+        let sink = seen.clone();
+        let transport = Box::new(move |url: &str, h: &[(&str, String)], _b: &Value| {
+            let headers = h
+                .iter()
+                .map(|(name, value)| (name.to_string(), value.clone()))
+                .collect();
+            *sink.borrow_mut() = Some((url.to_string(), headers));
+            Ok(reply.to_string())
+        });
+        (transport, seen)
+    }
+
     fn recording(reply: &'static str) -> Recorder {
         let seen: Captured = std::rc::Rc::new(RefCell::new(None));
         let sink = seen.clone();
@@ -824,6 +866,28 @@ mod tests {
         // The model name keeps its slashes; only the provider prefix is cut.
         assert_eq!(body["model"], "anthropic/claude-sonnet-4");
         std::env::remove_var("KORA_TEST_GATEWAY_KEY");
+    }
+
+    #[test]
+    fn an_endpoint_with_no_key_sends_no_authorization_header() {
+        // A local vLLM or llama.cpp server wants no auth, and an empty
+        // bearer token is a 401 rather than a request.
+        std::env::remove_var("OPENAI_API_KEY");
+        let reply = r#"{
+            "choices":[{"message":{"content":"{\"summary\":\"ok\",\"count\":2,\"__uncertain__\":\"\"}"}}],
+            "usage":{"prompt_tokens":1,"completion_tokens":1}
+        }"#;
+        let (transport, seen) = recording_headers(reply);
+        let mut config = parse_model_spec("openai:Qwen/Qwen2.5-7B").unwrap();
+        config.endpoint = Some("http://localhost:8000/v1".into());
+
+        step_with(&config, &request(), &*transport).unwrap();
+        let (url, headers) = seen.borrow().clone().unwrap();
+        assert_eq!(url, "http://localhost:8000/v1/chat/completions");
+        assert!(
+            !headers.iter().any(|(name, _)| name == "Authorization"),
+            "{headers:?}"
+        );
     }
 
     #[test]

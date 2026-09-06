@@ -7,14 +7,52 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use kora_models::{ModelConfig, ModelError};
+use kora_models::{ModelConfig, ModelError, Provider};
 
 use crate::label::SinkPolicy;
 
+/// One `[models]` entry, written out rather than encoded in a string.
+///
+/// The model is named exactly as its provider's own documentation names it
+/// — `openrouter/free`, `gpt-4o`, `qwen2.5vl:3b` — because a name a program
+/// has to respell is a name somebody gets wrong. Everything the runtime
+/// needs beyond the name is said here instead of inferred from it.
+#[derive(Debug, Clone)]
+pub struct DeclaredModel {
+    /// Verbatim. Never parsed, never split.
+    pub name: String,
+    /// Where the request goes. `None` means the wire format's own default.
+    pub endpoint: Option<String>,
+    /// Which environment variable holds the key. `None` means no key is
+    /// configured, and for an endpoint of one's own that means the request
+    /// is sent without an `Authorization` header — a local vLLM or
+    /// llama.cpp server usually wants none.
+    pub api_key_env: Option<String>,
+    /// Which request shape to build: the one thing about a model the runtime
+    /// cannot read off a URL, because `/chat/completions` and `/api/chat`
+    /// take different bodies. Two values, and it is the only Kora-specific
+    /// word in the entry.
+    pub api: Provider,
+    pub max_output_tokens: Option<u32>,
+    pub timeout_secs: Option<u64>,
+    pub max_retries: Option<u32>,
+}
+
+/// How a role in `[models]` names its model.
+#[derive(Debug, Clone)]
+pub enum ModelEntry {
+    /// `smart = "openai:gpt-4o"` — the older shorthand, where the wire
+    /// format rides in the string and the endpoint is that format's default.
+    /// Kept working because it is in every existing project and cassette.
+    Spec(String),
+    /// `smart = { name = "gpt-4o", endpoint = "...", api_key_env = "..." }`
+    Declared(DeclaredModel),
+}
+
 #[derive(Debug, Clone)]
 pub struct Config {
-    /// Named model aliases, e.g. "default" -> "local:llama3.1:8b".
-    pub models: HashMap<String, String>,
+    /// Named model roles, e.g. "default" -> `local:llama3.1:8b`.
+    pub models: HashMap<String, ModelEntry>,
     /// Per-provider settings.
     pub openai_max_output_tokens: Option<u32>,
     /// `[models.openai] endpoint` — the base URL for OpenAI-wire calls.
@@ -256,7 +294,9 @@ impl Config {
                 match value {
                     // `default = "local:llama3.1:8b"`
                     toml::Value::String(spec) => {
-                        config.models.insert(key.clone(), spec.clone());
+                        config
+                            .models
+                            .insert(key.clone(), ModelEntry::Spec(spec.clone()));
                     }
                     // `timeout_secs = 900`, clamped like the http one: a
                     // zero timeout is how "wait forever" sneaks back in.
@@ -268,6 +308,18 @@ impl Config {
                     // running should say so on the first attempt.
                     toml::Value::Integer(times) if key == "max_retries" => {
                         config.model_max_retries = Some((*times).clamp(0, 10) as u32);
+                    }
+                    // A table is either a model written out in full --
+                    // which is the one with a `name` -- or the settings for
+                    // one of the two built-in wire formats. Keying on `name`
+                    // rather than on a list of reserved words is what lets a
+                    // role be called `openai` if a project wants it to be.
+                    toml::Value::Table(table) if table.contains_key("name") => {
+                        if let Some(model) = declared_model(table) {
+                            config
+                                .models
+                                .insert(key.clone(), ModelEntry::Declared(model));
+                        }
                     }
                     // `[models.openai]` / `[models.local]` sub-tables
                     toml::Value::Table(table) => {
@@ -298,14 +350,42 @@ impl Config {
         Ok(config)
     }
 
-    /// Resolve a model reference: either an alias from `[models]` or a direct
+    /// Resolve a model reference: either a role from `[models]` or a direct
     /// spec like `openai:gpt-4o`. Applies provider settings from config.
     pub fn resolve_model(&self, reference: &str) -> Result<ModelConfig, ModelError> {
-        let spec = self
-            .models
-            .get(reference)
-            .map(String::as_str)
-            .unwrap_or(reference);
+        match self.models.get(reference) {
+            Some(ModelEntry::Declared(declared)) => Ok(self.declared_config(declared)),
+            Some(ModelEntry::Spec(spec)) => self.spec_config(spec),
+            None => self.spec_config(reference),
+        }
+    }
+
+    /// A model written out in full. Nothing here is inferred from the name,
+    /// so the per-wire-format `[models.openai]` / `[models.local]` tables do
+    /// not apply: an entry that says where it goes has already said it.
+    fn declared_config(&self, declared: &DeclaredModel) -> ModelConfig {
+        ModelConfig {
+            provider: declared.api.clone(),
+            model: declared.name.clone(),
+            endpoint: declared.endpoint.clone(),
+            api_key: None,
+            api_key_env: declared.api_key_env.clone(),
+            max_output_tokens: declared.max_output_tokens.unwrap_or(4096),
+            timeout_secs: declared
+                .timeout_secs
+                .or(self.model_timeout_secs)
+                .unwrap_or(kora_models::DEFAULT_TIMEOUT_SECS),
+            max_retries: declared
+                .max_retries
+                .or(self.model_max_retries)
+                .unwrap_or(kora_models::DEFAULT_MAX_RETRIES),
+            deadline: None,
+        }
+    }
+
+    /// The `provider:model` shorthand, where the endpoint and the key
+    /// variable come from the per-format tables instead of the entry.
+    fn spec_config(&self, spec: &str) -> Result<ModelConfig, ModelError> {
         let mut model = kora_models::parse_model_spec(spec)?;
         if let Some(secs) = self.model_timeout_secs {
             model.timeout_secs = secs;
@@ -331,12 +411,54 @@ impl Config {
     /// The model used when a call site names none.
     pub fn default_model(&self) -> Result<ModelConfig, ModelError> {
         match self.models.get("default") {
-            Some(spec) => self.resolve_model(spec),
+            Some(_) => self.resolve_model("default"),
             None => Err(ModelError::new(
                 "no default model configured — add `[models] default = \"local:llama3.1:8b\"` to kora.toml",
             )),
         }
     }
+}
+
+/// Read one `[models]` entry written out in full. A table without a usable
+/// `name` is skipped rather than rejected, matching how every other unknown
+/// key in `kora.toml` is treated.
+fn declared_model(table: &toml::value::Table) -> Option<DeclaredModel> {
+    let name = table.get("name").and_then(|v| v.as_str())?.trim();
+    if name.is_empty() {
+        return None;
+    }
+    // Two request shapes exist, so an unrecognised one is a mistake worth
+    // failing on rather than a silent fall back to the other.
+    let api = match table.get("api").and_then(|v| v.as_str()) {
+        Some("ollama") => Provider::Ollama,
+        // The OpenAI wire format is what nearly every hosted provider and
+        // gateway speaks, so it is what an entry gets when it says nothing.
+        _ => Provider::OpenAI,
+    };
+    Some(DeclaredModel {
+        name: name.to_string(),
+        endpoint: table
+            .get("endpoint")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        api_key_env: table
+            .get("api_key_env")
+            .and_then(|v| v.as_str())
+            .map(str::to_string),
+        api,
+        max_output_tokens: table
+            .get("max_output_tokens")
+            .and_then(|v| v.as_integer())
+            .map(|v| v.clamp(1, u32::MAX as i64) as u32),
+        timeout_secs: table
+            .get("timeout_secs")
+            .and_then(|v| v.as_integer())
+            .map(|v| v.clamp(1, 3600) as u64),
+        max_retries: table
+            .get("max_retries")
+            .and_then(|v| v.as_integer())
+            .map(|v| v.clamp(0, 10) as u32),
+    })
 }
 
 #[cfg(test)]
@@ -361,8 +483,8 @@ program_max_tokens = 2_000_000
     #[test]
     fn parses_models_and_settings() {
         let c = Config::parse(SAMPLE).unwrap();
-        assert_eq!(c.models.get("default").unwrap(), "local:llama3.1:8b");
-        assert_eq!(c.models.get("smart").unwrap(), "openai:gpt-4o");
+        assert_eq!(c.resolve_model("default").unwrap().model, "llama3.1:8b");
+        assert_eq!(c.resolve_model("smart").unwrap().model, "gpt-4o");
         assert_eq!(c.openai_max_output_tokens, Some(2048));
         assert_eq!(c.local_endpoint.as_deref(), Some("http://box:11434"));
     }
@@ -440,6 +562,74 @@ api_key_env = "OPENROUTER_API_KEY"
         let m = c.resolve_model("smart").unwrap();
         assert_eq!(m.endpoint, None);
         assert_eq!(m.api_key_env, None);
+    }
+
+    #[test]
+    fn a_model_written_out_in_full_keeps_its_name_verbatim() {
+        // The name is whatever the provider's docs print. Kora does not
+        // parse it, so a slash, a colon, or both survive untouched.
+        let c = Config::parse(
+            r#"
+[models]
+default = { name = "openrouter/free", endpoint = "https://openrouter.ai/api/v1", api_key_env = "OPENROUTER_API_KEY" }
+vision  = { name = "qwen2.5vl:3b", endpoint = "http://localhost:11434", api = "ollama" }
+"#,
+        )
+        .unwrap();
+
+        let d = c.default_model().unwrap();
+        assert_eq!(d.model, "openrouter/free");
+        assert_eq!(d.provider, Provider::OpenAI);
+        assert_eq!(d.endpoint.as_deref(), Some("https://openrouter.ai/api/v1"));
+        assert_eq!(d.api_key_env.as_deref(), Some("OPENROUTER_API_KEY"));
+
+        let v = c.resolve_model("vision").unwrap();
+        assert_eq!(v.model, "qwen2.5vl:3b");
+        assert_eq!(v.provider, Provider::Ollama);
+        assert_eq!(v.endpoint.as_deref(), Some("http://localhost:11434"));
+    }
+
+    #[test]
+    fn two_gateways_coexist_in_one_project() {
+        // The reason an endpoint belongs to the entry rather than to the
+        // provider: one program routing two roles at two services.
+        let c = Config::parse(
+            r#"
+[models]
+smart = { name = "gpt-4o", api_key_env = "OPENAI_API_KEY" }
+cheap = { name = "openrouter/free", endpoint = "https://openrouter.ai/api/v1", api_key_env = "OPENROUTER_API_KEY" }
+"#,
+        )
+        .unwrap();
+        assert_eq!(c.resolve_model("smart").unwrap().endpoint, None);
+        assert_eq!(
+            c.resolve_model("cheap").unwrap().endpoint.as_deref(),
+            Some("https://openrouter.ai/api/v1")
+        );
+    }
+
+    #[test]
+    fn a_model_with_no_key_variable_configures_no_key() {
+        // A local server that wants no auth is a setup, not an oversight.
+        let c = Config::parse(
+            r#"
+[models]
+default = { name = "Qwen/Qwen2.5-7B", endpoint = "http://localhost:8000/v1" }
+"#,
+        )
+        .unwrap();
+        let m = c.default_model().unwrap();
+        assert_eq!(m.api_key_env, None);
+        assert_eq!(m.api_key, None);
+    }
+
+    #[test]
+    fn the_old_string_form_still_resolves() {
+        let c = Config::parse(SAMPLE).unwrap();
+        let m = c.resolve_model("smart").unwrap();
+        assert_eq!(m.model, "gpt-4o");
+        assert_eq!(m.provider, Provider::OpenAI);
+        assert_eq!(m.max_output_tokens, 2048);
     }
 
     #[test]

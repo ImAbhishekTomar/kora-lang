@@ -2,9 +2,12 @@
 # Everything here is optional; sensible defaults apply.
 
 [models]
-default = "local:qwen3:8b"
-smart   = "openai:gpt-4o"
-vision  = "local:moondream"         # named per role, not per call site
+# A role names a model the way its provider names it, says where the request
+# goes, and names the variable holding the key -- never the key itself.
+default = { name = "qwen3:8b", endpoint = "http://localhost:11434", api = "ollama" }
+smart   = { name = "gpt-4o", api_key_env = "OPENAI_API_KEY" }
+vision  = "local:moondream"         # the older shorthand still resolves
+                                    # roles are named per call site, not vendors
 
 timeout_secs = 900                  # one call; a local vision model is slow
 

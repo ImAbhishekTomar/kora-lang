@@ -325,20 +325,23 @@ over a variable is not inspecting the program, it is changing it.
 optional.
 
 ```toml
-[models]
-default = "local:qwen3:8b"          # Ollama
-smart   = "openai:gpt-4o"           # needs OPENAI_API_KEY
-vision  = "local:moondream"         # named by `analyze(..., model="vision")`
+[models]                            # a role names a model, never a vendor
+default = { name = "qwen3:8b", endpoint = "http://localhost:11434", api = "ollama" }
+smart   = { name = "gpt-4o", api_key_env = "OPENAI_API_KEY" }
+cheap   = { name = "openrouter/free", endpoint = "https://openrouter.ai/api/v1",
+            api_key_env = "OPENROUTER_API_KEY" }
+vision  = "local:moondream"         # the shorthand still works
+                                    # roles are named by `analyze(..., model="vision")`
 
 timeout_secs = 600                  # one model call; 0 is clamped, not honoured
 max_retries = 2                     # three attempts; 0 turns retrying off
 
-[models.openai]
+[models.openai]                     # defaults for the `openai:` shorthand only
 max_output_tokens = 4096            # bounds worst-case budget reservation
-endpoint    = "https://api.openai.com/v1"   # any OpenAI-compatible gateway
-api_key_env = "OPENAI_API_KEY"              # which variable holds the key
+endpoint    = "https://api.openai.com/v1"
+api_key_env = "OPENAI_API_KEY"
 
-[models.local]
+[models.local]                      # defaults for the `local:` shorthand only
 endpoint = "http://localhost:11434"
 
 [sinks]                             # which labels may reach which sink
@@ -396,27 +399,36 @@ level = "calls"                     # off | agents | calls | full
 redact = true                       # labeled values never reach the exporter
 ```
 
-Model references are `provider:model`. `local:` and `ollama:` mean Ollama;
-`openai:` means the OpenAI wire format. Everything after the first colon is
-the model name, so tags like `local:llama3.1:8b` survive intact.
+A model written out in full takes four keys:
 
-`openai:` names a wire format, not a vendor. Point `[models.openai] endpoint`
-at any gateway that speaks `/chat/completions` — OpenRouter, Groq, Together,
-a self-hosted vLLM — and name the variable holding that gateway's key with
-`api_key_env`. The key itself is never written in `kora.toml`, which is a
-checked-in file:
+| key | meaning |
+|---|---|
+| `name` | copied from the provider's own documentation. Never parsed — slashes, colons, and tags survive |
+| `endpoint` | where the request goes. Omitted, the wire format's default is used |
+| `api_key_env` | which variable holds the key. Omitted with an endpoint of your own, no `Authorization` header is sent at all — which is what a local vLLM or llama.cpp server wants |
+| `api` | which request to build: `"openai"` (default) or `"ollama"`. A wire format, not a company |
+
+`max_output_tokens`, `timeout_secs`, and `max_retries` may also be set per
+entry, overriding the `[models]` defaults.
+
+The endpoint belongs to the entry, so two services coexist in one project:
 
 ```toml
 [models]
-default = "openai:anthropic/claude-sonnet-4"   # the gateway's model id
-
-[models.openai]
-endpoint    = "https://openrouter.ai/api/v1"
-api_key_env = "OPENROUTER_API_KEY"
+smart = { name = "gpt-4o", api_key_env = "OPENAI_API_KEY" }
+cheap = { name = "openrouter/free", endpoint = "https://openrouter.ai/api/v1",
+          api_key_env = "OPENROUTER_API_KEY" }
 ```
 
-A missing key is reported under the name the config asked for, not
-`OPENAI_API_KEY`.
+The key itself is never written in `kora.toml`, which is a checked-in file —
+only the name of the variable holding it. A missing key is reported under
+that name.
+
+The older shorthand still resolves: `provider:model`, where `local:` and
+`ollama:` mean the Ollama wire format and `openai:` the OpenAI one, with the
+endpoint and key variable coming from `[models.openai]` / `[models.local]`.
+Everything after the first colon is the model name, so `local:llama3.1:8b`
+survives intact.
 
 ---
 

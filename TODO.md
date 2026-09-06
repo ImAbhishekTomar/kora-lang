@@ -5,6 +5,16 @@ principle in [AGENTS.md](AGENTS.md).
 
 ## Current
 
+- [x] **A model is named the way its provider names it.** `[models]` entries
+      are written out — `{ name = "openrouter/free", endpoint = "...",
+      api_key_env = "..." }` — so the name is copied from the provider's docs
+      rather than respelled with a Kora prefix, the endpoint belongs to the
+      entry (two services in one project), and an entry with no key variable
+      sends no `Authorization` header at all. `api` picks the request shape,
+      `"openai"` or `"ollama"`; nothing else about a provider is in the
+      compiler. The `provider:model` shorthand still resolves, and cassette
+      keys are unchanged, so existing projects and recordings keep working.
+
 - [x] **Any OpenAI-compatible gateway, without a provider per vendor.**
       `[models.openai] endpoint` sends the `openai` provider's request to a
       different base URL, and `api_key_env` names the variable holding that

@@ -249,19 +249,38 @@ design changes and should be deliberate.
 ## Models
 
 - Providers: OpenAI (API key) + Ollama (localhost HTTP) from Phase 2.
-- **The `openai` provider is a wire format, not a vendor.** `[models.openai]
-  endpoint` points it at anything that speaks OpenAI's `/chat/completions`
-  — OpenRouter, Groq, Together, a self-hosted vLLM — and `api_key_env` names
-  the variable holding that gateway's key. One flag rather than one provider
-  per vendor: a `openrouter:` scheme would be a second name for a request
-  Kora already knows how to build, and the list of gateways speaking this
-  format only grows.
-- The *name* of the key variable is configuration; the key never is. A
-  gateway key belongs to that gateway, so `OPENAI_API_KEY` is a default and
-  not a rule, and an error names the variable the config actually asked for
-  — sending someone to export a key they do not have is worse than saying
-  nothing. `kora.toml` is checked in, so it holds the name and never the
-  secret.
+- **A model is named the way its provider names it.** `[models]` takes an
+  entry written out in full, giving `name`, `endpoint`, and `api_key_env`
+  side by side:
+
+  ```toml
+  [models]
+  default = { name = "openrouter/free", endpoint = "https://openrouter.ai/api/v1", api_key_env = "OPENROUTER_API_KEY" }
+  ```
+
+  `name` is copied from the provider's own documentation, never parsed. The older `provider:model` shorthand still
+  works and is what the built-in defaults use, but it made the model name a
+  Kora spelling of itself: a developer reading `openrouter/free` in a
+  provider's docs had to know to write `openai:openrouter/free`, and the
+  prefix looked like a vendor when it was a request shape.
+- **No provider is hardcoded beyond two request shapes.** An entry says where
+  it goes (`endpoint`) and which variable holds its key (`api_key_env`). The
+  one thing it cannot read off a URL is which body to build, so `api` picks
+  that: `"openai"` (the default, what nearly every hosted provider and
+  gateway speaks) or `"ollama"`. Two values, both naming a wire format rather
+  than a company. Adding a vendor to Kora is then not a code change.
+- The endpoint belongs to the entry, not to the provider, so one program can
+  route `smart` at OpenAI and `cheap` at OpenRouter. A single per-provider
+  endpoint would have made the second role impossible to express.
+- **No key configured means no key sent.** An `Authorization` header is
+  omitted rather than sent empty when an entry with its own endpoint names no
+  variable — a local vLLM or llama.cpp server wants none, and a bearer token
+  of `""` turns that working setup into a 401. Reaching OpenAI itself with no
+  key is still an error, because there silence is a mistake.
+- The *name* of the key variable is configuration; the key never is.
+  `kora.toml` is a checked-in file, so it holds the name, and a missing key
+  is reported under the name the config asked for — sending someone to export
+  a key they do not have is worse than saying nothing.
 - `local_model` sink = Ollama. In-process GPU inference (llama.cpp/candle) is
   parked (Phase 7, optional — measure first).
 - Model choice/config: call-site > block > agent > main > kora.toml. The

@@ -88,12 +88,20 @@ kora test examples/07_tests.ko                    # the test runner
 Those work with no API key and no model running: the model calls replay from
 committed cassettes.
 
-To call a model for real you need either an `OPENAI_API_KEY` or a running
-[Ollama](https://ollama.com). Any OpenAI-compatible gateway (OpenRouter,
-Groq, Together, a self-hosted vLLM) counts as the first one: set
-`[models.openai] endpoint` to its base URL and `api_key_env` to the variable
-holding its key. Point `[models] default` in `kora.toml` at whichever you
-have:
+To call a model for real, name one in `kora.toml`. A model is named the way
+its provider names it, with where it lives and which variable holds its key
+said out loud:
+
+```toml
+[models]
+default = { name = "openrouter/free", endpoint = "https://openrouter.ai/api/v1",
+            api_key_env = "OPENROUTER_API_KEY" }
+```
+
+`api = "ollama"` picks the other request shape for a local
+[Ollama](https://ollama.com); everything else speaks the OpenAI one. No
+provider is built into the compiler, so OpenAI, OpenRouter, Groq, Together,
+and your own server are all the same amount of work. Then:
 
 ```bash
 kora run --record --report examples/01_expense_check.ko   # calls the model, saves a cassette
