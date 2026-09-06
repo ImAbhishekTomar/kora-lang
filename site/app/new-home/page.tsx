@@ -79,7 +79,10 @@ function CodeEditor() {
 }
 
 function InteractivePanel() {
-  return <div className="figma-interactive"><Terminal /><CodeEditor /><Terminal command /><div className="figma-eval-row"><button type="button"><span>▷</span> Run Kora</button><small>Click to see evaluation metrics report</small></div></div>
+  return <>
+    <div className="figma-grid-background" aria-hidden="true" />
+    <div className="figma-interactive"><Terminal /><CodeEditor /><Terminal command /><div className="figma-eval-row"><button type="button"><span>▷</span> Run Kora</button><small>Click to see evaluation metrics report</small></div></div>
+  </>
 }
 
 export default function NewHomePage() {
