@@ -21,6 +21,8 @@ pub(crate) mod lock;
 pub(crate) mod manifest;
 pub(crate) mod resolve;
 mod scan;
+#[cfg(test)]
+mod scratch;
 mod sumlog;
 
 pub use commands::{
