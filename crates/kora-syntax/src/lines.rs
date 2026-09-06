@@ -81,6 +81,7 @@ fn walk(stmts: &[Stmt], out: &mut BTreeSet<u32>) {
             | StmtKind::UsePkg { .. }
             | StmtKind::UseMcp { .. }
             | StmtKind::UsePython { .. }
+            | StmtKind::UseHelper { .. }
             | StmtKind::Break
             | StmtKind::Continue
             | StmtKind::Pass => {}

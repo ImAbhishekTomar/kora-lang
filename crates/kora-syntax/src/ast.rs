@@ -103,6 +103,14 @@ pub enum StmtKind {
         module: String,
         alias: String,
     },
+    /// `use helper` — the program this package carries work out to.
+    ///
+    /// Legal only inside a package whose `kora.toml` declares
+    /// `[package.helper]`. There is at most one per package, so the statement
+    /// names no module: what it binds is *this* package's helper.
+    UseHelper {
+        alias: String,
+    },
     /// `use pkg receipts as r` — bring a dependency into scope.
     ///
     /// The name is resolved against the `[dependencies]` table of the

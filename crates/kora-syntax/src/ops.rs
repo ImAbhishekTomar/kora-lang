@@ -215,6 +215,7 @@ impl<'a> Scope<'a> {
             | StmtKind::Use { .. }
             | StmtKind::UseFile { .. }
             | StmtKind::UsePython { .. }
+            | StmtKind::UseHelper { .. }
             | StmtKind::UsePkg { .. }
             | StmtKind::UseMcp { .. }
             | StmtKind::Break

@@ -1,0 +1,69 @@
+# A scanned PDF, read by looking at it.
+#
+# `pdf.info` says whether a document has text in it. When it does,
+# `pdf.pages` is the whole answer and this file is unnecessary. When it does
+# not — a scan, a photographed invoice, a signed form — the pages have to
+# become pictures first, and that is a renderer with a large C++ library
+# behind it. Kora does not contain one. The `pdf_render` package does, in its
+# own process:
+#
+#   kora tree examples/22_pdf_render.ko     # what it is, and what it may do
+#   kora install examples/22_pdf_render.ko  # fetches this platform's helper
+#   kora run examples/22_pdf_render.ko
+#
+# This copy builds its helper from source, since it lives in this repository:
+#
+#   cd examples/lib/pdf/helper && cargo build --release
+#
+# and PDFium goes beside the built binary (helper/README.md). A published
+# package would name a URL and a sha256 instead, and `kora install` would
+# fetch it — only for this platform, and only because this file imports it.
+
+use pdf
+use fs
+use pkg pdf_render as render
+
+DOC = "examples/documents/scanned.pdf"
+
+def main():
+    # 1. Which path this document is on. Asked, not guessed.
+    match pdf.info(DOC):
+        case Ok(facts):
+            if facts["has_text_layer"]:
+                print("1. this document has text; `pdf.pages` reads it directly")
+                return
+            print(f"1. {facts["page_count"]} pages, no text layer: they have to be looked at")
+        case Err(why):
+            print(f"1. {why}")
+            return
+
+    # 2. The program opens the file. The package never sees a path, so it
+    #    cannot read anything the program did not hand it — which is why its
+    #    manifest asks for `helper` and not `fs`.
+    match fs.bytes(DOC):
+        case Ok(document):
+            # 3. Out to another process, back as images. A crash or a hang in
+            #    the renderer is an `Err` here, not a dead run.
+            match render.try_pages(document, 150, 20):
+                case Ok(pages):
+                    print(f"2. {len(pages)} pages rendered")
+                    for page in pages:
+                        print(f"   {page}")
+                    # 4. From here it is the ordinary vision path: these are
+                    #    the same image values `fs.image` produces, so they
+                    #    go into `analyze` with no conversion.
+                    #
+                    #    invoice: Invoice = analyze({"pages": pages}, INSTRUCTION, model="vision")
+                    print("3. these are ordinary images: `analyze({\"pages\": pages}, ...)`")
+                case Err(why):
+                    print(f"2. the pages could not be rendered: {why}")
+        case Err(why):
+            print(f"2. {why}")
+
+test "a document with no text layer still has pages to look at":
+    match pdf.info(DOC):
+        case Ok(facts):
+            assert facts["has_text_layer"] == False, "this fixture is meant to be a scan"
+            assert facts["page_count"] == 2, "the fixture has two pages"
+        case Err(why):
+            assert False, why

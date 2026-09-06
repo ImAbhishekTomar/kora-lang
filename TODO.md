@@ -186,6 +186,29 @@ commit across `parallel for` workers, not a weaker guarantee.
 
 ## Development
 
+### `pdf`: documents that say what they are (in progress)
+
+- [x] `pdf.text`, `pdf.pages`, `pdf.info` in `crates/kora-runtime/src/stdlib/pdf.rs`,
+      backed by `pdf-extract` and `lopdf`. Pure Rust, no native blob.
+- [x] A document with no text layer is `Err`, not `""`; `has_text_layer` is
+      reported up front so the vision path is taken deliberately.
+- [x] Page count read from the document catalogue, so an unreadable page is
+      named instead of silently truncating the document.
+- [x] Parsing runs inside `catch_unwind`: a malformed file is a value, not a
+      dead run. `pdf` maps to the `fs` capability for packages.
+- [x] `examples/21_pdf.ko`, `crates/kora-runtime/tests/pdf_test.rs`, docs,
+      site, and `DECISIONS.md`.
+- [x] PDF rendering, as a package rather than a compiler feature. Kora gained
+      package *helpers* (`crates/kora-helper`, `[package.helper]`,
+      `use helper`, `fs.bytes`, the `helper` grant); PDFium lives in
+      `examples/lib/pdf/helper`, in its own process and its own workspace, so
+      nothing in the compiler's build links it.
+- [ ] Publish the `pdf_render` helper as per-platform artifacts, so the
+      package names a url and sha256 instead of a build path. Until then the
+      example builds the helper from source.
+- [ ] OS-level sandboxing for helpers (seccomp, `sandbox_init`). A helper is
+      isolated from the interpreter today, not confined by the system.
+
 - [x] Refresh the documentation welcome page with a more playful guided
       experience, responsive styling, and reduced-motion-safe animation.
 - [x] Add dedicated Configuration, Packages, and Developer guide pages, and

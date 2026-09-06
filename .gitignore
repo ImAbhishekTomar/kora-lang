@@ -1,5 +1,8 @@
 # Rust build artifacts
 /target/
+# The pdf-render package's helper is built and released separately; its build
+# directory and the PDFium library it loads are never committed.
+/examples/lib/pdf/helper/target/
 
 # Documentation site dependencies and build output
 /site/node_modules/

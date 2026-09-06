@@ -21,6 +21,10 @@ endpoint = "http://localhost:11434"
 # `grants` is the authority handed to that package. Absent means nothing: a
 # dependency never given the filesystem cannot reach it, however deep in the
 # graph the call is written.
+[dependencies.pdf_render]
+path = "examples/lib/pdf"
+grants = { helper = true }
+
 [dependencies.greet]
 path = "examples/lib/greet"
 grants = { fs = true }

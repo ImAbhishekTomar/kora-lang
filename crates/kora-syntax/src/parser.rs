@@ -477,6 +477,25 @@ impl Parser {
             });
         }
 
+        // `use helper` binds this package's own helper process. A package
+        // has at most one, so there is no name to give — only an optional
+        // alias, for a package that would rather call it something else.
+        if matches!(self.peek_kind(), TokenKind::Ident(word) if word == "helper") {
+            self.advance();
+            let alias = match self.peek_kind() {
+                TokenKind::Ident(word) if word == "as" => {
+                    self.advance();
+                    self.expect_ident("a name after `as`")?
+                }
+                _ => "helper".to_string(),
+            };
+            self.expect_newline("use")?;
+            return Ok(Stmt {
+                kind: StmtKind::UseHelper { alias },
+                span,
+            });
+        }
+
         // `use pkg <name> as <alias>` names a dependency. The name is a
         // Kora identifier, so unlike a path it has a natural binding and
         // `as` stays optional.

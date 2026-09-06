@@ -3,6 +3,17 @@
 [advisories]
 # A known vulnerability in a dependency is a build failure, not a warning.
 yanked = "deny"
+ignore = [
+    # `ttf-parser` is unmaintained, not vulnerable: the author has said there
+    # will be no further releases, and there is no successor with the same
+    # API. It arrives through `pdf-extract` -> `lopdf`, which is the whole of
+    # the `pdf` module's backing, and it is `#![forbid(unsafe_code)]`, so the
+    # exposure is a parser bug in safe Rust rather than memory unsafety --
+    # which is also why every call into it runs inside `catch_unwind`.
+    # Revisit when `pdf-extract` moves to a maintained font parser, or when
+    # this becomes a real advisory rather than a maintenance notice.
+    "RUSTSEC-2026-0192",
+]
 
 [bans]
 # Two versions of the same crate bloat the binary but are usually forced

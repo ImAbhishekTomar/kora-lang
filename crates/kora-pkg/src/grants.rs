@@ -21,6 +21,8 @@ pub enum Capability {
     Sql,
     Env,
     Python,
+    /// Running the package's own helper program.
+    Helper,
 }
 
 impl Capability {
@@ -31,6 +33,7 @@ impl Capability {
             Capability::Sql => "sql",
             Capability::Env => "env",
             Capability::Python => "python",
+            Capability::Helper => "helper",
         }
     }
 
@@ -45,6 +48,9 @@ impl Capability {
             // The notes store is filesystem-backed (`.kora/notes/<run-id>.json`),
             // so a dependency needs the same grant `fs` does to touch it.
             "notes" => Some(Capability::Fs),
+            // `pdf` opens a file by path and nothing else, so it is the same
+            // authority `fs.read` is, under a different name.
+            "pdf" => Some(Capability::Fs),
             "sql" => Some(Capability::Sql),
             "env" => Some(Capability::Env),
             _ => None,
@@ -58,6 +64,7 @@ impl Capability {
             Capability::Sql,
             Capability::Env,
             Capability::Python,
+            Capability::Helper,
         ]
         .into_iter()
         .find(|c| c.name() == name)

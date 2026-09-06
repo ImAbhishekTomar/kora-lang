@@ -1,6 +1,6 @@
 # The standard library
 
-Nine native modules, each backed by a Rust crate. Every one exists to fix a
+Ten native modules, each backed by a Rust crate. Every one exists to fix a
 specific, well-known defect in its equivalent elsewhere — rewriting a library
 is only worth it if the rewrite fixes what everyone already knows is broken.
 
@@ -176,6 +176,7 @@ across threads does its work in a different sequence on every host.
 | `fs.read(path)` | `Ok(text)` — `unverified` |
 | `fs.lines(path)` | `Ok(list)` — `unverified` |
 | `fs.image(path)` | `Ok(image)` — `unverified` |
+| `fs.bytes(path)` | `Ok(bytes)` — `unverified` |
 | `fs.list(dir)` | `Ok(list of paths)` — sorted |
 | `fs.glob(pattern)` | `Ok(list of paths)` — sorted |
 | `fs.write(path, text)` | `Ok(None)` — atomic |
@@ -219,6 +220,11 @@ loop ends up reading the wrong directory. Unlike file *contents*, listed
 paths are verified: the program named the directory and the shape of the
 names, and every result was matched against it, which is the same narrowing
 that lifts `unverified` elsewhere.
+
+`fs.bytes` is for a file that is not text. `fs.read` decodes as UTF-8 and
+fails on a PDF, a font, or an archive, and forcing one through a lossy decode
+hands back something that no longer round-trips. Bytes exist to be given to
+something that understands them — a package helper, usually.
 
 `fs.image` reads PNG, JPEG, GIF, and WebP. The type comes from the file's
 magic bytes, not its extension — `mimetypes.guess_type` trusts the filename,
@@ -316,10 +322,48 @@ one. See [`examples/18_notes.ko`](../examples/18_notes.ko).
 
 ---
 
+## `pdf`
+
+**What everyone else gets wrong.** `pypdf` returns `""` for a page that holds
+a picture of text rather than text, with no error, so a pipeline runs to
+completion and writes empty records — the failure is found in the output,
+days later. `pdftotext` and most wrappers concatenate every page, so "which
+page is this clause on" cannot be answered. And the convenience helpers stop
+at the first page they cannot parse and return what they had, so a 40-page
+contract silently becomes 12 pages.
+
+| | |
+|---|---|
+| `pdf.text(path)` | `Ok(text)` — every page, joined by a blank line |
+| `pdf.pages(path)` | `Ok(list of text)` — one entry per page, in order |
+| `pdf.info(path)` | `Ok({page_count, encrypted, has_text_layer})` |
+
+`has_text_layer` is the one that matters: `false` means the pages are
+pictures, and the answer is a vision model rather than a longer regex. A
+document with no text layer is `Err` rather than an empty success, so a
+program takes that path deliberately.
+
+The page count comes from the document's own catalogue, not from however far
+extraction happened to get, so a page that will not parse is an `Err` naming
+the page number instead of a shorter document.
+
+Text is `unverified`, like any file content — a PDF body is the standard
+prompt-injection carrier, and it cannot reach a sink until something narrows
+it. Paths follow the `fs` rule: a path that came from outside is refused. A
+malformed file is an `Err`, never a crash: this is a parser for input the
+program did not write. Files above 64 MB are refused by name and size.
+
+Reading a PDF is text only. Rendering a page to an image is not here, so a
+scanned document still goes through a renderer outside Kora before
+`fs.image`. See [`examples/21_pdf.ko`](../examples/21_pdf.ko).
+
+---
+
 ## Not built yet
 
-`polars`-backed dataframes, S3, PDF, full-text search, and Postgres. Images
-are in (`fs.image`); documents are not.
+`polars`-backed dataframes, S3, PDF *rendering*, full-text search, and
+Postgres. Images are in (`fs.image`), and a PDF's text is in (`pdf.text`);
+turning a PDF page into a picture is not.
 
 This is about stdlib bindings specifically — MCP client support itself is
 already implemented (`use mcp` in [language.md](language.md#mcp-servers)) and

@@ -44,6 +44,8 @@ pub enum Portable {
     /// Images cross by copy like everything else. A worker classifying its
     /// own receipt needs the bytes, not a handle into another agent's heap.
     Image(Image),
+    /// Bytes cross by copy, like an image.
+    Bytes(Vec<u8>),
     Module(String),
     UserModule {
         id: ModuleId,
@@ -52,6 +54,7 @@ pub enum Portable {
     TypeRef(String),
     McpServer(String),
     PyModule(String),
+    Helper(usize),
     McpTool(String, String),
     /// Labels cross agent boundaries: isolation must not launder them.
     Labeled {
@@ -96,7 +99,9 @@ impl Portable {
             },
             Value::Builtin(name) => Portable::Builtin(name),
             Value::Image(image) => Portable::Image((**image).clone()),
+            Value::Bytes(bytes) => Portable::Bytes((**bytes).clone()),
             Value::Module { name } => Portable::Module(name.to_string()),
+            Value::Helper { package } => Portable::Helper(*package),
             Value::UserModule { id, alias } => Portable::UserModule {
                 id: *id,
                 alias: alias.to_string(),
@@ -152,10 +157,12 @@ impl Portable {
             },
             Portable::Builtin(name) => Value::Builtin(name),
             Portable::Image(image) => Value::Image(Rc::new(image)),
+            Portable::Bytes(bytes) => Value::Bytes(Rc::new(bytes)),
             Portable::UserModule { id, alias } => Value::UserModule {
                 id,
                 alias: Rc::new(alias),
             },
+            Portable::Helper(package) => Value::Helper { package },
             Portable::Module(name) => Value::Module {
                 name: Rc::new(name),
             },

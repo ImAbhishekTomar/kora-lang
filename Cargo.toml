@@ -10,6 +10,7 @@ members = [
     "crates/kora-dap",
     "crates/kora-mcp",
     "crates/kora-python",
+    "crates/kora-helper",
     "crates/kora-cli",
 ]
 
@@ -37,6 +38,7 @@ kora-lsp = { path = "crates/kora-lsp", version = "0.2.0" } # x-release-please-ve
 kora-dap = { path = "crates/kora-dap", version = "0.2.0" } # x-release-please-version
 kora-mcp = { path = "crates/kora-mcp", version = "0.2.0" } # x-release-please-version
 kora-python = { path = "crates/kora-python", version = "0.2.0" } # x-release-please-version
+kora-helper = { path = "crates/kora-helper", version = "0.2.0" } # x-release-please-version
 serde = { version = "1", features = ["derive", "rc"] }
 serde_json = "1"
 ureq = { version = "2", features = ["json"] }
@@ -46,6 +48,13 @@ toml = "0.8"
 toml_edit = "0.22"
 regex = "1"
 sha2 = "0.10"
+# Unpacking a package helper. Only ever reading an archive, never writing one.
+tar = "0.4"
+flate2 = "1"
+# Text extraction only. Pure Rust, no native blob: rendering a page to pixels
+# is a separate decision with a C++ library behind it.
+pdf-extract = "0.12"
+lopdf = "0.42"                          # pinned to what pdf-extract uses: two copies in the tree is worse than an older API
 lsp-server = "0.7"
 lsp-types = "0.95"
 rusqlite = { version = "0.32", features = ["bundled"] }

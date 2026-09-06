@@ -40,6 +40,7 @@ pub const EXPORTS: super::Exports = &[
     ("exists", exists),
     ("lines", lines),
     ("image", image),
+    ("bytes", bytes),
     ("list", list),
     ("glob", glob_files),
 ];
@@ -155,6 +156,23 @@ fn image(_interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Valu
     }
 }
 
+/// `fs.bytes(path) -> Ok(bytes) | Err(reason)`
+///
+/// A file that is not text. `fs.read` decodes as UTF-8 and fails on a PDF, a
+/// font, or an archive; forcing one through a lossy decode would hand back
+/// something that no longer round-trips. Bytes exist to be handed to
+/// something that understands them — a package helper, usually — and are
+/// `unverified` like any other file content.
+fn bytes(interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Value, RuntimeError> {
+    let path = checked_path(&args, "fs.bytes", span)?;
+    super::journaled_read(interp, "fs.bytes", span, move |_| {
+        match std::fs::read(&path) {
+            Ok(bytes) => ok(Value::Bytes(Rc::new(bytes)).with_label(Label::UNVERIFIED)),
+            Err(e) => err(describe_io(&path, &e)),
+        }
+    })
+}
+
 /// `fs.list(dir) -> Ok(list of paths) | Err(reason)`
 ///
 /// Full paths, not bare names: a name alone has to be re-joined by hand, and
@@ -218,7 +236,7 @@ fn exists(_interp: &mut Interpreter, args: Vec<Value>, span: Span) -> Result<Val
 
 /// Validate the path argument: it must be verified data, and must not climb
 /// out of the working tree.
-fn checked_path(args: &[Value], func: &str, span: Span) -> Result<String, RuntimeError> {
+pub(super) fn checked_path(args: &[Value], func: &str, span: Span) -> Result<String, RuntimeError> {
     let Some(value) = args.first() else {
         return Err(RuntimeError::new(format!("{func}() needs a path"), span));
     };
@@ -242,7 +260,7 @@ fn checked_path(args: &[Value], func: &str, span: Span) -> Result<String, Runtim
 }
 
 /// io::Error messages omit the path, which is the first thing you want.
-fn describe_io(path: &str, e: &std::io::Error) -> String {
+pub(super) fn describe_io(path: &str, e: &std::io::Error) -> String {
     match e.kind() {
         std::io::ErrorKind::NotFound => format!("no such file: {path}"),
         std::io::ErrorKind::PermissionDenied => format!("permission denied: {path}"),

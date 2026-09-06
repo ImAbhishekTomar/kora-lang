@@ -71,6 +71,22 @@ pub enum Value {
     /// Shared by `Rc` rather than copied: a receipt scan is megabytes, and
     /// passing one to a function should not duplicate it.
     Image(Rc<Image>),
+    /// Raw bytes, from `fs.bytes(path)`.
+    ///
+    /// A file that is not text — a PDF, an archive, a font — has no honest
+    /// `str` form, and forcing one is how bytes get mangled by an encoding
+    /// nobody chose. Bytes exist to be handed to something that understands
+    /// them: a package helper, or `analyze` by way of an image. Shared by
+    /// `Rc` rather than copied, for the same reason an image is.
+    Bytes(Rc<Vec<u8>>),
+    /// This package's helper, from `use helper`.
+    ///
+    /// Carries the package it belongs to, because a helper is declared by a
+    /// package's own manifest: two packages in one program have two helpers,
+    /// and neither can reach the other's.
+    Helper {
+        package: usize,
+    },
     /// A stdlib module brought in with `use`.
     Module {
         name: Rc<String>,
@@ -126,6 +142,8 @@ impl Value {
             Value::Builtin(name) => format!("builtin {name}"),
             Value::Variant { tag, .. } => tag.as_str().into(),
             Value::Image(_) => "image".into(),
+            Value::Bytes(_) => "bytes".into(),
+            Value::Helper { .. } => "helper".into(),
             Value::Module { name } => format!("module {name}"),
             Value::UserModule { alias, .. } => format!("module {alias}"),
             Value::TypeRef { name } => format!("type {}", short_type_name(name)),
@@ -185,6 +203,8 @@ impl Value {
             Value::Func { .. } | Value::Object { .. } | Value::Builtin(_) => true,
             // An image always has bytes -- `fs.image` refuses an empty file.
             Value::Image(_) => true,
+            Value::Bytes(bytes) => !bytes.is_empty(),
+            Value::Helper { .. } => true,
             Value::Variant { .. }
             | Value::Module { .. }
             | Value::UserModule { .. }
@@ -247,6 +267,8 @@ impl Value {
             // Two images are the same when their bytes are, not when they
             // came from the same path: a copied file is the same picture.
             (Image(a), Image(b)) => a == b,
+            (Bytes(a), Bytes(b)) => a == b,
+            (Helper { package: a }, Helper { package: b }) => a == b,
             (Labeled { inner, .. }, other) => inner.same(other),
             (other, Labeled { inner, .. }) => other.same(inner),
             _ => false,
@@ -309,6 +331,10 @@ impl fmt::Display for Value {
                 }
             }
             Value::Image(image) => write!(f, "{}", image.summary()),
+            // Never the bytes themselves: a terminal full of binary helps
+            // nobody, which is the same reason an image prints a summary.
+            Value::Bytes(bytes) => write!(f, "<bytes {}>", human_size(bytes.len())),
+            Value::Helper { .. } => write!(f, "<helper>"),
             Value::Module { name } => write!(f, "<module {name}>"),
             Value::UserModule { alias, .. } => write!(f, "<module {alias}>"),
             Value::TypeRef { name } => write!(f, "<type {}>", short_type_name(name)),
@@ -319,5 +345,19 @@ impl fmt::Display for Value {
             // normally. Telemetry export is a labeled sink and redacts.
             Value::Labeled { inner, .. } => write!(f, "{inner}"),
         }
+    }
+}
+
+/// A size a person can read, for the one-line summaries above.
+fn human_size(bytes: usize) -> String {
+    const KB: f64 = 1024.0;
+    const MB: f64 = KB * 1024.0;
+    let n = bytes as f64;
+    if n >= MB {
+        format!("{:.1} MB", n / MB)
+    } else if n >= KB {
+        format!("{:.1} KB", n / KB)
+    } else {
+        format!("{bytes} bytes")
     }
 }
