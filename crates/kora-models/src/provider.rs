@@ -35,8 +35,17 @@ pub(crate) type Transport = dyn Fn(&str, &[(&str, String)], &Value) -> Result<St
 /// (`llama3.1:8b`) survive intact.
 pub fn parse_model_spec(spec: &str) -> Result<ModelConfig, ModelError> {
     let (scheme, model) = spec.split_once(':').ok_or_else(|| {
+        // A gateway's own model id (`openrouter/free`, `anthropic/claude-sonnet-4`)
+        // looks complete on its own, so it is the spelling people reach for
+        // first. Naming it in the error is what turns a second attempt into
+        // the right one.
+        let gateway_hint = if spec.contains('/') {
+            format!(" -- a gateway model id keeps its slashes: `openai:{spec}`")
+        } else {
+            String::new()
+        };
         ModelError::new(format!(
-            "model spec `{spec}` needs a provider prefix, e.g. `openai:gpt-4o` or `local:llama3.1:8b`"
+            "model spec `{spec}` needs a provider prefix, e.g. `openai:gpt-4o` or `local:llama3.1:8b`{gateway_hint}"
         ))
     })?;
     if model.trim().is_empty() {
@@ -781,6 +790,16 @@ mod tests {
             .as_str()
             .unwrap()
             .contains("DATA:"));
+    }
+
+    #[test]
+    fn a_bare_gateway_model_id_is_told_what_prefix_to_add() {
+        let err = parse_model_spec("openrouter/free").unwrap_err();
+        assert!(
+            err.message.contains("`openai:openrouter/free`"),
+            "{}",
+            err.message
+        );
     }
 
     #[test]
