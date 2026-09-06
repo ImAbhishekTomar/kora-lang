@@ -35,9 +35,9 @@ The current codebase includes:
   tool a second time.
 - Classified data, scoped `declassify`, sink policies, and audit output.
 - Safe terminal output: `print` and `write` redact classified leaves using a project-configurable marker.
-- Native `json`, `csv`, `fs`, `http`, `sql`, `time`, `re`, `env`, `notes`, and
-  `pdf` modules, with `fs.image` and `fs.glob` for working over a folder of
-  files. `pdf` reads a document's text and keeps its page boundaries, and says
+- Native `json`, `yaml`, `xml`, `csv`, `fs`, `http`, `sql`, `time`, `re`,
+  `env`, `notes`, and `pdf` modules, with `fs.image` and `fs.glob` for working
+  over a folder of files. `pdf` reads a document's text and keeps its page boundaries, and says
   whether there is a text layer at all, so a scan is never mistaken for an
   empty document.
 - Package helpers: a package may declare one separate program it carries

@@ -214,6 +214,31 @@ def check_stdlib() -> None:
     print(f"  {len(real_modules)} modules, {functions} functions verified")
 
 
+def check_capabilities() -> None:
+    """Every package capability grant should be named where grants are explained.
+
+    Prose, not a table, so nothing else catches it: `helper` shipped with
+    package helpers and went unmentioned in both the language reference and
+    the site's reference page, which is a grant a reader had no way to learn
+    exists.
+    """
+    print("Package capabilities")
+    grants = read("crates/kora-pkg/src/grants.rs")
+    block = re.search(r"pub fn parse\(name: &str\)[^{]*\{(.*?)\.into_iter", grants, re.S)
+    real = re.findall(r"Capability::(\w+)", block.group(1)) if block else []
+    names = [c.lower() for c in real]
+    if not names:
+        fail("could not read the capability list out of crates/kora-pkg/src/grants.rs")
+        return
+
+    for path in ("docs/language.md", "site/app/reference/page.mdx"):
+        text = read(path)
+        for name in names:
+            if f"`{name}`" not in text:
+                fail(f"{path} never mentions the `{name}` capability grant")
+    print(f"  {len(names)} grants verified in 2 pages")
+
+
 def route_exists(route: str) -> bool:
     """Does `/foo` correspond to a page the site actually serves?
 
@@ -378,6 +403,7 @@ def main() -> int:
     check_code_blocks(args.kora)
     check_commands(args.kora)
     check_stdlib()
+    check_capabilities()
     check_links()
     check_site_coverage()
     check_site_assets()

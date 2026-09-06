@@ -544,7 +544,7 @@ a package may depend on something its consumer has never heard of and two
 packages may bind the same bare name to different sources. Types belong to
 their package, so two dependencies may each declare `Config`.
 
-Grants are `net`, `fs`, `sql`, `env`, and `python`, plus `sinks` and `mcp` as
+Grants are `net`, `fs`, `sql`, `env`, `python`, and `helper`, plus `sinks` and `mcp` as
 lists of names and `declassify` as a flag. Absent means nothing. A package
 states what it needs with `[package.requires]`, and a shortfall is reported
 before the program runs.

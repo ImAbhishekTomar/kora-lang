@@ -192,6 +192,21 @@ order:
 - a new page under `site/app/` must be added to `DOCS` in
   `scripts/check_docs.py`, which fails if it is not
 
+**A new stdlib module is two tables, not one.** `kora_runtime::stdlib::module`
+serves a running program; `kora_types::MODULES` feeds editor completion and
+the "no such module" hint. A module added to the first and forgotten in the
+second works perfectly and is invisible in the editor. Both are now pinned
+against each other by `crates/kora-runtime/tests/module_table_test.rs`, in
+both directions and down to the function names, so this is a test failure
+rather than something to remember.
+
+**A new package capability is prose.** `Capability` in
+`crates/kora-pkg/src/grants.rs` is the source of truth, and grants are
+explained in `docs/language.md` and `site/app/reference/page.mdx`. Nothing
+structural links them, so `check_docs.py` checks that every grant is at least
+named in both — which is how `helper` was found missing after package helpers
+shipped.
+
 **Examples and tests**
 
 - `examples/` — a runnable program per feature, listed in `examples/README.md`
