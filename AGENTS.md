@@ -288,6 +288,21 @@ So:
   already runs the CLI from inside `site/`, so setting it would resolve to
   `site/site`. `docs-site.yml` reads the setting out of the `vercel pull`
   output and fails the job if someone sets it, rather than deploying a 404
+- **`docs-site.yml` is the only thing that deploys the site.** It deploys to
+  the `kora-lang` project, which serves `kora-lang.vercel.app`, and it is the
+  only supported route: no `vercel` CLI from a laptop, and no second Vercel
+  project connected to this repository. `site/vercel.json` sets
+  `git.deploymentEnabled: false`, which turns off Vercel's own
+  build-on-push for *any* project pointed at this repo, so importing it into
+  Vercel again produces a project that quietly does nothing instead of a
+  second deployment on every commit
+- **deployments are a budget, not free.** The account allows 100 a day
+  across every project. Two stray imported projects once spent the whole
+  cap by mid-afternoon and the real production deploy failed with
+  `api-deployments-free-per-day`. That is why the workflow triggers on
+  `push` to `main` and on `pull_request` only -- `branches: ["**"]` on
+  `push` spends a second deployment on the same commit as soon as a PR is
+  open on it
 
 ## Releasing
 

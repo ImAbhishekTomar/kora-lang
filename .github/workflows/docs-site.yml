@@ -1,8 +1,12 @@
 name: Documentation site
 
+# Every deployment counts against a daily account-wide cap, so each commit
+# earns exactly one: a preview while it is in review, and a production
+# deploy once it is on main. Deploying on both `push` and `pull_request`
+# would spend two on the same commit.
 on:
   push:
-    branches: ["**"]
+    branches: [main]
     paths:
       - "site/**"
       - "editors/vscode/syntaxes/kora.tmLanguage.json"
