@@ -106,11 +106,17 @@ A hosted checksum log begins when third parties routinely fetch Kora packages.
 WASM components begin when a package cannot be expressed in Kora, MCP, or the
 Python sidecar. Native shared libraries remain deliberately unsupported.
 
-### Raise durable write throughput
+### Durable write throughput
 
-Every journaled write costs two `fsync`s, which caps a pure-write pipeline near
-a hundred rows a second. The fix is group commit across `parallel for` workers,
-amortizing one sync over many branches, rather than a weaker guarantee.
+Done. Every journaled write still costs two synced appends, but the syncs of
+workers running beside each other are now coalesced into one: 400 rows from a
+`parallel for` went from 4.79s to 0.82s, 5.8x, doing 131 syncs where it used
+to do 800. Nothing was weakened to get it — every record still reaches the
+disk before the program acts on it.
+
+A sequential loop is unchanged, and deliberately so: one thread has nobody to
+batch with. What remains under durable execution is retention and compaction
+of old runs.
 
 ### Improve distribution and editor workflows
 

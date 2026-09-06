@@ -5863,8 +5863,13 @@ impl Interpreter {
                 span,
             )),
             Lookup::Fresh { scope, seq } => {
-                journal
-                    .record(
+                // Group commit: append here, then drop the journal's lock
+                // before waiting for the disk, so the workers beside this one
+                // append into the same sync. The ordering that matters is
+                // untouched -- `wait()` returns before this function does,
+                // and so before the caller performs the write.
+                let commit = journal
+                    .record_batched(
                         scope.clone(),
                         seq,
                         site,
@@ -5872,6 +5877,10 @@ impl Interpreter {
                             name: name.to_string(),
                         },
                     )
+                    .map_err(|e| RuntimeError::new(e.to_string(), span))?;
+                drop(journal);
+                commit
+                    .wait()
                     .map_err(|e| RuntimeError::new(e.to_string(), span))?;
                 self.pending_slot = Some((scope, seq));
                 Ok(WriteSlot::Fresh)
@@ -5948,17 +5957,23 @@ impl Interpreter {
                 format!("journal step is {other:?}, but the program reached {name}"),
                 span,
             )),
-            Lookup::Fresh { scope, seq } => journal
-                .record(
-                    scope,
-                    seq,
-                    site,
-                    Effect::Input {
-                        name: name.to_string(),
-                        digest: digest.to_string(),
-                    },
-                )
-                .map_err(|e| RuntimeError::new(e.to_string(), span)),
+            Lookup::Fresh { scope, seq } => {
+                let commit = journal
+                    .record_batched(
+                        scope,
+                        seq,
+                        site,
+                        Effect::Input {
+                            name: name.to_string(),
+                            digest: digest.to_string(),
+                        },
+                    )
+                    .map_err(|e| RuntimeError::new(e.to_string(), span))?;
+                drop(journal);
+                commit
+                    .wait()
+                    .map_err(|e| RuntimeError::new(e.to_string(), span))
+            }
         }
     }
 
@@ -5974,8 +5989,8 @@ impl Interpreter {
             return Ok(());
         };
         let mut journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
-        journal
-            .record(
+        let commit = journal
+            .record_batched(
                 scope,
                 seq,
                 site,
@@ -5984,6 +5999,10 @@ impl Interpreter {
                     result_json: result_json.to_string(),
                 },
             )
+            .map_err(|e| RuntimeError::new(e.to_string(), span))?;
+        drop(journal);
+        commit
+            .wait()
             .map_err(|e| RuntimeError::new(e.to_string(), span))
     }
 }
