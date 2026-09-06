@@ -12,6 +12,7 @@ function SunIcon() {
 }
 
 function Navbar({ lightTheme, onToggleTheme }: { lightTheme: boolean; onToggleTheme: () => void }) {
+  const [menuOpen, setMenuOpen] = useState(false)
   const links = [
     ['Docs', '/language'],
     ['Install', '/installation'],
@@ -22,7 +23,8 @@ function Navbar({ lightTheme, onToggleTheme }: { lightTheme: boolean; onToggleTh
   return <header className="figma-navbar">
     <Link className="figma-logo" href="/"><img src="/logo-kora.png" alt="Kora" /></Link>
     <nav className="figma-nav-links" aria-label="Main navigation">{links.map(([label, href]) => <Link href={href} key={label}>{label}</Link>)}</nav>
-    <div className="figma-nav-actions"><a className="figma-stars" href="https://github.com/ImAbhishekTomar/kora-lang" target="_blank" rel="noreferrer"><span>☆</span> 0 stars</a><button type="button" aria-label={lightTheme ? 'Switch to dark theme' : 'Switch to light theme'} aria-pressed={lightTheme} onClick={onToggleTheme}><SunIcon /></button></div>
+    <div className="figma-nav-actions"><a className="figma-stars" href="https://github.com/ImAbhishekTomar/kora-lang" target="_blank" rel="noreferrer"><span>☆</span> 0 stars</a><button type="button" aria-label={lightTheme ? 'Switch to dark theme' : 'Switch to light theme'} aria-pressed={lightTheme} onClick={onToggleTheme}><SunIcon /></button><button className="figma-mobile-menu-button" type="button" aria-label={menuOpen ? 'Close navigation menu' : 'Open navigation menu'} aria-expanded={menuOpen} onClick={() => setMenuOpen(open => !open)}>☰</button></div>
+    {menuOpen && <nav className="figma-mobile-menu" aria-label="Mobile navigation">{links.map(([label, href]) => <Link href={href} key={label} onClick={() => setMenuOpen(false)}>{label}</Link>)}</nav>}
   </header>
 }
 
