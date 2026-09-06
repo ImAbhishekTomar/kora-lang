@@ -79,12 +79,7 @@ function CodeEditor() {
 }
 
 function InteractivePanel() {
-  return <>
-    <div className="figma-agent-canvas" aria-hidden="true">
-      <span className="graph-dot dot-a" /><span className="graph-dot dot-b" /><span className="graph-dot dot-c" /><span className="graph-dot dot-d" /><span className="graph-dot dot-e" /><span className="graph-dot dot-f" />
-    </div>
-    <div className="figma-interactive"><Terminal /><CodeEditor /><Terminal command /><div className="figma-eval-row"><button type="button"><span>▷</span> Run Kora</button><small>Click to see evaluation metrics report</small></div></div>
-  </>
+  return <div className="figma-interactive"><Terminal /><CodeEditor /><Terminal command /><div className="figma-eval-row"><button type="button"><span>▷</span> Run Kora</button><small>Click to see evaluation metrics report</small></div></div>
 }
 
 export default function NewHomePage() {
