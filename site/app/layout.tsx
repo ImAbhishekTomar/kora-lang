@@ -2,6 +2,7 @@ import { Layout, Navbar } from 'nextra-theme-docs'
 import { getPageMap } from 'nextra/page-map'
 import 'nextra-theme-docs/style.css'
 import '../styles.css'
+import { DocsVersionSelector } from '../components/docs-version-selector'
 
 export const metadata = {
   title: { default: 'Kora', template: '%s – Kora' },
@@ -16,7 +17,7 @@ export default async function RootLayout({ children }: { children: React.ReactNo
         <Layout
           navbar={
             <Navbar logo={<span className="brand"><span className="brand-mark">k</span> kora</span>} projectLink="https://github.com/ImAbhishekTomar/kora-lang">
-              <a className="version-link" href="/versions">Docs versions</a>
+              <DocsVersionSelector />
             </Navbar>
           }
           pageMap={await getPageMap()}
