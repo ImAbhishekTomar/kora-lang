@@ -12,6 +12,18 @@ use kora_syntax::parse;
 
 const KORA_TOML: &str = "[models]\ndefault = \"local:test-model\"\n";
 
+/// What the manifest names, and where it is written. On Windows the helper is
+/// reached through a `.cmd` wrapper, because a script is not an executable
+/// there.
+#[cfg(unix)]
+const HELPER_FILE: &str = "helper.py";
+#[cfg(unix)]
+const HELPER: &str = "lib/render/helper.py";
+#[cfg(windows)]
+const HELPER_FILE: &str = "helper.cmd";
+#[cfg(windows)]
+const HELPER: &str = "lib/render/helper.cmd";
+
 /// A project on disk: a root program, a package beside it, and the package's
 /// helper. Built per test so nothing is shared between them.
 struct Project(PathBuf);
@@ -35,13 +47,23 @@ impl Project {
         path
     }
 
-    /// Write the helper script and make it executable.
+    /// Write the helper script, and whatever it takes to run it here.
+    ///
+    /// A real helper is a compiled binary. This one is a script, so each
+    /// platform needs its own way in: a shebang and the execute bit on Unix,
+    /// and a `.cmd` that calls the interpreter on Windows, where a shebang
+    /// means nothing and a `.py` is not an executable.
     fn helper(&self, body: &str) {
-        let path = self.write("lib/render/helper.py", body);
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
+            let path = self.write(HELPER, body);
             std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        #[cfg(windows)]
+        {
+            self.write("lib/render/helper.py", body);
+            self.write(HELPER, "@python \"%~dp0helper.py\" %*\r\n");
         }
     }
 
@@ -61,7 +83,8 @@ impl Project {
         manifest.push_str("\n[package.helper]\nprotocol = \"stdio/v1\"\ntimeout_secs = 20\n");
         for target in targets {
             manifest.push_str(&format!(
-                "\n[package.helper.{target}]\npath = \"helper.py\"\n"
+                "\n[package.helper.{target}]\npath = \"{}\"\n",
+                HELPER_FILE
             ));
         }
         self.write("lib/render/kora.toml", &manifest);
