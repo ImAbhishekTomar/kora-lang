@@ -570,8 +570,7 @@ mod tests {
 
     impl Tree {
         pub(super) fn new(label: &str, files: &[(&str, &str)]) -> Tree {
-            let root = std::env::temp_dir().join(format!("kora-pkg-{label}"));
-            let _ = std::fs::remove_dir_all(&root);
+            let root = crate::scratch::path(&format!("kora-pkg-{label}"));
             for (path, contents) in files {
                 let full = root.join(path);
                 std::fs::create_dir_all(full.parent().unwrap()).unwrap();
@@ -1079,8 +1078,7 @@ mod grant_tests {
 
     #[test]
     fn a_fetched_tree_matching_the_lock_resolves() {
-        let root = std::env::temp_dir().join("kora-pkg-verified");
-        let _ = std::fs::remove_dir_all(&root);
+        let root = crate::scratch::path("kora-pkg-verified");
         let checkout = root.join(".kora/deps/github.com~org~receipts@abcdef123456");
         std::fs::create_dir_all(checkout.join("src")).unwrap();
         std::fs::write(

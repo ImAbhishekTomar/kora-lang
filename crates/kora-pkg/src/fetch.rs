@@ -208,7 +208,7 @@ mod tests {
     fn results_come_back_in_request_order() {
         // Nothing here reaches the network: every request fails, and what is
         // being pinned is that failure N lands in slot N.
-        let store = std::env::temp_dir().join("kora-fetch-order");
+        let store = crate::scratch::path("kora-fetch-order");
         let requests: Vec<Request> = (0..5)
             .map(|i| Request {
                 url: format!("localhost/definitely-not-a-repo-{i}"),
@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn zero_jobs_still_runs() {
-        let store = std::env::temp_dir().join("kora-fetch-zero");
+        let store = crate::scratch::path("kora-fetch-zero");
         let requests = vec![Request {
             url: "localhost/nope".to_string(),
             reference: GitRef::Default,
@@ -234,7 +234,7 @@ mod tests {
 
     #[test]
     fn no_requests_is_not_an_error() {
-        let store = std::env::temp_dir().join("kora-fetch-none");
+        let store = crate::scratch::path("kora-fetch-none");
         assert!(all(&[], &store, 4).is_empty());
     }
 
