@@ -4,6 +4,9 @@ allowBuilds:
 
 overrides:
   '@tootallnate/once': 2.0.1
+  # GHSA-6gmq-8vp8-gcm6: XML fragment injection when serializing an invalid
+  # EntityReference. Reached four levels down, through nextra's MathJax.
+  '@xmldom/xmldom': '>=0.9.12'
   ajv: 8.18.0
   js-yaml: 4.3.1
   minimatch: 10.2.6
