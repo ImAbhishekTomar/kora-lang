@@ -85,6 +85,13 @@ kora run --replay examples/01_expense_check.ko    # a model call, from a cassett
 kora test examples/07_tests.ko                    # the test runner
 ```
 
+### Run in Replit
+
+Import this GitHub repository into [Replit](https://replit.com/). Replit uses
+the checked-in `.replit` configuration to build Kora and run the deterministic
+`examples/00_basics.ko` example with the Run button. No API key or model is
+needed.
+
 Those work with no API key and no model running: the model calls replay from
 committed cassettes.
 

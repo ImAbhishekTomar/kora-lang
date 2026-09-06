@@ -1,0 +1,6 @@
+entrypoint = "examples/00_basics.ko"
+build = "cargo build --release --package kora-cli"
+run = "./target/release/kora run examples/00_basics.ko"
+
+[gitHubImport]
+requiredFiles = [".replit", "Cargo.toml", "Cargo.lock", "examples/00_basics.ko"]
