@@ -79,7 +79,15 @@ function CodeEditor() {
 }
 
 function InteractivePanel() {
-  return <div className="figma-interactive"><Terminal /><CodeEditor /><Terminal command /><div className="figma-eval-row"><button type="button"><span>▷</span> Run Kora</button><small>Click to see evaluation metrics report</small></div></div>
+  return <div className="figma-interactive">
+    <Terminal /><CodeEditor /><Terminal command />
+    <div className="figma-eval-row"><button type="button"><span>▷</span> Run Kora</button><small>Click to see evaluation metrics report</small></div>
+    <section className="figma-legacy-content" aria-label="Why Kora">
+      <article><strong>01</strong><h2>Typed model calls</h2><p>Define inputs and outputs. Catch issues at compile time, not at runtime.</p></article>
+      <article><strong>02</strong><h2>Replayable runs</h2><p>Deterministic execution you can inspect, share, and replay.</p></article>
+      <article><strong>03</strong><h2>Safe data flow</h2><p>Explicit data boundaries and policies to protect what matters.</p></article>
+    </section>
+  </div>
 }
 
 export default function NewHomePage() {
