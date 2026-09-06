@@ -1,0 +1,26 @@
+---
+title: Examples
+description: Learn Kora by running small complete programs.
+---
+
+# Examples
+
+The repository examples are ordered from basic syntax to agents and packages.
+Clone the repository, then run one from its root:
+
+```bash
+kora run examples/00_basics.ko
+kora run --replay examples/01_expense_check.ko
+kora test examples/07_tests.ko
+```
+
+| Example | What it demonstrates | Run with |
+|---|---|---|
+| [`00_basics.ko`](https://github.com/ImAbhishekTomar/kora-lang/blob/main/examples/00_basics.ko) | types, functions, loops, and records | `kora run` |
+| [`01_expense_check.ko`](https://github.com/ImAbhishekTomar/kora-lang/blob/main/examples/01_expense_check.ko) | typed `analyze` and `Uncertain` | `kora run --replay` |
+| [`02_triage.ko`](https://github.com/ImAbhishekTomar/kora-lang/blob/main/examples/02_triage.ko) | agents, tools, budgets, and parallelism | `kora run --replay` |
+| [`03_salary_review.ko`](https://github.com/ImAbhishekTomar/kora-lang/blob/main/examples/03_salary_review.ko) | classified data and declassification | `kora run --replay` |
+| [`07_tests.ko`](https://github.com/ImAbhishekTomar/kora-lang/blob/main/examples/07_tests.ko) | tests and mocks | `kora test` |
+| [`08_mcp.ko`](https://github.com/ImAbhishekTomar/kora-lang/blob/main/examples/08_mcp.ko) | an MCP server | `kora run` |
+
+The full list is in [`examples/README.md`](https://github.com/ImAbhishekTomar/kora-lang/blob/main/examples/README.md).

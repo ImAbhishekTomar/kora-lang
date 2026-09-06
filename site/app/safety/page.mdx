@@ -1,0 +1,63 @@
+---
+title: Classified data
+description: Keep sensitive values away from models, tools, and output.
+---
+
+# Classified data
+
+Mark a field `classified` when it must not leave its boundary by accident.
+Kora tracks the label through assignments, function calls, lists, and records.
+
+```kora
+type Customer:
+    name: str
+    classified account_number: str
+
+def main():
+    customer = Customer("Ada", "4111-1111-1111-1111")
+    print(customer.account_number)  # prints __CLASSIFIED__
+```
+
+## Change the terminal placeholder
+
+Kora replaces classified leaves in `print` and `write` output with
+`__CLASSIFIED__` by default. Set `classified_placeholder` in your project's
+`kora.toml` to use a different marker:
+
+```toml
+[output]
+classified_placeholder = "[private]"
+```
+
+Now the same program prints:
+
+```text
+[private]
+```
+
+This changes display only. It does not release the value, remove its label, or
+make it safe for a model, tool, file, or network request. Use `declassify` when
+you intentionally approve a value for a named sink.
+
+A classified value cannot reach a model, network request, tool, or file sink
+until you release it for that named sink:
+
+```kora
+def review(customer: Customer) -> str:
+    declassify customer.account_number as account for local_model:
+        result: str = analyze(
+            {"account": account},
+            "Check whether this account is valid"
+        )
+    return result
+```
+
+The release is scoped to the block and the sink. It does not make the value
+safe for other sinks. Check every release before shipping:
+
+```bash
+kora audit program.ko
+```
+
+Classified data is a disclosure control, not prompt-injection protection.
+Treat model and tool output as untrusted text.

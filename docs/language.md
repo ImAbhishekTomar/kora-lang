@@ -1,7 +1,9 @@
 # The Kora language
 
-A reference, not a tutorial. For a guided tour, read the numbered programs in
-[`examples/`](../examples).
+A practical reference. Start with the short [Getting started](../site/app/start-here/page.mdx)
+guide, then use the focused site guides for [analyze and outcomes](../site/app/outcomes/page.mdx),
+[classified data](../site/app/safety/page.mdx), and [agents and budgets](../site/app/agents/page.mdx). For runnable
+programs, read the numbered files in [`examples/`](../examples).
 
 Kora reads like Python. This page covers what is the same, what is different,
 and the constructs Python has no equivalent for.
@@ -11,17 +13,16 @@ and the constructs Python has no equivalent for.
 ## Contents
 
 - [Values and types](#values-and-types)
-- [Images](#images)
 - [Control flow](#control-flow)
-- [Functions, agents, and tools](#functions-agents-and-tools)
 - [Model calls](#model-calls)
-- [Context policies](#context-policies)
 - [Outcomes and `match`](#outcomes-and-match)
 - [Chaining outcomes with `else`](#chaining-outcomes-with-else)
+- [Functions, agents, and tools](#functions-agents-and-tools)
 - [Parallelism](#parallelism)
 - [Budgets](#budgets)
 - [Classified data](#classified-data)
 - [Durability](#durability)
+- [Images](#images)
 - [Modules](#modules)
 - [Packages](#packages)
 - [Package helpers](#package-helpers)

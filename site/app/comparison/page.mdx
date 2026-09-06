@@ -9,6 +9,21 @@ The quickest way to understand Kora is to put the same workflow side by side.
 
 Here, every version reads a support ticket, asks a model to classify it, and prints the result.
 
+## The three approaches side by side
+
+| Concern | Python | TypeScript | Kora |
+|---|---|---|---|
+| Result shape | `BaseModel` plus a client parser | Zod schema plus a client parser | `type Ticket` is the declaration |
+| Model call | `client...parse(...)` | `client.responses.parse(...)` | `analyze(data, "prompt")` |
+| Failure handling | Exceptions or custom result types | Exceptions or custom result types | `Ok`, `Uncertain`, `Exhausted`, `Failed` |
+| Token limits | Application code or framework | Application code or framework | `with budget(...)` |
+| Replay | Test fixtures and mocks | Test fixtures and mocks | `--record` and `--replay` |
+| Sensitive data | Library and review convention | Library and review convention | `classified` and scoped `declassify` |
+| Parallel agents | Workers, queues, or async tasks | Workers, queues, or async tasks | `parallel for` with isolated heaps |
+
+The code below shows the same small workflow in each language. The table is the
+short answer; the longer sections explain the trade-offs.
+
 ## Python
 
 ```python

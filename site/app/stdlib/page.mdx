@@ -1,0 +1,36 @@
+---
+title: Standard library
+description: Practical file, data, time, and network helpers.
+---
+
+# Standard library
+
+Import a standard module with `use`:
+
+```kora
+use json
+use fs
+
+def main():
+    match fs.read("config.json"):
+        case Ok(text):
+            print(json.parse(text))
+        case Err(why):
+            print(why)
+```
+
+| Module | Use it for |
+|---|---|
+| `json` | parse and write JSON |
+| `csv` | read and write CSV rows |
+| `fs` | files, directories, images, and append-only writes |
+| `http` | HTTP requests with safe defaults |
+| `sql` | SQLite queries |
+| `time` | clocks and durations |
+| `re` | regular expressions |
+| `env` | environment variables |
+| `notes` | durable run scratch space |
+| `pdf` | extract PDF text and pages |
+
+See the [standard library reference](https://github.com/ImAbhishekTomar/kora-lang/blob/main/docs/stdlib.md)
+for function signatures and capability requirements.

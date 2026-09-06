@@ -1,11 +1,12 @@
 ---
-title: Start here
+title: Getting started
 description: Install Kora and run your first program.
 ---
 
-# Start here
+# Getting started
 
-Kora is still pre-alpha, but you can install the current release directly.
+This path gets a Kora program running in three minutes. It uses the
+deterministic core, so no API key, model, or extra dependency is required.
 
 ## 1. Install Kora
 
@@ -23,44 +24,64 @@ npm install -g @abhishektomar/kora-cli
 Or follow the complete [Installation guide](/installation) for release
 archives and source builds.
 
-## 2. Check the CLI
+See [Install Kora](/installation) for release archives, source builds, and the
+VS Code extension.
+
+## 2. Write a small program
+
+Create `hello.ko`:
+
+```kora
+type User:
+    name: str
+
+def greet(user: User) -> str:
+    return f"Hello, {user.name}!"
+
+def main():
+    ada = User("Ada")
+    print(greet(ada))
+```
+
+This program uses only a type, a function, a value, and `print`. It does not
+call a model or read a file.
+
+## 3. Check, then run
 
 ```bash
 kora --version
-kora check examples/00_basics.ko
+kora check hello.ko
+kora run hello.ko
 ```
 
-## 3. Run a tiny program
+Expected output:
+
+```text
+Hello, Ada!
+```
+
+## Try a real example
+
+The repository includes a larger program with records, loops, conditions, and
+f-strings:
 
 ```bash
+kora check examples/00_basics.ko
 kora run examples/00_basics.ko
 ```
 
-If you want to build from source instead, install Rust and Cargo:
+## Where to go next
 
-```bash
-git clone https://github.com/ImAbhishekTomar/kora-lang.git
-cd kora-lang
-cargo build --release --locked
-```
+- Learn the everyday syntax in [Language basics](/language).
+- Call a model and handle every result in [Analyze and outcomes](/outcomes).
+- Protect sensitive values with [Classified data](/safety).
+- Build bounded workflows in [Agents and budgets](/agents).
+- Browse runnable programs in [Examples](/examples).
 
-Check that the CLI is ready:
-
-```bash
-./target/release/kora --version
-./target/release/kora run examples/00_basics.ko
-```
-
-## 4. Open it in VS Code
+## Use VS Code
 
 Install [Kora Language from the VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=kora-lang.kora-lang).
 
 Open a `.ko` file. You get syntax colors, file icons, diagnostics, completion,
 hover, go-to-definition, and run/test commands. Set `kora.serverPath` if the
 CLI is not on your `PATH`.
-
-## What should I read next?
-
-- Learn the everyday syntax in [Language](/language).
-- See typed model calls in [Typed model calls](/model-calls).
-- See what is working and what comes next in [Roadmap](/roadmap).

@@ -1,0 +1,33 @@
+---
+title: Testing
+description: Test Kora programs without spending tokens.
+---
+
+# Testing
+
+Put a `test` block in a `.ko` file. Tests use ordinary assertions and can call
+your functions directly.
+
+```kora
+def double(value: int) -> int:
+    return value * 2
+
+test "double works":
+    assert double(21) == 42
+```
+
+Run the file:
+
+```bash
+kora test examples/07_tests.ko
+```
+
+Model calls can replay committed cassettes, so tests stay deterministic and
+free:
+
+```bash
+kora run --replay examples/01_expense_check.ko
+```
+
+Use `mock` when a test needs a typed replacement for a model or tool. Keep
+fixtures small and test both `Ok` and expected outcome branches.

@@ -1,0 +1,48 @@
+---
+title: Tools and MCP
+description: Give model calls controlled tools and inspect each call.
+---
+
+# Tools and MCP
+
+Define a local tool with a typed signature:
+
+```kora
+tool priority_for(severity: str) -> int:
+    if severity == "high":
+        return 1
+    return 3
+
+type Ticket:
+    priority: int
+
+def main():
+    ticket: Ticket = analyze(
+        issue,
+        "Classify this ticket",
+        tools=[priority_for]
+    )
+```
+
+Watch a tool call before it runs:
+
+```kora
+result: Ticket = analyze(issue, "Classify this", tools=[priority_for]) on tool_call(name, args):
+    print(f"calling {name}({args})")
+```
+
+`args` is a mutable dictionary. Editing it changes the arguments sent to the
+tool. Returning a string skips the tool and sends that string back to the
+model.
+
+## MCP servers
+
+```kora
+use mcp github as gh
+
+result: str = analyze(issue, "Find related issues", tools=gh.tools)
+```
+
+Configure how the server starts in `kora.toml`. Each server is its own sink,
+and every request has a deadline. See [Language reference](/reference#mcp-servers)
+for the manifest shape.

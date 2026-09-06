@@ -1,0 +1,57 @@
+---
+title: Analyze and outcomes
+description: Ask for typed data and handle every possible result.
+---
+
+# Analyze and outcomes
+
+`analyze` asks a configured model for a value with the shape you declare. The
+call returns an outcome, so your program handles success, uncertainty, budget
+exhaustion, and provider failure explicitly.
+
+## Define the result type
+
+```kora
+type Expense:
+    merchant: str
+    amount: float
+    category: str
+    policy_violation: bool
+```
+
+The fields become the schema requested from the model. Keep the type small and
+give each field a clear name. Use the type annotation on the left of the call:
+
+```kora
+expense: Expense = analyze(
+    "Steakhouse dinner, $680, client entertainment",
+    "Extract the expense and flag meals over $200"
+)
+```
+
+## Handle all outcomes
+
+```kora
+match expense:
+    case Ok(value):
+        print(f"{value.merchant}: ${value.amount}")
+    case Uncertain(reason):
+        print(f"The model needs review: {reason}")
+    case Exhausted(meter):
+        print(f"Budget used up: {meter}")
+    case Failed(why):
+        print(f"Provider unavailable: {why}")
+```
+
+`Uncertain` means the model answered that it could not decide. `Failed` means
+the provider or a tool did not answer. They are different recovery paths.
+`Exhausted` means a Kora budget was reached; it is not a crash.
+
+## Use a specific model
+
+```kora
+summary: str = analyze(issue, "Summarize in two sentences", model="cheap")
+```
+
+The model name comes from `[models]` in `kora.toml`. See [Model providers](/model-calls)
+for configuration and replay.

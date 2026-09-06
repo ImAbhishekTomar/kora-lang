@@ -768,3 +768,10 @@ something that is not code. Full reasoning in
       an option: it bypasses the capability checks entirely. **Starts when** a
       package genuinely cannot be written in Kora or reached through MCP or
       Python.
+
+
+## This change
+
+- [x] Added a separate Figma-matched landing page at `/new-home` without changing `/`.
+- [x] Connected the new route through the docs navigation and linked back to the current docs home.
+- [x] Verified the new route with a production site build and responsive visual preview.
