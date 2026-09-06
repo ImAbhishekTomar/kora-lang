@@ -51,7 +51,7 @@ const editorLines: ReactNode[] = [
   <>&nbsp;</>,
   <><b>type </b><strong>Receipt</strong>:</>,
   <>    <em>merchant</em>: <strong className="blue">str</strong> <span className="blue">@description</span>(<span className="orange">"This is a salaer name"</span>)</>,
-  <>    <em>amount</em>: <strong className="blue">float</strong></>,
+  <>    <b>classified </b><em>amount</em>: <strong className="blue">float</strong></>,
   <>    <em>currency</em>: <strong className="blue">str</strong></>,
   <>    <em>review_reason</em>: <strong className="blue">str</strong></>,
   <>&nbsp;</>,
