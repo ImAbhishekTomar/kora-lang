@@ -18,6 +18,7 @@ function Navbar() {
   return <header className="figma-navbar">
     <Link className="figma-logo" href="/"><img src="/logo-kora.png" alt="Kora" /></Link>
     <nav className="figma-nav-links" aria-label="Main navigation">{links.map(([label, href]) => <Link href={href} key={label}>{label}</Link>)}</nav>
+    <div className="figma-nav-actions"><a className="figma-stars" href="https://github.com/ImAbhishekTomar/kora-lang" target="_blank" rel="noreferrer"><span>☆</span> 18.1k stars</a></div>
   </header>
 }
 
