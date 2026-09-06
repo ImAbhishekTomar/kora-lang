@@ -3,10 +3,6 @@
 import Link from 'next/link'
 import { useRef, useState, type ReactNode } from 'react'
 
-function KoraIcon() {
-  return <svg className="figma-kora-icon" viewBox="0 0 30 29" aria-hidden="true"><path d="M0 0h30v29H0z" fill="#c2d708" /><path d="m15 5 10 19H5L15 5Z" fill="#0b3b1c" /></svg>
-}
-
 function ArrowRight({ dark = false }: { dark?: boolean }) {
   return <svg className="figma-small-icon" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 7h8M8 4l3 3-3 3" stroke={dark ? '#121212' : '#c2d708'} strokeLinecap="round" strokeWidth="2" /></svg>
 }
@@ -18,7 +14,7 @@ function SunIcon() {
 function Navbar() {
   const links = ['Docs', 'Guides', 'Tutorials', 'Integrations', 'Enterprise', 'Changelog', 'Blog']
   return <header className="figma-navbar">
-    <Link className="figma-logo" href="/new-home"><KoraIcon /><span>Kora</span></Link>
+    <Link className="figma-logo" href="/new-home"><img src="/logo-kora.png" alt="Kora" /></Link>
     <nav className="figma-nav-links" aria-label="Main navigation">{links.map(link => <Link href={link === 'Docs' ? '/language' : '#'} key={link}>{link}</Link>)}</nav>
     <div className="figma-nav-actions">
       <Link href="/start-here">Join Community</Link>
