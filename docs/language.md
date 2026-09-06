@@ -781,8 +781,8 @@ use json
 use json as j
 ```
 
-Eight modules: `json`, `csv`, `http`, `sql`, `fs`, `env`, `time`, `re`.
-Every fallible call returns `Ok` / `Err`. See
+Twelve modules: `json`, `yaml`, `xml`, `csv`, `http`, `sql`, `fs`, `env`,
+`time`, `re`, `notes`, `pdf`. Every fallible call returns `Ok` / `Err`. See
 [the standard library reference](stdlib.md).
 
 ### Your own files
@@ -999,9 +999,10 @@ error: package `reader` is not allowed to use `fs`: no `fs` capability
    = hint: grant it in kora.toml: `[dependencies.reader]` with `grants = { fs = true }`
 ```
 
-The capabilities are `net`, `fs`, `sql`, `env`, and `python`, plus `sinks`
-and `mcp` as lists of names and `declassify` as a flag. `json`, `csv`, `re`,
-and `time` need no grant: they compute over values the caller already holds.
+The capabilities are `net`, `fs`, `sql`, `env`, `python`, and `helper`, plus
+`sinks` and `mcp` as lists of names and `declassify` as a flag. `json`,
+`yaml`, `xml`, `csv`, `re`, and `time` need no grant: they compute over
+values the caller already holds.
 
 Three rules make this hold up:
 

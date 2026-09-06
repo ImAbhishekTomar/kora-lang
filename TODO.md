@@ -5,6 +5,34 @@ principle in [AGENTS.md](AGENTS.md).
 
 ## Current
 
+- [x] **Documentation and editor consistency pass.** Five features landed in
+      quick succession, and the prose that describes the language drifted
+      behind them in six places. Fixed, and where possible made
+      un-driftable rather than merely correct:
+      - `README.md` said "the ten modules" (twelve) and "thirteen runnable
+        programs" (twenty-six).
+      - `docs/language.md` said "Eight modules" and listed the pre-`glob` set.
+      - **`docs/language.md` and `site/app/reference/page.mdx` never
+        mentioned the `helper` capability grant**, which shipped with package
+        helpers. Not staleness but a real hole: a reader had no way to learn
+        the grant exists.
+      - `site/app/roadmap/page.mdx` and `DECISIONS.md`'s ecosystem list both
+        named a module set that predated `yaml` and `xml`.
+      - New `crates/kora-runtime/tests/module_table_test.rs` pins the runtime
+        module table against `kora_types::MODULES` in both directions and
+        down to function names, so a module that is served but not completed
+        (or completed but not served, or a completion for a function that
+        does not exist) is a test failure. That drift is exactly what this
+        pass fixed by hand.
+      - New `check_capabilities` in `scripts/check_docs.py` fails when a
+        `Capability` is not named in both pages that explain grants. Verified
+        by removing `helper` and watching it fail.
+      - `AGENTS.md` now names both traps under the walk-the-whole-list rule.
+      Checked: the VS Code grammar needs nothing — it has no per-module list,
+      and `first` is deliberately excluded from its keyword list (see
+      `DECISIONS.md`); LSP completion reads `kora_types::MODULES`, so `yaml`
+      and `xml` complete already.
+
 - [x] **Group commit: a write-heavy fan-out is no longer one `fsync` at a
       time.** A journaled write is two synced appends (the attempt, then its
       outcome), and a sync is milliseconds of waiting on the disk rather than
