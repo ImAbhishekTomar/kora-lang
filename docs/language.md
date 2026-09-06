@@ -564,6 +564,38 @@ like a sequential one.
 
 Mutating a captured value inside a branch changes only that branch's copy.
 
+### `first`: stop as soon as one branch answers
+
+`budget: max_seconds` stops a scope when time runs out. `first` stops one when
+the work is *done*:
+
+```python
+answer = parallel for mirror in mirrors first:
+    return fetch(mirror)
+```
+
+The loop yields **one value** instead of a list, and once a branch has
+returned one, no further branches are started. A branch that falls off the end
+of its body has not answered the question, so it does not stop the race; a
+race nobody wins is `None`, exactly what such a branch produces.
+
+The winner is the earliest in **input** order, not the earliest to finish.
+Two runs on the same inputs must not disagree about who won because one
+machine had a spare core — this language replays its own runs, and an answer
+that depends on scheduling cannot be replayed. Under `--durable` the winner is
+journaled for the same reason `max_seconds` journals its refusal: a replay
+would race again, and could answer differently, or answer at all where the
+first run did not.
+
+A branch already running is **not** interrupted — the same honest limit
+`max_seconds` has. No further work is started, but a request already sent runs
+to its own transport timeout. Interrupting an in-flight call is the same "did
+it happen" problem that makes a tool call unretryable, and it is not solved
+here.
+
+`first` is contextual, like `stream`: a program that already uses `first` as a
+variable or a function name keeps working.
+
 > Running many branches against one local model is slower than it looks:
 > they contend for the same GPU. Cassettes make repeat runs free.
 

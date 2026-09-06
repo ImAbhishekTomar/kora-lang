@@ -80,6 +80,14 @@ pub enum StmtKind {
         /// Name bound to the result list, when written as
         /// `results = parallel for ...`.
         collect_into: Option<String>,
+        /// `parallel for x in xs first:` — stop as soon as a branch returns
+        /// a value, and yield that one value rather than a list.
+        ///
+        /// A modifier on the loop rather than a `stop()` a branch calls:
+        /// cancellation that reaches out of the branch it was called in is
+        /// the ambient-authority shape this language refuses elsewhere, and
+        /// the loop is the thing that owns starting the work.
+        first: bool,
     },
     /// `use json` / `use json as j` — bring a stdlib module into scope.
     Use {

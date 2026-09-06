@@ -1,0 +1,90 @@
+# Stopping a fan-out as soon as one branch answers.
+#
+# `budget: max_seconds` stops a scope when time runs out. This stops one when
+# the work is *done* -- the other half of cancellation, and the shape every
+# "race these providers" and "search until you find it" program wants.
+#
+# Write `first` after the iterable. The loop then yields one value instead of
+# a list, and no further branches are started once one has answered.
+#
+#   kora run examples/25_race.ko
+
+MIRRORS = ["eu-west", "us-east", "ap-south"]
+CORPUS = ["notes.txt", "contract.txt", "receipt.txt", "invoice.txt"]
+
+# A stand-in for a real lookup. Two of the three mirrors have nothing.
+def fetch(mirror: str) -> str:
+    if mirror == "us-east":
+        return "the document"
+    return None
+
+def contains_clause(name: str) -> bool:
+    return name == "contract.txt"
+
+def main():
+    # 1. Race three mirrors and take the answer. The loop yields the value,
+    #    not a list with two holes in it, because that is what the program
+    #    asked for.
+    answer = parallel for mirror in MIRRORS first:
+        return fetch(mirror)
+    print(f"1. fetched: {answer}")
+
+    # 2. A branch that falls off the end of its body has not answered the
+    #    question, so it does not stop the race. Only a returned value wins.
+    found = parallel for name in CORPUS first:
+        if contains_clause(name):
+            return name
+    print(f"2. the clause is in {found}")
+
+    # 3. Nobody wins, and that is a value too: `None`, exactly what a branch
+    #    that returns nothing produces. There is no separate empty case to
+    #    remember.
+    missing = parallel for name in CORPUS first:
+        if name == "absent.txt":
+            return name
+    print(f"3. searched everything, found {missing}")
+
+    # 4. The winner is the earliest in *input* order, not the earliest to
+    #    finish. Two runs on the same inputs must not disagree about who won
+    #    because one machine had a spare core -- this language replays its
+    #    own runs, and an answer that depends on scheduling cannot be
+    #    replayed. Under `--durable` the winner is journaled for the same
+    #    reason `max_seconds` journals its refusal.
+    ranked = parallel for n in [1, 2, 3, 4, 5] first:
+        if n > 1:
+            return n
+    print(f"4. the lowest index that answered: {ranked}")
+
+    # 5. Without `first`, nothing changes: a plain `parallel for` still runs
+    #    every branch and collects every result, in input order.
+    all_of_them = parallel for n in [1, 2, 3]:
+        return n * 10
+    print(f"5. the plain form still collects: {all_of_them}")
+
+test "a race yields the first answer, not a list":
+    answer = parallel for mirror in MIRRORS first:
+        return fetch(mirror)
+    assert answer == "the document"
+
+test "a branch that answers nothing does not win":
+    found = parallel for name in CORPUS first:
+        if contains_clause(name):
+            return name
+    assert found == "contract.txt"
+
+test "a race nobody wins is None":
+    missing = parallel for name in CORPUS first:
+        if name == "absent.txt":
+            return name
+    assert missing == None
+
+test "the winner is the earliest in input order":
+    ranked = parallel for n in [1, 2, 3, 4, 5] first:
+        if n > 1:
+            return n
+    assert ranked == 2
+
+test "the plain form still collects every branch":
+    all_of_them = parallel for n in [1, 2, 3]:
+        return n * 10
+    assert len(all_of_them) == 3
