@@ -31,6 +31,7 @@ pub mod pdf;
 pub mod re;
 pub mod sql;
 pub mod time;
+pub mod xml;
 pub mod yaml;
 
 /// A native function: name, and the implementation.
@@ -69,13 +70,14 @@ pub fn module(name: &str) -> Option<Module> {
         "notes" => Some(Module::new("notes", notes::EXPORTS)),
         "pdf" => Some(Module::new("pdf", pdf::EXPORTS)),
         "yaml" => Some(Module::new("yaml", yaml::EXPORTS)),
+        "xml" => Some(Module::new("xml", xml::EXPORTS)),
         _ => None,
     }
 }
 
 /// Module names, for "did you mean" hints.
 pub const MODULE_NAMES: &[&str] = &[
-    "json", "csv", "http", "sql", "env", "fs", "time", "re", "notes", "pdf", "yaml",
+    "json", "csv", "http", "sql", "env", "fs", "time", "re", "notes", "pdf", "yaml", "xml",
 ];
 
 // --- shared helpers for module implementations ---

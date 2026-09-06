@@ -1,0 +1,140 @@
+# Reading XML: the four things every other reader gets wrong.
+#
+# XML is what a bank statement, a SOAP response, an RSS feed, and half the
+# government data in the world still look like. Each defect below is real and
+# well known, and none of them can be fixed in the libraries that have it
+# without breaking documents already in the world.
+#
+#   kora run examples/24_xml.ko
+
+use xml
+
+FEED = "<rss><channel><title>Releases</title><item><title>0.1.0</title><link>https://example.com/1</link></item><item><title>0.2.0</title><link>https://example.com/2</link></item></channel></rss>"
+
+def main():
+    # 1. A DOCTYPE is refused. An entity in a DTD can name a local file or an
+    #    internal URL, and a parser that resolves one has been turned into a
+    #    file reader and an HTTP client on the attacker's behalf. Python
+    #    needed a whole separate library (defusedxml) because the standard
+    #    one's defaults could not be changed. The billion-laughs bomb needs a
+    #    DTD too, so the same refusal covers both.
+    xxe = "<!DOCTYPE foo [<!ENTITY x SYSTEM \"file:///etc/passwd\">]><foo>&x;</foo>"
+    match xml.parse(xxe):
+        case Ok(_):
+            print("1. unreachable")
+        case Err(why):
+            print(f"1. {why}")
+
+    # 2. A namespace is a field, not a prefix glued to the tag. ElementTree
+    #    reports `{http://www.w3.org/2005/Atom}entry`, so code strips the
+    #    braces and then matches an element from the wrong namespace.
+    match xml.parse("<feed xmlns=\"http://www.w3.org/2005/Atom\"><entry/></feed>"):
+        case Ok(root):
+            match xml.get(root, "ns"):
+                case Ok(ns):
+                    print(f"2. namespace is {ns}, and the tag is still `feed`")
+                case Err(why):
+                    print(f"2. {why}")
+        case Err(why):
+            print(f"2. {why}")
+
+    # 3. Character data is not split in two. `<p>Hello <b>world</b>!</p>`
+    #    puts "Hello " on p.text and "!" on b.tail everywhere else, so the
+    #    obvious read loses two thirds of the sentence.
+    match xml.parse("<p>Hello <b>world</b>!</p>"):
+        case Ok(p):
+            match xml.text(p):
+                case Ok(t):
+                    print(f"3. {t}")
+                case Err(why):
+                    print(f"3. {why}")
+        case Err(why):
+            print(f"3. {why}")
+
+    # 4. The shape does not depend on the data. xmltodict gives one child as
+    #    an object and two as a list, so a program tested against a two-item
+    #    feed crashes the day a feed has one item. `children` is always a
+    #    list, and so is every `find_all`.
+    match xml.parse(FEED):
+        case Ok(root):
+            match xml.find_all(root, "channel.item.title"):
+                case Ok(titles):
+                    for title in titles:
+                        match xml.text(title):
+                            case Ok(t):
+                                print(f"4. release {t}")
+                            case Err(why):
+                                print(f"4. {why}")
+                case Err(why):
+                    print(f"4. {why}")
+        case Err(why):
+            print(f"4. {why}")
+
+    # 5. A path that goes nowhere says where it stopped, rather than handing
+    #    back an empty result that reads the same as an empty feed.
+    match xml.parse(FEED):
+        case Ok(root):
+            match xml.find(root, "chanel.item"):
+                case Ok(_):
+                    print("5. unreachable")
+                case Err(why):
+                    print(f"5. {why}")
+        case Err(why):
+            print(f"5. {why}")
+
+    # 6. Text out of a document is `unverified`, like any data from outside:
+    #    an XML feed is a standard carrier for a value that ends up in a
+    #    request or a file path.
+    match xml.parse(FEED):
+        case Ok(root):
+            match xml.find(root, "channel.title"):
+                case Ok(title):
+                    match xml.text(title):
+                        case Ok(t):
+                            print(f"6. channel is {t}")
+                        case Err(why):
+                            print(f"6. {why}")
+                case Err(why):
+                    print(f"6. {why}")
+        case Err(why):
+            print(f"6. {why}")
+
+test "a DOCTYPE never parses":
+    match xml.parse("<!DOCTYPE a [<!ENTITY x \"y\">]><a>&x;</a>"):
+        case Ok(_):
+            assert False
+        case Err(_):
+            assert True
+
+test "character data is whole":
+    match xml.parse("<p>Hello <b>world</b>!</p>"):
+        case Ok(p):
+            match xml.text(p):
+                case Ok(t):
+                    assert t == "Hello world!"
+                case Err(_):
+                    assert False
+        case Err(_):
+            assert False
+
+test "one item is a list of one":
+    match xml.parse("<feed><item>a</item></feed>"):
+        case Ok(root):
+            match xml.find_all(root, "item"):
+                case Ok(items):
+                    assert len(items) == 1
+                case Err(_):
+                    assert False
+        case Err(_):
+            assert False
+
+test "an empty result is not a missing path":
+    match xml.parse("<rss><channel/></rss>"):
+        case Ok(root):
+            match xml.find_all(root, "channel.item"):
+                case Ok(items):
+                    assert len(items) == 0
+                case Err(_):
+                    assert False
+        case Err(_):
+            assert False

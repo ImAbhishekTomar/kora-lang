@@ -74,8 +74,14 @@ core schema (no Norway problem), and meters alias expansion against a node
 budget so a "billion laughs" file is a value rather than an out-of-memory
 kill.
 
-`xml` and a dedicated `network` module remain unbuilt. The existing `http`
-module stays the network boundary until a narrower, safer API is ready.
+`xml` has shipped alongside it, on the same terms: a `DOCTYPE` is refused
+outright, so the XXE and billion-laughs attack class has nowhere to start;
+namespaces are kept as data rather than glued to the tag; character data is
+whole; and `children` is a list at every length, so a program's shape does
+not change with the size of its input.
+
+A dedicated `network` module remains unbuilt. The existing `http` module
+stays the network boundary until a narrower, safer API is ready.
 
 PDF *rendering* is not a stdlib gap any more, and deliberately not a stdlib
 feature: it lives in the `pdf_render` package, which carries PDFium in a

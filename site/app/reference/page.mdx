@@ -508,6 +508,12 @@ def pages(document: bytes, dpi: int) -> list:
 
 Three behaviours differ from every mainstream YAML library, deliberately. A duplicate key is an `Err` naming the key and its line, rather than the last one silently winning. Only `true` and `false` are boolean, so `NO`, `yes`, and `off` stay strings (the Norway problem). And alias expansion is metered against a node budget, so a "billion laughs" file is a value to match on rather than an out-of-memory kill. Merge keys (`<<: *defaults`) work, with an explicit key overriding a merged one in either order. A multi-document file handed to `yaml.parse` is an `Err` naming the count, because applying half a bundle silently is worse than stopping. Parsed values are `unverified`.
 
+### `xml`
+
+`xml.parse(text)` returns the root element; `xml.find(element, "channel.item")` and `xml.find_all(...)` walk a path of local tag names; `xml.text(element)` is all of its character data; `xml.get` is the `json.get` path walk. An element is an ordinary value: `{"tag", "ns", "attrs", "text", "children"}`.
+
+Four things differ from every mainstream XML reader, deliberately. A `DOCTYPE` is refused outright, so an entity cannot name a local file or an internal URL (XXE) and the "billion laughs" bomb has nowhere to start, since it needs a DTD too. A namespace is a field rather than a `{uri}` prefix glued to the tag, and lookups match the local name, so a document that gains a default namespace does not break every query. `text` is all of an element's character data in document order, with no `.tail` for the rest to hide in. And `children` is always a list, at any length, so the shape does not change with the size of the input. A dead end partway through a path is an `Err` naming the segment; no matches at the end is an empty list. There is no `xml.parse(text, Type)`: in XML a value can live in an attribute or a child element, and guessing which would be the same mistake. Parsed text is `unverified`.
+
 ### Packages
 
 A package is named, not pathed. Where it comes from and what it may do live in
