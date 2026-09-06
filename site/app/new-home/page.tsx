@@ -32,14 +32,10 @@ function Navbar() {
 function HeroInfo() {
   return <div className="figma-hero-info">
     <div className="figma-badge"><i />KORA IS A LANGUAGE, NOT A WRAPPER</div>
-    <h1>Build AI Agents<br />thats Keep their<br />Promises</h1>
+    <h1>Build AI agents<br />that finish what<br />they start.</h1>
     <p>Kora is a language for defining reliable AI workflows. Strongly typed, repayable, and safe by design — from prototype to production.</p>
     <div className="figma-hero-actions"><Link className="figma-get-started" href="/start-here">Get Started <ArrowRight dark /></Link><Link className="figma-explore" href="/language">Explore Guides</Link></div>
   </div>
-}
-
-function PlaceholderGrid() {
-  return <div className="figma-placeholder-grid"><div /><div /><div /><div /></div>
 }
 
 function TerminalHeader({ colored = false }: { colored?: boolean }) {
@@ -91,12 +87,12 @@ function InteractivePanel() {
 }
 
 export default function NewHomePage() {
-  const [rightWidth, setRightWidth] = useState(52)
+  const [rightWidth, setRightWidth] = useState(58)
   const dragging = useRef(false)
   return <main className="figma-landing" onMouseMove={event => { if (dragging.current) setRightWidth(Math.max(30, Math.min(65, 100 - event.clientX / window.innerWidth * 100))) }} onMouseUp={() => { dragging.current = false }}>
     <Navbar />
     <div className="figma-main" style={{ gridTemplateColumns: `${100 - rightWidth}% 4px ${rightWidth}%` }}>
-      <section className="figma-left-panel"><HeroInfo /><PlaceholderGrid /></section>
+      <section className="figma-left-panel"><HeroInfo /></section>
       <button className="figma-resize" type="button" aria-label="Resize panels" onMouseDown={() => { dragging.current = true }} />
       <section className="figma-right-panel"><InteractivePanel /></section>
     </div>
