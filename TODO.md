@@ -633,6 +633,6 @@ something that is not code. Full reasoning in
 
 ## This change
 
-- [x] Added a separate Figma-inspired landing page at `/new-home` without changing `/`.
+- [x] Added a separate Figma-matched landing page at `/new-home` without changing `/`.
 - [x] Connected the new route through the docs navigation and linked back to the current docs home.
-- [x] Verified the new route with a production site build and desktop visual preview.
+- [x] Verified the new route with a production site build and responsive visual preview.

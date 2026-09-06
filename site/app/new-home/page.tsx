@@ -1,66 +1,107 @@
-import Link from 'next/link'
-import { ArrowUpRight, Check, CirclePlay, Code2, GitBranch, Menu, ShieldCheck, Sparkles, Terminal, Users } from 'lucide-react'
+'use client'
 
-const features = [
-  { icon: ShieldCheck, title: 'Typed by default', copy: 'Catch bad assumptions before they reach production.' },
-  { icon: Sparkles, title: 'Built for agents', copy: 'Give every workflow a clear, durable shape.' },
-  { icon: Users, title: 'Human in the loop', copy: 'Keep people in control when decisions matter.' },
-  { icon: Code2, title: 'Easy to read', copy: 'Write agent systems that feel like ordinary code.' },
+import Link from 'next/link'
+import { useRef, useState, type ReactNode } from 'react'
+
+function KoraIcon() {
+  return <svg className="figma-kora-icon" viewBox="0 0 30 29" aria-hidden="true"><path d="M0 0h30v29H0z" fill="#c2d708" /><path d="m15 5 10 19H5L15 5Z" fill="#0b3b1c" /></svg>
+}
+
+function ArrowRight({ dark = false }: { dark?: boolean }) {
+  return <svg className="figma-small-icon" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 7h8M8 4l3 3-3 3" stroke={dark ? '#121212' : '#c2d708'} strokeLinecap="round" strokeWidth="2" /></svg>
+}
+
+function SunIcon() {
+  return <svg className="figma-sun" viewBox="0 0 18 18" aria-hidden="true"><circle cx="9" cy="9" r="3" stroke="#8e9aa8" strokeWidth="2" /><path d="M9 1v2M9 15v2M1 9h2M15 9h2M3.22 3.22l1.42 1.42M13.36 13.36l1.42 1.42M14.78 3.22l-1.42 1.42M4.64 13.36l-1.42 1.42" stroke="#8e9aa8" strokeLinecap="round" strokeWidth="2" /></svg>
+}
+
+function Navbar() {
+  const links = ['Docs', 'Guides', 'Tutorials', 'Integrations', 'Enterprise', 'Changelog', 'Blog']
+  return <header className="figma-navbar">
+    <Link className="figma-logo" href="/new-home"><KoraIcon /><span>Kora</span></Link>
+    <nav className="figma-nav-links" aria-label="Main navigation">{links.map(link => <Link href={link === 'Docs' ? '/language' : '#'} key={link}>{link}</Link>)}</nav>
+    <div className="figma-nav-actions">
+      <Link href="/start-here">Join Community</Link>
+      <Link className="figma-discord" href="/start-here"><span className="figma-message-icon">⌁</span> Discord</Link>
+      <a className="figma-stars" href="https://github.com/ImAbhishekTomar/kora-lang" target="_blank" rel="noreferrer"><span>☆</span> 18.1k stars</a>
+      <button type="button" aria-label="Change theme"><SunIcon /></button>
+    </div>
+  </header>
+}
+
+function HeroInfo() {
+  return <div className="figma-hero-info">
+    <div className="figma-badge"><i />KORA IS A LANGUAGE, NOT A WRAPPER</div>
+    <h1>Build AI Agents<br />thats Keep their<br />Promises</h1>
+    <p>Kora is a language for defining reliable AI workflows. Strongly typed, repayable, and safe by design — from prototype to production.</p>
+    <div className="figma-hero-actions"><Link className="figma-get-started" href="/start-here">Get Started <ArrowRight dark /></Link><Link className="figma-explore" href="/language">Explore Guides</Link></div>
+  </div>
+}
+
+function PlaceholderGrid() {
+  return <div className="figma-placeholder-grid"><div /><div /><div /><div /></div>
+}
+
+function TerminalHeader({ colored = false }: { colored?: boolean }) {
+  return <div className="figma-terminal-header">{colored ? <><i className="red" /><i className="yellow" /><i className="green" /></> : <><i /><i /><i /></>}</div>
+}
+
+function Terminal({ command = false }: { command?: boolean }) {
+  return <div className="figma-terminal"><TerminalHeader />{command ? <div className="figma-terminal-command"><span>$</span> kora run agent_classify_receipt.ko</div> : <div className="figma-terminal-body"><div><span>$</span> brew tap ImAbhishekTomar/tap</div><div><span>$</span> brew install imabhishektomar/tap/kora</div></div>}</div>
+}
+
+const editorLines: ReactNode[] = [
+  <><b>use</b> fs</>,
+  <>&nbsp;</>,
+  <><b>type </b><strong>Receipt</strong>:</>,
+  <>    <em>merchant</em>: <strong className="blue">str</strong> <span className="blue">@description</span>(<span className="orange">"This is a salaer name"</span>)</>,
+  <>    <em>amount</em>: <strong className="blue">float</strong></>,
+  <>    <em>currency</em>: <strong className="blue">str</strong></>,
+  <>    <em>purchase_date</em>: <strong className="blue">str</strong></>,
+  <>    <em>category</em>: <strong className="blue">str</strong></>,
+  <>    <em>needs_review</em>: <strong className="blue">bool</strong></>,
+  <>    <em>review_reason</em>: <strong className="blue">str</strong></>,
+  <>&nbsp;</>,
+  <><b>def </b><span className="green">agent_classify_receipt</span>(<em>text</em>: <strong className="blue">str</strong>) -&gt; <strong className="blue">str</strong>:</>,
+  <>    <em>receipt</em>: <strong>Receipt</strong> = <span className="green">analyze</span>(<em>text</em>, <span className="orange">"Extract receipt fields. Dates as YYYY-MM-DD."</span>)</>,
+  <>&nbsp;</>,
+  <>    <b>match </b><em>receipt</em>:</>,
+  <>        <b>case </b><strong>Ok</strong>(<em>r</em>):</>,
+  <>            <b>if </b><em>r</em>.needs_review:</>,
+  <>                <b>return </b><span className="orange">f"REVIEW {'{'}r.merchant{'}'}: {'{'}r.amount{'}'} {'{'}r.currency{'}'}"</span></>,
+  <>            <b>return </b><span className="orange">f"OK {'{'}r.merchant{'}'}: {'{'}r.amount{'}'} on {'{'}r.purchase_date{'}'}"</span></>,
+  <>        <b>case </b><strong>Uncertain</strong>(<em>reason</em>):</>,
+  <>            <b>return </b><span className="orange">f"SKIP could not classify receipt: {'{'}reason{'}'}"</span></>,
+  <>        <b>case </b><strong>Exhausted</strong>(<em>meter</em>):</>,
+  <>            <b>return </b><span className="orange">f"SKIP budget exhausted: {'{'}meter{'}'}"</span></>,
+  <>        <b>case </b><strong>Failed</strong>(<em>why</em>):</>,
+  <>            <b>return </b><span className="orange">f"RETRY provider did not answer: {'{'}why{'}'}"</span></>,
+  <>&nbsp;</>,
+  <><b>def </b><span className="green">main</span>():</>,
+  <>    <b>match </b><em>fs</em>.<span className="green">read</span>(<span className="orange">"examples/receipts/sample.txt"</span>):</>,
+  <>        <b>case </b><strong>Ok</strong>(<em>text</em>):</>,
+  <>            <span className="green">print</span>(<span className="green">agent_classify_receipt</span>(<em>text</em>))</>,
+  <>        <b>case </b><strong>Err</strong>(<em>reason</em>):</>,
+  <>            <span className="green">print</span>(<span className="orange">f"Could not read receipt: {'{'}reason{'}'}"</span>)</>,
 ]
 
-function CodePanel() {
-  return (
-    <div className="new-landing-code-stack" aria-label="Kora code example">
-      <div className="new-landing-terminal-bar"><span /><span /><span /><code>kora run examples/research.ko</code></div>
-      <div className="new-landing-code-panel">
-        <div className="code-line"><i>1</i><span><b className="code-purple">agent</b> <b className="code-blue">Researcher</b>(topic: <b className="code-yellow">string</b>) {'{'}</span></div>
-        <div className="code-line"><i>2</i><span>&nbsp;&nbsp;<b className="code-purple">with</b> budget(max_tokens: <b className="code-green">2400</b>):</span></div>
-        <div className="code-line"><i>3</i><span>&nbsp;&nbsp;&nbsp;&nbsp;plan = <b className="code-blue">analyze</b>(topic, <em>"Find the key questions"</em>)</span></div>
-        <div className="code-line"><i>4</i><span>&nbsp;&nbsp;&nbsp;&nbsp;answer = <b className="code-blue">analyze</b>(plan, <em>"Write a useful brief"</em>)</span></div>
-        <div className="code-line"><i>5</i><span>&nbsp;&nbsp;&nbsp;&nbsp;<b className="code-purple">return</b> answer</span></div>
-        <div className="code-line"><i>6</i><span>{'}'}</span></div>
-      </div>
-      <div className="new-landing-terminal-bar new-landing-result-bar"><span /><span /><span /><code>run complete</code></div>
-      <div className="new-landing-output"><span className="new-landing-output-check"><Check size={13} /></span><span>Research brief ready</span><small>1.84s</small></div>
-      <div className="new-landing-run-action"><button type="button"><CirclePlay size={14} fill="currentColor" /> Run Kora</button><span>Click to see evaluation traces</span></div>
-    </div>
-  )
+function CodeEditor() {
+  return <div className="figma-code-editor"><div className="figma-editor-header"><div className="figma-window-controls"><i className="red" /><i className="yellow" /><i className="green" /></div><div><strong>K</strong> agent_classify_receipt.ko</div><span /></div><pre>{editorLines.map((line, index) => <code key={index}><small>{index + 1}</small><span>{line}</span></code>)}</pre></div>
+}
+
+function InteractivePanel() {
+  return <div className="figma-interactive"><Terminal /><CodeEditor /><Terminal command /><div className="figma-eval-row"><button type="button"><span>▷</span> Run Kora</button><small>Click to see evaluation metrics report</small></div></div>
 }
 
 export default function NewHomePage() {
-  return (
-    <main className="kora-new-landing">
-      <header className="new-landing-nav">
-        <Link className="new-landing-logo" href="/new-home"><img src="/kora-icon-s.svg" alt="" /><span>Kora</span></Link>
-        <nav aria-label="Main navigation">
-          <Link href="/language">Docs</Link>
-          <Link href="/start-here">Guides</Link>
-          <Link href="/reference">Reference</Link>
-          <Link href="/ecosystem">Ecosystem</Link>
-          <Link href="/roadmap">Roadmap</Link>
-        </nav>
-        <div className="new-landing-nav-actions">
-          <Link href="/start-here">Join community <ArrowUpRight size={14} /></Link>
-          <a className="new-landing-icon-link" href="https://github.com/ImAbhishekTomar/kora-lang" target="_blank" rel="noreferrer" aria-label="Kora on GitHub"><GitBranch size={16} /></a>
-          <button className="new-landing-menu" type="button" aria-label="Open menu"><Menu size={18} /></button>
-        </div>
-      </header>
-
-      <section className="new-landing-hero">
-        <div className="new-landing-hero-copy">
-          <p className="new-landing-eyebrow"><span>✦</span> Kora is a language, not a wrapper</p>
-          <h1>Build AI agents<br />that keep their<br /><em>promises.</em></h1>
-          <p className="new-landing-intro">A language for reliable AI workflows. Strongly typed, replayable, and safe by design - from prototype to production.</p>
-          <div className="new-landing-actions"><Link className="new-landing-primary" href="/start-here">Get started <ArrowUpRight size={16} /></Link><Link className="new-landing-secondary" href="/language">Explore guides <ArrowUpRight size={16} /></Link></div>
-        </div>
-        <div className="new-landing-hero-demo"><CodePanel /></div>
-      </section>
-
-      <section className="new-landing-features" aria-label="Kora features">
-        {features.map(({ icon: Icon, title, copy }) => <article key={title}><Icon size={21} strokeWidth={1.6} /><h2>{title}</h2><p>{copy}</p></article>)}
-      </section>
-
-      <footer className="new-landing-footer"><span><Terminal size={15} /> Kora</span><span>Agent-first, by design.</span><Link href="/">View the current docs home <ArrowUpRight size={14} /></Link></footer>
-    </main>
-  )
+  const [rightWidth, setRightWidth] = useState(52)
+  const dragging = useRef(false)
+  return <main className="figma-landing" onMouseMove={event => { if (dragging.current) setRightWidth(Math.max(30, Math.min(65, 100 - event.clientX / window.innerWidth * 100))) }} onMouseUp={() => { dragging.current = false }}>
+    <Navbar />
+    <div className="figma-main" style={{ gridTemplateColumns: `${100 - rightWidth}% 4px ${rightWidth}%` }}>
+      <section className="figma-left-panel"><HeroInfo /><PlaceholderGrid /></section>
+      <button className="figma-resize" type="button" aria-label="Resize panels" onMouseDown={() => { dragging.current = true }} />
+      <section className="figma-right-panel"><InteractivePanel /></section>
+    </div>
+  </main>
 }
