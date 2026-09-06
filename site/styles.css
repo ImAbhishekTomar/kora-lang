@@ -256,6 +256,25 @@ body:has(.figma-landing) { overflow:hidden; }
 @media (max-width:800px) { .figma-navbar { padding-inline:1.25rem; }.figma-left-panel { padding-left:1.25rem; } }
 @media (max-width:520px) { .figma-navbar { padding-inline:1rem; }.figma-left-panel { padding-left:1rem; } }
 
+/* Documentation theme: use the landing page palette without changing its layout. */
+body:has(.nextra-sidebar) { --docs-accent:#5f7000; --docs-ink:#12231c; --docs-muted:#53645d; --docs-paper:#f5f7f2; --docs-line:#d5ddd6; background:var(--docs-paper); color:var(--docs-ink); font-family:'Figma Geist',Arial,sans-serif; }
+body:has(.nextra-sidebar) .nextra-navbar { border-color:var(--docs-line); background:rgba(255,255,255,.88); backdrop-filter:blur(14px); }
+body:has(.nextra-sidebar) .nextra-sidebar { border-color:var(--docs-line); background:#eef1ed; }
+body:has(.nextra-sidebar) .nextra-toc { color:var(--docs-muted); }
+body:has(.nextra-sidebar) article h1,body:has(.nextra-sidebar) article h2,body:has(.nextra-sidebar) article h3 { color:var(--docs-ink); letter-spacing:-.025em; }
+body:has(.nextra-sidebar) article p,body:has(.nextra-sidebar) article li { color:var(--docs-muted); }
+body:has(.nextra-sidebar) article a { color:#167b63; }
+body:has(.nextra-sidebar) article pre { border:1px solid var(--docs-line); border-radius:10px; background:#ffffff; box-shadow:0 8px 24px rgba(34,52,40,.06); }
+body:has(.nextra-sidebar) article :not(pre)>code { border:1px solid #dce5dc; background:#edf2ec; color:#415400; }
+html.dark body:has(.nextra-sidebar) { --docs-accent:#c2d708; --docs-ink:#f3f2ee; --docs-muted:#a9aaa5; --docs-paper:#121212; --docs-line:#2d3530; background:var(--docs-paper); color:var(--docs-ink); }
+html.dark body:has(.nextra-sidebar) .nextra-navbar { border-color:#1f1f2e; background:rgba(11,11,15,.9); }
+html.dark body:has(.nextra-sidebar) .nextra-sidebar { border-color:#2d3530; background:#171a18; }
+html.dark body:has(.nextra-sidebar) article h1,html.dark body:has(.nextra-sidebar) article h2,html.dark body:has(.nextra-sidebar) article h3 { color:var(--docs-ink); }
+html.dark body:has(.nextra-sidebar) article p,html.dark body:has(.nextra-sidebar) article li { color:var(--docs-muted); }
+html.dark body:has(.nextra-sidebar) article a { color:#c2d708; }
+html.dark body:has(.nextra-sidebar) article pre { border-color:#2d3530; background:#08080c; box-shadow:none; }
+html.dark body:has(.nextra-sidebar) article :not(pre)>code { border-color:#2d3530; background:#1a211c; color:#c2d708; }
+
 /* Internals page */
 .internals-page {
   --i-text: var(--kora-ink);
