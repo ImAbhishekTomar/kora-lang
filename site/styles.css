@@ -251,6 +251,10 @@ body:has(.figma-landing) { overflow:hidden; }
 @media (max-width:520px) { .figma-nav-links { display:none; }.figma-mobile-menu-button { display:block; }.figma-logo { width:95px; }.figma-nav-actions { margin-left:auto; }.figma-nav-actions .figma-stars { display:flex !important; padding:.4rem; }.figma-stars span { font-size:1rem; }.figma-mobile-menu { left:auto; width:min(15rem,calc(100vw - 2rem)); } }
 @media (min-width:801px) { .figma-nav-actions .figma-mobile-menu-button { display:none; } }
 .figma-theme-light .figma-mobile-menu { border-color:#d5ddd6; background:#ffffff; box-shadow:0 14px 30px rgba(34,52,40,.14); }.figma-theme-light .figma-mobile-menu a { color:#121212; }.figma-theme-light .figma-mobile-menu a:hover { background:#eef1ed; }
+.figma-navbar { padding-inline:4.1%; }.figma-left-panel { padding-left:4.1%; }
+@media (max-width:1100px) { .figma-navbar { padding-inline:2rem; }.figma-left-panel { padding-left:2rem; } }
+@media (max-width:800px) { .figma-navbar { padding-inline:1.25rem; }.figma-left-panel { padding-left:1.25rem; } }
+@media (max-width:520px) { .figma-navbar { padding-inline:1rem; }.figma-left-panel { padding-left:1rem; } }
 
 /* Internals page */
 .internals-page {
