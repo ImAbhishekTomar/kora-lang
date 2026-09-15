@@ -1,0 +1,53 @@
+---
+title: Kora 0.3.1
+description: Release notes, compatibility information, and migration guidance for Kora 0.3.1.
+---
+
+# Kora `0.3.1`
+
+Published 16 September 2026. [View the release history and downloads](https://github.com/ImAbhishekTomar/kora-lang/releases).
+
+`0.3.1` is a packaging fix. The language, runtime, and editor support are
+unchanged from [`0.3.0`](/releases/0.3.0).
+
+## Changes
+
+- `kora-helper` is published to crates.io before the crates that depend on it.
+
+## Why this release exists
+
+`kora-helper` is a workspace member and a dependency of `kora-runtime`, but it
+was never listed in the crates.io publish step, so it had never been published.
+Nothing revealed that until `0.3.0`: the crate arrived with the confined
+package helpers, after `kora-runtime` had already published at `0.2.0`.
+
+`cargo publish -p kora-runtime` stops at "no matching package named
+`kora-helper` found" before it uploads anything, and the publish script stops
+with it. `0.3.0` therefore reached crates.io as six crates rather than ten.
+
+**`kora-runtime`, `kora-lsp`, and `kora-dap` have no `0.3.0` on crates.io.**
+They resume at `0.3.1`. Every other distribution channel published `0.3.0`
+normally, so this affects only projects that depend on those three crates
+directly from crates.io. Depend on `0.3.1` or later.
+
+## Breaking changes
+
+None.
+
+## Migration from `0.3.0`
+
+None needed. If a `Cargo.toml` pins `kora-runtime`, `kora-lsp`, or `kora-dap`
+at `0.3.0`, move it to `0.3.1`, since that version was never published:
+
+```bash
+cargo update -p kora-runtime
+kora --version
+```
+
+Installing from Homebrew, the VS Code Marketplace, or a release archive needs
+nothing beyond the normal upgrade.
+
+## Compatibility
+
+Kora remains pre-alpha. There is no stable language or package compatibility
+promise yet.

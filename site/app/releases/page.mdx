@@ -12,6 +12,14 @@ every version you adopt rather than assuming compatibility.
 
 ## Current release
 
+### `0.3.1` - 16 September 2026
+
+A packaging fix: `kora-helper` is published before the crates that depend on
+it, so `kora-runtime`, `kora-lsp`, and `kora-dap` reach crates.io again. The
+language is unchanged from `0.3.0`.
+
+[Read the `0.3.1` release notes](/releases/0.3.1)
+
 ### `0.3.0` - 16 September 2026
 
 Programs checked before they run, a lexical fence on what reaches a model, a
@@ -39,6 +47,7 @@ vendoring.
 
 | Version | Published | What it established |
 | --- | --- | --- |
+| [`0.3.1`](/releases/0.3.1) | 16 September 2026 | Complete crates.io publication for the 0.3 line |
 | [`0.3.0`](/releases/0.3.0) | 16 September 2026 | Pre-run checking, context fences, and time-bounded budgets |
 | [`0.2.0`](/releases/0.2.0) | 30 August 2026 | Agent workflows and explicit provider outcomes |
 | [`0.1.0`](/releases/0.1.0) | 29 August 2026 | Secure, reproducible package dependencies |
