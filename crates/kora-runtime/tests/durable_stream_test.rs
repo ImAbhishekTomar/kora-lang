@@ -300,6 +300,99 @@ fn a_completed_stream_replays_its_pieces_exactly_once() {
     );
 }
 
+#[test]
+fn a_context_bounded_stream_replays_pruning_before_its_output_effects() {
+    const PROGRAM: &str = r#"
+def main():
+    with context(max_input_tokens = 1000, reserve_output_tokens = 100):
+        answer: str = analyze("q", "greet") on token(t):
+            print(f"piece: {t}")
+    match answer:
+        case Ok(text):
+            approval = ask_human("approve?", text)
+            print(f"approved: {approval}")
+"#;
+
+    let scratch = Scratch::new("context-replay");
+    let path = scratch.run_path("r1");
+    let (endpoint, requests) = spawn_streaming_provider(hello_frames());
+    let cfg = config(&endpoint);
+
+    let (first, mut run, err) = run_durable(
+        &cfg,
+        PROGRAM,
+        Run::new("r1".into(), "test.ko".into()),
+        path.clone(),
+    );
+    assert!(
+        err.is_none(),
+        "the first run should suspend cleanly: {err:?}"
+    );
+    assert_eq!(run.status, RunStatus::Suspended);
+    assert_eq!(first, vec!["piece: hel", "piece: lo ", "piece: there"]);
+    assert!(run
+        .entries
+        .iter()
+        .any(|entry| matches!(entry.effect, kora_runtime::journal::Effect::Context { .. })));
+
+    {
+        let mut journal = Journal::open(run, path.clone()).unwrap();
+        journal.answer("yes").unwrap();
+        run = journal.run().clone();
+    }
+
+    let (second, completed, err) = run_durable(&cfg, PROGRAM, run, path);
+    assert_eq!(err, None, "the resume must not diverge");
+    assert_eq!(completed.status, RunStatus::Completed);
+    assert_eq!(second, vec!["approved: yes"]);
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        1,
+        "a completed stream must not reach the provider again"
+    );
+}
+
+#[test]
+fn a_streamed_context_refusal_advances_its_empty_slot_on_resume() {
+    const PROGRAM: &str = r#"
+def main():
+    with context(max_input_tokens = 1, reserve_output_tokens = 0):
+        answer: str = analyze("q", "greet") on token(t):
+            print(f"piece: {t}")
+    match answer:
+        case Failed(reason):
+            approval = ask_human("continue?", reason)
+            print(f"approved: {approval}")
+"#;
+
+    let scratch = Scratch::new("context-refusal");
+    let path = scratch.run_path("r1");
+    let (endpoint, requests) = spawn_streaming_provider(hello_frames());
+    let cfg = config(&endpoint);
+
+    let (_, mut run, err) = run_durable(
+        &cfg,
+        PROGRAM,
+        Run::new("r1".into(), "test.ko".into()),
+        path.clone(),
+    );
+    assert!(err.is_none(), "the refusal should suspend cleanly: {err:?}");
+    assert_eq!(run.status, RunStatus::Suspended);
+    assert_eq!(requests.load(Ordering::SeqCst), 0);
+
+    {
+        let mut journal = Journal::open(run, path.clone()).unwrap();
+        journal.answer("yes").unwrap();
+        run = journal.run().clone();
+    }
+
+    let (output, completed, err) = run_durable(&cfg, PROGRAM, run, path);
+    assert_eq!(err, None, "the empty context slot must not diverge");
+    assert_eq!(completed.status, RunStatus::Completed);
+    assert_eq!(output, vec!["approved: yes"]);
+    assert_eq!(requests.load(Ordering::SeqCst), 0);
+}
+
 /// The journal a crash mid-stream leaves behind: the pieces already handed
 /// to the program are on disk, the model call has no outcome, and the run
 /// never reached a terminal status.
@@ -335,6 +428,27 @@ fn interrupted_mid_stream(mut run: Run, keep_pieces: usize) -> Run {
     }
     run.entries = kept;
     run.status = RunStatus::Running;
+    run
+}
+
+fn interrupted_after_descendant_effect(mut run: Run) -> Run {
+    use kora_runtime::journal::{Effect, Scope};
+
+    let root = Scope::root();
+    let mut kept = Vec::new();
+    for mut entry in run.entries {
+        if entry.scope == root && matches!(entry.effect, Effect::Model { .. }) {
+            entry.effect = Effect::Attempted {
+                name: "a streamed analyze()".to_string(),
+            };
+            kept.push(entry);
+        } else if entry.scope != root {
+            kept.push(entry);
+        }
+    }
+    run.entries = kept;
+    run.status = RunStatus::Running;
+    run.pending = None;
     run
 }
 
@@ -417,6 +531,48 @@ fn a_crash_before_any_piece_escaped_is_sent_again() {
             "ok: hello there",
             "after"
         ]
+    );
+}
+
+#[test]
+fn a_descendant_handler_effect_prevents_resending_an_interrupted_stream() {
+    const PROGRAM: &str = r#"use time
+
+def main():
+    answer: str = analyze("q", "greet") on token(t):
+        stamps = parallel for item in [t]:
+            return time.now()
+    match answer:
+        case Ok(text):
+            print(f"ok: {text}")
+        case Failed(reason):
+            print("failed")
+"#;
+
+    let scratch = Scratch::new("descendant-crash");
+    let path = scratch.run_path("r1");
+    let (endpoint, requests) = spawn_streaming_provider(hello_frames());
+    let cfg = config(&endpoint);
+
+    let (_, run, err) = run_durable(
+        &cfg,
+        PROGRAM,
+        Run::new("r1".into(), "test.ko".into()),
+        path.clone(),
+    );
+    assert!(err.is_none(), "the completed fixture should run: {err:?}");
+    assert!(run.entries.iter().any(|entry| !entry.scope.0.is_empty()));
+
+    let crashed = interrupted_after_descendant_effect(run);
+    std::fs::remove_file(&path).ok();
+    let (output, _, err) = run_durable(&cfg, PROGRAM, crashed, path);
+
+    assert_eq!(err, None, "descendant fallout must not diverge");
+    assert_eq!(output, vec!["failed"]);
+    assert_eq!(
+        requests.load(Ordering::SeqCst),
+        1,
+        "a descendant effect proves the stream already escaped"
     );
 }
 

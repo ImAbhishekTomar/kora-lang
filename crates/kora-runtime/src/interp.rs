@@ -273,6 +273,8 @@ pub struct Interpreter {
     /// would give them the same identity.
     ops: Vec<kora_syntax::ops::OperationIds>,
     /// Journal slot claimed for an in-flight model call.
+    pending_model_slots: Vec<PendingModelSlot>,
+    /// Journal slot claimed for an ordinary effect.
     pending_slot: Option<(journal::Scope, usize)>,
     /// Whether `http` may reach loopback and private address ranges.
     pub allow_private_hosts: bool,
@@ -447,6 +449,7 @@ impl Interpreter {
             declassify_sites: Vec::new(),
             journal: Arc::new(Mutex::new(Journal::disabled())),
             scope: journal::Scope::root(),
+            pending_model_slots: Vec::new(),
             pending_slot: None,
             allow_private_hosts: false,
             http_timeout_secs: 30,
@@ -2978,7 +2981,7 @@ impl Interpreter {
             .with_hint("re-record with `kora run --record <file.ko>`"));
         }
 
-        let (outcome, chunks) = match on_token {
+        let (outcome, chunks, nested_prefix_slots) = match on_token {
             Some(handler) => self.run_stream(
                 &model,
                 &prompt,
@@ -3007,12 +3010,20 @@ impl Interpreter {
                     span,
                 )?,
                 Vec::new(),
+                0,
             ),
         };
         self.finish_stream_output(stream, !chunks.is_empty(), span)?;
         // Journal before anything else: a crash after this point must resume
         // without paying for the call again.
-        self.journal_record_model(&journal_site, &outcome, &chunks, span)?;
+        self.journal_record_model(
+            &journal_site,
+            &outcome,
+            &chunks,
+            on_token.is_none() && !stream,
+            nested_prefix_slots,
+            span,
+        )?;
 
         // A cassette is a fixture. Recording an outage into one would make
         // every later replay fail for a reason that was over by the afternoon,
@@ -3309,6 +3320,12 @@ enum ModelSlot {
     Refused(String),
     /// Not done yet.
     Fresh,
+}
+
+struct PendingModelSlot {
+    scope: journal::Scope,
+    seq: usize,
+    cursors: HashMap<journal::Scope, usize>,
 }
 
 /// Why a model call is not free to repeat, and so leaves a mark before it is
@@ -4187,7 +4204,7 @@ impl Interpreter {
         stream: bool,
         scope: &mut Scope,
         span: Span,
-    ) -> Result<(AnalyzeOutcome, Vec<String>), RuntimeError> {
+    ) -> Result<(AnalyzeOutcome, Vec<String>, usize), RuntimeError> {
         let request = AnalyzeRequest {
             prompt: prompt.to_string(),
             data_json: data_text.to_string(),
@@ -4202,13 +4219,22 @@ impl Interpreter {
             tools: Vec::new(),
             tool_history: Vec::new(),
         };
+        let mut nested_prefix_slots = 0;
         if let Some(max_input_tokens) = self.context.max_input_tokens {
-            match kora_models::prune_tool_history(
+            let context_site = self.effect_site(span, "context");
+            // `Journal::next` advances this position even when admission
+            // fails and leaves it intentionally empty.
+            nested_prefix_slots = 1;
+            match self.journal_prune_tool_history(
                 &request,
                 max_input_tokens,
                 self.context.reserve_output_tokens,
-            ) {
-                Ok((_, plan)) => self.trace_context_plan(&plan),
+                &context_site,
+                span,
+            )? {
+                Ok((_, plan)) => {
+                    self.trace_context_plan(&plan);
+                }
                 Err(reason) => {
                     return Ok((
                         AnalyzeOutcome::Failed {
@@ -4217,6 +4243,7 @@ impl Interpreter {
                             tokens_out: 0,
                         },
                         Vec::new(),
+                        nested_prefix_slots,
                     ));
                 }
             }
@@ -4261,7 +4288,7 @@ impl Interpreter {
             return Err(e);
         }
         match result {
-            Ok(outcome) => Ok((outcome, chunks)),
+            Ok(outcome) => Ok((outcome, chunks, nested_prefix_slots)),
             // Same rule as the blocking path: a provider that does not answer
             // is an outcome the program decides about, not a crash.
             Err(e) => Ok((
@@ -4271,6 +4298,7 @@ impl Interpreter {
                     tokens_out: 0,
                 },
                 chunks,
+                nested_prefix_slots,
             )),
         }
     }
@@ -4913,8 +4941,38 @@ impl Interpreter {
         {
             Lookup::Replayed(Effect::Model {
                 outcome: RecordedOutcome::Exhausted { meter },
+                ..
             }) => Ok(ModelSlot::Refused(meter)),
-            Lookup::Replayed(Effect::Model { outcome }) => {
+            Lookup::Replayed(Effect::Model {
+                outcome,
+                nested_slots,
+                nested_scopes,
+            }) => {
+                if let Some(nested_slots) = nested_slots {
+                    journal.advance_after_cursor(&self.scope, nested_slots);
+                } else {
+                    // Journals written before `nested_slots` existed recorded
+                    // consecutive context decisions after the model. Keep the
+                    // simple case resumable, but refuse an interleaved effect:
+                    // old journals do not say whether it belongs to a model
+                    // handler or to the outer program.
+                    let skipped = journal.skip_context_after_cursor(&self.scope);
+                    if skipped > 0
+                        && !matches!(
+                            journal.effect_after_cursor(&self.scope),
+                            Some(Effect::Human { .. }) | None
+                        )
+                    {
+                        return Err(RuntimeError::new(
+                            "this durable run predates nested model replay metadata, and its context history is ambiguous",
+                            span,
+                        )
+                        .with_hint("start a new durable run with this Kora build"));
+                    }
+                }
+                for advance in nested_scopes {
+                    journal.advance_after_cursor(&advance.scope, advance.slots);
+                }
                 let chunks = chunks_of(&outcome);
                 Ok(ModelSlot::Replayed(outcome_from_record(outcome), chunks))
             }
@@ -4931,14 +4989,22 @@ impl Interpreter {
                     return Ok(ModelSlot::InterruptedTools);
                 }
                 let seq = journal.cursor(&self.scope).saturating_sub(1);
-                let escaped = journal.skip_after_cursor(&self.scope);
-                if escaped == 0 {
+                if !journal.has_non_context_after_cursor(&self.scope)
+                    && !journal.has_descendant_after_cursors(&self.scope)
+                {
                     // Nothing the stream did was ever written down, so
                     // nothing observable happened: the call is as safe to
-                    // send again as one that never started.
-                    self.pending_slot = Some((self.scope.clone(), seq));
+                    // send again as one that never started. Leave any context
+                    // entry at the cursor so the retried call replays it.
+                    self.pending_model_slots.push(PendingModelSlot {
+                        scope: self.scope.clone(),
+                        seq,
+                        cursors: journal.cursor_snapshot(),
+                    });
                     return Ok(ModelSlot::Fresh);
                 }
+                journal.skip_after_cursor(&self.scope);
+                journal.skip_descendants_after_cursors(&self.scope);
                 Ok(ModelSlot::InterruptedStream)
             }
             Lookup::Replayed(other) => Err(RuntimeError::new(
@@ -4958,7 +5024,11 @@ impl Interpreter {
                         )
                         .map_err(|e| RuntimeError::new(e.to_string(), span))?;
                 }
-                self.pending_slot = Some((scope, seq));
+                self.pending_model_slots.push(PendingModelSlot {
+                    scope,
+                    seq,
+                    cursors: journal.cursor_snapshot(),
+                });
                 Ok(ModelSlot::Fresh)
             }
         }
@@ -5062,19 +5132,48 @@ impl Interpreter {
         site: &str,
         outcome: &AnalyzeOutcome,
         chunks: &[String],
+        skip_nested_on_replay: bool,
+        nested_prefix_slots: usize,
         span: Span,
     ) -> Result<(), RuntimeError> {
-        let Some((scope, seq)) = self.pending_slot.take() else {
+        let Some(pending) = self.pending_model_slots.pop() else {
             return Ok(());
         };
         let mut journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
+        let nested_slots = if skip_nested_on_replay {
+            journal
+                .cursor(&pending.scope)
+                .saturating_sub(pending.cursors.get(&pending.scope).copied().unwrap_or(0))
+        } else {
+            nested_prefix_slots
+        };
+        let mut nested_scopes: Vec<journal::ScopeAdvance> = if skip_nested_on_replay {
+            journal
+                .cursor_snapshot()
+                .into_iter()
+                .filter_map(|(scope, cursor)| {
+                    let is_descendant =
+                        scope != pending.scope && scope.0.starts_with(&pending.scope.0);
+                    let before = pending.cursors.get(&scope).copied().unwrap_or(0);
+                    (is_descendant && cursor > before).then_some(journal::ScopeAdvance {
+                        scope,
+                        slots: cursor - before,
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+        nested_scopes.sort_by(|a, b| a.scope.0.cmp(&b.scope.0));
         journal
             .record(
-                scope,
-                seq,
+                pending.scope,
+                pending.seq,
                 site,
                 Effect::Model {
                     outcome: record_from_outcome_with(outcome, chunks),
+                    nested_slots: Some(nested_slots),
+                    nested_scopes,
                 },
             )
             .map_err(|e| RuntimeError::new(e.to_string(), span))
@@ -5090,19 +5189,21 @@ impl Interpreter {
         meter: &str,
         span: Span,
     ) -> Result<(), RuntimeError> {
-        let Some((scope, seq)) = self.pending_slot.take() else {
+        let Some(pending) = self.pending_model_slots.pop() else {
             return Ok(());
         };
         let mut journal = self.journal.lock().unwrap_or_else(|e| e.into_inner());
         journal
             .record(
-                scope,
-                seq,
+                pending.scope,
+                pending.seq,
                 site,
                 Effect::Model {
                     outcome: RecordedOutcome::Exhausted {
                         meter: meter.to_string(),
                     },
+                    nested_slots: Some(0),
+                    nested_scopes: Vec::new(),
                 },
             )
             .map_err(|e| RuntimeError::new(e.to_string(), span))

@@ -5,6 +5,18 @@ principle in [AGENTS.md](AGENTS.md).
 
 ## Current
 
+- [x] **Durable context replay consumes internal pruning decisions.** A
+      completed `analyze` call inside `with context(...)` resumes from its
+      journaled result, then advances the root and parallel-descendant journal
+      scopes used inside that completed call before the next outer effect.
+      Stream replay advances only its pruning decision before replaying token
+      handler effects. Without this, a following `ask_human` or parallel loop
+      falsely reports journal divergence after suspension.
+      The same live-suite pass found that the checker typed a
+      `parallel for ... first` result as `list[unknown]` even though runtime
+      semantics yield one winner; that result is now conservatively `unknown`
+      until branch-result inference is added.
+
 - [x] **Credibility pass: make the product claims true.** Freeze new language
       surface while the existing contract is tightened. Add pre-run static
       checks for declared types, calls, fields, model-call requirements, and

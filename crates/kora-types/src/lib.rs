@@ -1462,7 +1462,7 @@ impl<'a> StaticChecker<'a> {
                 iter,
                 body,
                 collect_into,
-                ..
+                first,
             } => {
                 let iter = self.infer(iter);
                 let item = self.iter_item(iter);
@@ -1473,10 +1473,17 @@ impl<'a> StaticChecker<'a> {
                 self.parallel_depth -= 1;
                 self.loop_depth -= 1;
                 if let Some(name) = collect_into {
-                    self.bind(
-                        name,
-                        ValueFacts::new(StaticTy::List(Box::new(StaticTy::Unknown))),
-                    );
+                    let ty = if *first {
+                        // A race yields one branch's value (or None), never
+                        // the collection produced by an ordinary fan-out.
+                        // Branch return inference is deliberately conservative
+                        // for now, so bind it as unknown rather than lying
+                        // that it is a list.
+                        StaticTy::Unknown
+                    } else {
+                        StaticTy::List(Box::new(StaticTy::Unknown))
+                    };
+                    self.bind(name, ValueFacts::new(ty));
                 }
             }
             StmtKind::FuncDef(function) => {
@@ -2305,6 +2312,16 @@ def main():
     results = parallel for x in [1, 2]:
         return x
     print(results)
+"#;
+        assert!(messages(src).is_empty(), "{:?}", messages(src));
+    }
+
+    #[test]
+    fn parallel_first_result_is_not_typed_as_a_list() {
+        let src = r#"agent race() -> str:
+    answer = parallel for x in ["first", "second"] first:
+        return x
+    return answer
 "#;
         assert!(messages(src).is_empty(), "{:?}", messages(src));
     }

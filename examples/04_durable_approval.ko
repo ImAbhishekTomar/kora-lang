@@ -18,7 +18,8 @@ def main():
 
     print("assessing the request...")
 
-    a: Assessment = analyze(request, "assess refund risk as low, medium, or high with a one-line reason")
+    with context(max_input_tokens = 4_000, reserve_output_tokens = 800):
+        a: Assessment = analyze(request, "assess refund risk as low, medium, or high with a one-line reason")
 
     match a:
         case Ok(assessment):

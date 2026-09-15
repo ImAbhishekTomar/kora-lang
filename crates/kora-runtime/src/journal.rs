@@ -81,6 +81,15 @@ impl Scope {
     }
 }
 
+/// Cursor movement in a descendant parallel scope caused inside one model
+/// call. A completed call is replayed as one value, so those internal branch
+/// effects must advance with it.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ScopeAdvance {
+    pub scope: Scope,
+    pub slots: usize,
+}
+
 /// One recorded effect.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Entry {
@@ -98,6 +107,15 @@ pub enum Effect {
     /// A completed model call, stored as its JSON result.
     Model {
         outcome: crate::cassette::RecordedOutcome,
+        /// Same-scope positions skipped before replaying a completed call.
+        /// Non-stream calls skip all internal work; streams skip only their
+        /// context prefix before replaying chunk and output effects normally.
+        #[serde(default)]
+        nested_slots: Option<usize>,
+        /// Internal effects in parallel descendants of the model call's
+        /// scope. Empty for streams, whose handlers are replayed normally.
+        #[serde(default)]
+        nested_scopes: Vec<ScopeAdvance>,
     },
     /// A tool the model asked for, and what it returned.
     Tool { name: String, result_json: String },
@@ -563,8 +581,9 @@ impl Journal {
         *self.cursors.get(scope).unwrap_or(&0)
     }
 
-    /// Consume every recorded entry sitting immediately after the cursor in
-    /// `scope`, and report how many there were.
+    /// Advance through the last recorded entry after the cursor in `scope`,
+    /// including intentionally empty sequence positions, and report how many
+    /// positions were consumed.
     ///
     /// Used for exactly one thing: an interrupted streamed model call. The
     /// pieces a stream wrote before the process died are journaled effects
@@ -575,10 +594,37 @@ impl Journal {
     /// the scope's numbering intact, so the resumed run's own next effect
     /// lands where the journal expects it.
     pub fn skip_after_cursor(&mut self, scope: &Scope) -> usize {
+        let cursor = self.cursor(scope);
+        let end = self
+            .recorded
+            .keys()
+            .filter_map(|(entry_scope, seq)| {
+                (entry_scope == scope && *seq >= cursor).then_some(seq + 1)
+            })
+            .max()
+            .unwrap_or(cursor);
+        let positions = end.saturating_sub(cursor);
+        self.advance_after_cursor(scope, positions);
+        positions
+    }
+
+    /// Consume context-pruning decisions recorded inside a completed model
+    /// call after that model's slot.
+    ///
+    /// A live tool loop records one `Context` entry per turn, but once the
+    /// enclosing model call completes its outcome replaces the attempted
+    /// model slot that precedes them. Replay returns that completed outcome
+    /// without re-entering the loop, so these internal entries must move with
+    /// it or the next outer effect sees one and reports false divergence.
+    pub(crate) fn skip_context_after_cursor(&mut self, scope: &Scope) -> usize {
         let mut skipped = 0;
         loop {
             let seq = self.cursor(scope);
-            if !self.recorded.contains_key(&(scope.clone(), seq)) {
+            let is_context = self
+                .recorded
+                .get(&(scope.clone(), seq))
+                .is_some_and(|entry| matches!(entry.effect, Effect::Context { .. }));
+            if !is_context {
                 break;
             }
             self.cursors.insert(scope.clone(), seq + 1);
@@ -586,6 +632,68 @@ impl Journal {
             skipped += 1;
         }
         skipped
+    }
+
+    /// Advance exactly `count` sequence positions after the current cursor.
+    /// A position can be intentionally empty when context admission failed;
+    /// only recorded entries reduce the replay backlog.
+    pub(crate) fn advance_after_cursor(&mut self, scope: &Scope, count: usize) {
+        for _ in 0..count {
+            let seq = self.cursor(scope);
+            if self.recorded.contains_key(&(scope.clone(), seq)) {
+                self.unconsumed = self.unconsumed.saturating_sub(1);
+            }
+            self.cursors.insert(scope.clone(), seq + 1);
+        }
+    }
+
+    /// Snapshot replay positions before an effect starts nested work.
+    pub(crate) fn cursor_snapshot(&self) -> HashMap<Scope, usize> {
+        self.cursors.clone()
+    }
+
+    /// Whether anything after this cursor is more than an internal context
+    /// decision. Used to tell a retryable pre-output stream from one whose
+    /// handler already produced durable effects.
+    pub(crate) fn has_non_context_after_cursor(&self, scope: &Scope) -> bool {
+        let mut seq = self.cursor(scope);
+        while let Some(entry) = self.recorded.get(&(scope.clone(), seq)) {
+            if !matches!(entry.effect, Effect::Context { .. }) {
+                return true;
+            }
+            seq += 1;
+        }
+        false
+    }
+
+    /// Whether an in-flight effect left journaled work in a parallel child.
+    pub(crate) fn has_descendant_after_cursors(&self, parent: &Scope) -> bool {
+        self.recorded.keys().any(|(scope, seq)| {
+            scope != parent && scope.0.starts_with(&parent.0) && *seq >= self.cursor(scope)
+        })
+    }
+
+    /// Consume all recorded fallout in descendant scopes of an interrupted
+    /// effect. Nothing outside that effect could have run before it returned.
+    pub(crate) fn skip_descendants_after_cursors(&mut self, parent: &Scope) {
+        let mut ends: HashMap<Scope, usize> = HashMap::new();
+        for (scope, seq) in self.recorded.keys() {
+            if scope != parent && scope.0.starts_with(&parent.0) && *seq >= self.cursor(scope) {
+                ends.entry(scope.clone())
+                    .and_modify(|end| *end = (*end).max(seq + 1))
+                    .or_insert(seq + 1);
+            }
+        }
+        for (scope, end) in ends {
+            let count = end.saturating_sub(self.cursor(&scope));
+            self.advance_after_cursor(&scope, count);
+        }
+    }
+
+    pub(crate) fn effect_after_cursor(&self, scope: &Scope) -> Option<&Effect> {
+        self.recorded
+            .get(&(scope.clone(), self.cursor(scope)))
+            .map(|entry| &entry.effect)
     }
 
     /// Claim the next slot in `scope`. Returns a recorded effect when this
@@ -1197,7 +1305,24 @@ mod tests {
                 tokens_out: 1,
                 chunks: Vec::new(),
             },
+            nested_slots: Some(0),
+            nested_scopes: Vec::new(),
         }
+    }
+
+    #[test]
+    fn a_legacy_model_effect_has_no_nested_slot_count() {
+        let mut value = serde_json::to_value(model_effect("legacy")).unwrap();
+        value.as_object_mut().unwrap().remove("nested_slots");
+
+        let effect: Effect = serde_json::from_value(value).unwrap();
+        assert!(matches!(
+            effect,
+            Effect::Model {
+                nested_slots: None,
+                ..
+            }
+        ));
     }
 
     #[test]

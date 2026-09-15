@@ -7,6 +7,7 @@
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
+use kora_runtime::cassette::RecordedOutcome;
 use kora_runtime::journal::{self, Effect, Journal, Scope};
 use kora_runtime::{Config, Interpreter, Run, RunStatus};
 use kora_syntax::parse;
@@ -145,6 +146,136 @@ fn answering_resumes_where_it_stopped() {
         vec!["got: yes", "after"],
         "resume continues the story instead of retelling it"
     );
+}
+
+#[test]
+fn completed_model_replay_consumes_its_context_decisions_before_human_resume() {
+    const PROGRAM: &str = r#"type Reply:
+    text: str
+
+def main():
+    with context(max_input_tokens = 1000, reserve_output_tokens = 100):
+        result: Reply = analyze("request", "prepare a reply")
+    match result:
+        case Ok(reply):
+            answer = ask_human("approve?", reply.text)
+            print(f"got: {answer}")
+"#;
+
+    let scratch = Scratch::new("context-before-human");
+    let path = scratch.run_path("r1");
+    let root = Scope::root();
+    let analyze = call_op(PROGRAM, "analyze(");
+    let human = call_op(PROGRAM, "ask_human(");
+    let mut fields = serde_json::Map::new();
+    fields.insert("text".into(), serde_json::json!("ready"));
+
+    let mut run = Run::new("r1".into(), "test.ko".into());
+    run.entries = vec![
+        journal::Entry {
+            scope: root.clone(),
+            seq: 0,
+            site: format!("test.ko:{analyze}#analyze#model"),
+            effect: Effect::Model {
+                outcome: RecordedOutcome::Ok {
+                    fields,
+                    tokens_in: 10,
+                    tokens_out: 5,
+                    chunks: Vec::new(),
+                },
+                nested_slots: Some(1),
+                nested_scopes: Vec::new(),
+            },
+        },
+        journal::Entry {
+            scope: root.clone(),
+            seq: 1,
+            site: format!("test.ko:{analyze}#context"),
+            effect: Effect::Context {
+                retained: Vec::new(),
+                dropped: 0,
+            },
+        },
+        journal::Entry {
+            scope: root,
+            seq: 2,
+            site: format!("test.ko:{human}#human"),
+            effect: Effect::Human {
+                question: "approve?".into(),
+                answer: "yes".into(),
+            },
+        },
+    ];
+
+    let (output, run, err) = run_durable(PROGRAM, run, path);
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!(run.status, RunStatus::Completed);
+    assert_eq!(output, vec!["got: yes"]);
+}
+
+#[test]
+fn legacy_model_replay_consumes_consecutive_context_before_human_resume() {
+    const PROGRAM: &str = r#"type Reply:
+    text: str
+
+def main():
+    with context(max_input_tokens = 1000, reserve_output_tokens = 100):
+        result: Reply = analyze("request", "prepare a reply")
+    match result:
+        case Ok(reply):
+            answer = ask_human("approve?", reply.text)
+            print(f"got: {answer}")
+"#;
+
+    let scratch = Scratch::new("legacy-context-before-human");
+    let path = scratch.run_path("r1");
+    let root = Scope::root();
+    let analyze = call_op(PROGRAM, "analyze(");
+    let human = call_op(PROGRAM, "ask_human(");
+    let mut fields = serde_json::Map::new();
+    fields.insert("text".into(), serde_json::json!("ready"));
+
+    let mut run = Run::new("r1".into(), "test.ko".into());
+    run.entries = vec![
+        journal::Entry {
+            scope: root.clone(),
+            seq: 0,
+            site: format!("test.ko:{analyze}#analyze#model"),
+            effect: Effect::Model {
+                outcome: RecordedOutcome::Ok {
+                    fields,
+                    tokens_in: 10,
+                    tokens_out: 5,
+                    chunks: Vec::new(),
+                },
+                nested_slots: None,
+                nested_scopes: Vec::new(),
+            },
+        },
+        journal::Entry {
+            scope: root.clone(),
+            seq: 1,
+            site: format!("test.ko:{analyze}#context"),
+            effect: Effect::Context {
+                retained: Vec::new(),
+                dropped: 0,
+            },
+        },
+        journal::Entry {
+            scope: root,
+            seq: 2,
+            site: format!("test.ko:{human}#human"),
+            effect: Effect::Human {
+                question: "approve?".into(),
+                answer: "yes".into(),
+            },
+        },
+    ];
+
+    let (output, run, err) = run_durable(PROGRAM, run, path);
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!(run.status, RunStatus::Completed);
+    assert_eq!(output, vec!["got: yes"]);
 }
 
 #[test]

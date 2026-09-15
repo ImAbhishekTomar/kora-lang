@@ -9,7 +9,11 @@
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpListener;
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+
+use kora_runtime::journal::Journal;
+use kora_runtime::{Config, Interpreter, Run, RunStatus};
 
 /// A scripted Ollama-shaped `/api/chat` responder.
 ///
@@ -80,6 +84,19 @@ fn tool_call(id: &str) -> serde_json::Value {
     })
 }
 
+fn agent_call(topic: &str) -> serde_json::Value {
+    serde_json::json!({
+        "message": {
+            "content": "",
+            "tool_calls": [{
+                "function": { "name": "specialist", "arguments": { "topic": topic } }
+            }]
+        },
+        "prompt_eval_count": 1,
+        "eval_count": 1
+    })
+}
+
 /// The final turn's reply: a plain-text `str` answer.
 fn final_answer(text: &str) -> serde_json::Value {
     let content = serde_json::json!({ "__uncertain__": "", "answer": text }).to_string();
@@ -133,6 +150,36 @@ fn run(config_text: &str, src: &str) -> Vec<String> {
     i.output
 }
 
+fn run_durable(
+    config_text: &str,
+    src: &str,
+    run: Run,
+    path: PathBuf,
+) -> (Vec<String>, Run, Option<String>) {
+    let program = kora_syntax::parse(src).unwrap_or_else(|e| panic!("parse error: {e}\n{src}"));
+    let mut i = Interpreter::new();
+    let parsed = Config::parse(config_text).unwrap();
+    i.sinks = parsed.sinks.clone();
+    i.config = parsed;
+    i.program_name = "test.ko".into();
+    i.journal = Arc::new(Mutex::new(Journal::open(run, path).unwrap()));
+
+    let error = match i.run(&program) {
+        Ok(()) => {
+            i.journal
+                .lock()
+                .unwrap()
+                .finish(RunStatus::Completed)
+                .unwrap();
+            None
+        }
+        Err(e) if e.is_suspension() => None,
+        Err(e) => Some(e.message),
+    };
+    let saved = i.journal.lock().unwrap().run().clone();
+    (i.output, saved, error)
+}
+
 /// Three tool turns, each returning a marker string big enough that a tight
 /// context fence cannot keep all three: the oldest whole exchange must be
 /// dropped before the newest, and dropping never rewrites what it keeps.
@@ -179,4 +226,218 @@ fn context_fence_prunes_the_oldest_whole_exchange_first() {
         last.contains("UNTRUSTED_TOOL_RESULT"),
         "a retained tool result must still be marked untrusted, got: {last}"
     );
+}
+
+#[test]
+fn durable_resume_skips_context_work_inside_a_completed_model_call() {
+    const PROGRAM: &str = r#"def main():
+    with context(max_input_tokens = 1000, reserve_output_tokens = 100):
+        result: str = analyze("request", "prepare a reply")
+    match result:
+        case Ok(reply):
+            decision = ask_human("approve?", reply)
+            print(f"got: {decision}")
+"#;
+
+    let (endpoint, seen) = spawn_scripted_provider(vec![final_answer("ready")]);
+    let scratch = std::env::temp_dir().join(format!(
+        "kora-context-durable-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir_all(&scratch).unwrap();
+    let path = scratch.join("r1.jsonl");
+
+    let (_, mut suspended, err) = run_durable(
+        &config(&endpoint),
+        PROGRAM,
+        Run::new("r1".into(), "test.ko".into()),
+        path.clone(),
+    );
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!(suspended.status, RunStatus::Suspended);
+    assert_eq!(seen.lock().unwrap().len(), 1);
+
+    {
+        let mut journal = Journal::open(suspended, path.clone()).unwrap();
+        journal.answer("yes").unwrap();
+        suspended = journal.run().clone();
+    }
+
+    let (output, completed, err) = run_durable(&config(&endpoint), PROGRAM, suspended, path);
+    assert!(err.is_none(), "{err:?}");
+    assert_eq!(completed.status, RunStatus::Completed);
+    assert_eq!(output, vec!["got: yes"]);
+    assert_eq!(
+        seen.lock().unwrap().len(),
+        1,
+        "resume must not send the completed model call again"
+    );
+
+    std::fs::remove_dir_all(scratch).ok();
+}
+
+#[test]
+fn failed_context_admission_advances_its_empty_slot_on_resume() {
+    const PROGRAM: &str = r#"def main():
+    with context(max_input_tokens = 1, reserve_output_tokens = 0):
+        result: str = analyze("request", "prepare a reply")
+    match result:
+        case Failed(reason):
+            decision = ask_human("continue?", reason)
+            print(f"got: {decision}")
+"#;
+
+    let (endpoint, seen) = spawn_scripted_provider(Vec::new());
+    let scratch = std::env::temp_dir().join(format!(
+        "kora-context-refusal-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir_all(&scratch).unwrap();
+    let path = scratch.join("r1.jsonl");
+
+    let (_, mut suspended, err) = run_durable(
+        &config(&endpoint),
+        PROGRAM,
+        Run::new("r1".into(), "test.ko".into()),
+        path.clone(),
+    );
+    assert!(err.is_none(), "the context refusal is a value: {err:?}");
+    assert_eq!(suspended.status, RunStatus::Suspended);
+    assert!(seen.lock().unwrap().is_empty(), "no request should be sent");
+
+    {
+        let mut journal = Journal::open(suspended, path.clone()).unwrap();
+        journal.answer("yes").unwrap();
+        suspended = journal.run().clone();
+    }
+
+    let (output, completed, err) = run_durable(&config(&endpoint), PROGRAM, suspended, path);
+    assert!(
+        err.is_none(),
+        "the empty context slot must not diverge: {err:?}"
+    );
+    assert_eq!(completed.status, RunStatus::Completed);
+    assert_eq!(output, vec!["got: yes"]);
+    assert!(seen.lock().unwrap().is_empty(), "resume sends no request");
+
+    std::fs::remove_dir_all(scratch).ok();
+}
+
+#[test]
+fn completed_tool_call_advances_parallel_descendant_scopes() {
+    const PROGRAM: &str = r#"use time
+
+tool lookup(id: str) -> str:
+    stamps = parallel for item in ["a", "b"]:
+        return time.now()
+    return id
+
+def main():
+    result: str = analyze("go", "use the tool, then answer", tools=[lookup])
+    match result:
+        case Ok(text):
+            decision = ask_human("continue?", text)
+            later = parallel for item in ["a", "b"]:
+                return time.now()
+            print(f"got: {decision} {later}")
+"#;
+
+    let (endpoint, seen) =
+        spawn_scripted_provider(vec![tool_call("record"), final_answer("ready")]);
+    let scratch = std::env::temp_dir().join(format!(
+        "kora-context-descendants-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir_all(&scratch).unwrap();
+    let path = scratch.join("r1.jsonl");
+
+    let (_, mut suspended, err) = run_durable(
+        &config(&endpoint),
+        PROGRAM,
+        Run::new("r1".into(), "test.ko".into()),
+        path.clone(),
+    );
+    assert!(
+        err.is_none(),
+        "the first run should suspend cleanly: {err:?}"
+    );
+    assert_eq!(suspended.status, RunStatus::Suspended);
+    assert_eq!(seen.lock().unwrap().len(), 2);
+
+    {
+        let mut journal = Journal::open(suspended, path.clone()).unwrap();
+        journal.answer("yes").unwrap();
+        suspended = journal.run().clone();
+    }
+
+    let (output, completed, err) = run_durable(&config(&endpoint), PROGRAM, suspended, path);
+    assert!(err.is_none(), "descendant scopes must advance: {err:?}");
+    assert_eq!(completed.status, RunStatus::Completed);
+    assert_eq!(output.len(), 1);
+    assert!(output[0].starts_with("got: yes ["), "got {output:?}");
+    assert_eq!(seen.lock().unwrap().len(), 2, "model work is replayed");
+
+    std::fs::remove_dir_all(scratch).ok();
+}
+
+#[test]
+fn nested_agent_model_slots_preserve_the_outer_model_slot() {
+    const PROGRAM: &str = r#"agent specialist(topic: str) -> str:
+    nested: str = analyze(topic, "answer briefly")
+    match nested:
+        case Ok(text):
+            return text
+        case Failed(reason):
+            return reason
+
+def main():
+    result: str = analyze("go", "ask the specialist, then answer", tools=[specialist])
+    match result:
+        case Ok(text):
+            decision = ask_human("continue?", text)
+            print(f"got: {decision}")
+"#;
+
+    let (endpoint, seen) = spawn_scripted_provider(vec![
+        agent_call("topic"),
+        final_answer("nested answer"),
+        final_answer("outer answer"),
+    ]);
+    let scratch = std::env::temp_dir().join(format!(
+        "kora-context-nested-agent-{}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    std::fs::create_dir_all(&scratch).unwrap();
+    let path = scratch.join("r1.jsonl");
+
+    let (_, mut suspended, err) = run_durable(
+        &config(&endpoint),
+        PROGRAM,
+        Run::new("r1".into(), "test.ko".into()),
+        path.clone(),
+    );
+    assert!(
+        err.is_none(),
+        "the first run should suspend cleanly: {err:?}"
+    );
+    assert_eq!(suspended.status, RunStatus::Suspended);
+    assert_eq!(seen.lock().unwrap().len(), 3);
+
+    {
+        let mut journal = Journal::open(suspended, path.clone()).unwrap();
+        journal.answer("yes").unwrap();
+        suspended = journal.run().clone();
+    }
+
+    let (output, completed, err) = run_durable(&config(&endpoint), PROGRAM, suspended, path);
+    assert!(err.is_none(), "the outer model slot must replay: {err:?}");
+    assert_eq!(completed.status, RunStatus::Completed);
+    assert_eq!(output, vec!["got: yes"]);
+    assert_eq!(seen.lock().unwrap().len(), 3, "neither model repeats");
+
+    std::fs::remove_dir_all(scratch).ok();
 }

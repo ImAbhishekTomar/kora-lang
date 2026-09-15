@@ -12,7 +12,7 @@ no API key and no model installed.
 | [01_expense_check.ko](01_expense_check.ko) | a typed model call, and handling `Uncertain` | `kora run --replay` |
 | [02_triage.ko](02_triage.ko) | agents, a tool, `parallel for`, token budgets | `kora run --replay` |
 | [03_salary_review.ko](03_salary_review.ko) | classified data reaching only the local model | `kora run --replay` |
-| [04_durable_approval.ko](04_durable_approval.ko) | stopping for a person, and resuming days later | `kora run --durable` |
+| [04_durable_approval.ko](04_durable_approval.ko) | context-bounded model work, stopping for a person, and resuming days later | `kora run --durable` |
 | [05_stdlib.ko](05_stdlib.ko) | `json`, `fs`, `time`, `re` and the defects they fix | `kora run` |
 | [06_stdlib_safety.ko](06_stdlib_safety.ko) | `csv` and `http`, and the attacks that are refused | `kora run` |
 | [07_tests.ko](07_tests.ko) | `test` blocks and typed mocks | `kora test` |
