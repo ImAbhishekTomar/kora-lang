@@ -8,11 +8,15 @@ overrides:
   # EntityReference. Reached four levels down, through nextra's MathJax.
   '@xmldom/xmldom': '>=0.9.12'
   ajv: 8.18.0
-  js-yaml: 4.3.1
+  # GHSA-2883-xcg3-v3hh: maxTotalMergeKeys does not limit CPU use for
+  # empty merge sources, so a crafted document still burns the CPU the
+  # limit exists to protect.
+  js-yaml: 4.3.2
   minimatch: 10.2.6
   'path-to-regexp@>=4.0.0 <6.3.0': 6.3.0
   'path-to-regexp@>=8.0.0 <8.4.0': 8.4.0
   postcss: 8.5.26
-  smol-toml: 1.6.1
+  # GHSA-7w5x-hrqm-74c2: denial of service on a malformed TOML document.
+  smol-toml: 1.7.1
   tar: 7.5.22
   undici: 7.29.0
