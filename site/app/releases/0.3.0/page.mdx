@@ -1,0 +1,132 @@
+---
+title: Kora 0.3.0
+description: Release notes, compatibility information, and migration guidance for Kora 0.3.0.
+---
+
+# Kora `0.3.0`
+
+Published 16 September 2026. [View the release history and downloads](https://github.com/ImAbhishekTomar/kora-lang/releases).
+
+`0.3.0` is about what a program can promise before it runs and what it can
+survive while it does. Programs are checked ahead of execution, a run can be
+bounded by time as well as tokens, a fan-out can stop at the first answer, and
+the material sent to a model is governed by a lexical fence rather than by
+whatever happened to accumulate.
+
+## Checked before it runs
+
+`kora check` now rejects, ahead of any model call, what previously failed
+partway through a run: declared types, calls, fields, field access,
+model-call requirements, and classified flow. A program that cannot work is
+refused before it spends anything.
+
+Tool signatures are part of that contract. A tool handed to a model becomes a
+JSON schema in the request, so its parameters must be `str`, `int`, `float`,
+`bool`, or `list[str]`. Anything else is now named at check time rather than
+at the moment the call is built.
+
+## Language
+
+- `with context(max_input_tokens = N, reserve_output_tokens = N):` — a lexical
+  fence on the material an `analyze` call may send. It estimates input
+  deterministically, reserves room for the output, and keeps the newest whole
+  tool exchanges that fit. It never silently truncates a prompt, a data value,
+  or half an exchange; when the base material cannot fit, the call is
+  `Failed(reason)`.
+- `parallel for ... first:` — a fan-out that stops when the work is done. The
+  winner is the earliest input that answered, not whichever branch happened to
+  return first, so the result is deterministic.
+- `budget: max_seconds` — a fourth meter, and the only one not counted from
+  the program's own spending. The clock starts when the scope is entered, so
+  every worker in a `parallel for` expires together.
+- `on tool_call(name, args):` — the tool loop is open. The handler runs before
+  the tool does, so it can log the call, rewrite `args` in place, or return a
+  string to skip the tool and hand that string back as the result.
+- `analyze(...) stream` with `on token(piece):` — a `str` result arrives token
+  by token, and streaming survives a durable run.
+- `else (why, kind):` and or-patterns in `match`, for when the recovery path
+  is shared but the category must still be recorded.
+- An agent can be a tool target.
+- `input()` and `notes` — interactive input and a durable run's own scratch
+  space.
+
+## Standard library and packages
+
+- `yaml` and `xml` — the config and enterprise data formats, read without the
+  ways each of them ordinarily lies to you.
+- `pdf` — text in the standard library; page rendering lives in a package that
+  carries its own helper process, because Kora does not link PDFium.
+- Any OpenAI-compatible gateway is reachable from `kora.toml`, and a model is
+  named the way its provider names it.
+
+## Durability and performance
+
+- An effect is identified by which call it is, rather than which line it is
+  on, so editing a program does not invalidate a journal that is still valid.
+- Group commit: a write-heavy fan-out is no longer one `fsync` at a time.
+- A tool server that does not answer is a value, not a hung run.
+
+## Fixes worth naming
+
+- A budget that runs out inside a tool loop is now `Exhausted(meter)` rather
+  than a crash. Exhaustion has always been a value in Kora; the tool loop was
+  the one place it was not, which made every `case Exhausted(meter)` arm on a
+  tool-using call unreachable.
+- Durable replay preserves context-pruning state, so an `ask_human` or a
+  parallel loop after a completed model call no longer reports a false journal
+  divergence on resume.
+- An interrupted stream is detected in parallel descendant scopes too, so a
+  resumed run does not re-send a stream that already wrote part of its answer.
+- `parallel for ... first` is no longer typed as a list, since it yields one
+  value.
+
+## Editor
+
+- Kora light and dark themes, with low-noise syntax highlighting.
+- Images expand in the debugger's variables pane to their source, type, and
+  size, never a wall of bytes.
+
+## Breaking changes
+
+None in the language surface. Two behaviour changes can turn a program that
+previously started into one that is refused, both of them reporting a problem
+that was always there:
+
+- **Pre-run checking is stricter.** A program with a type, call, field, or
+  classified-flow mistake that used to surface partway through a run is now
+  refused by `kora check` before it starts. The mistake is the same one; it is
+  reported earlier and without spending.
+- **Tool parameter shapes are checked.** A tool given to a model may take only
+  `str`, `int`, `float`, `bool`, or `list[str]`. This was always enforced when
+  the request was built.
+
+## Migration from `0.2.0`
+
+Run the checker first. It reports anything this release now refuses:
+
+```bash
+npm install -g @abhishektomar/kora-cli@0.3.0
+kora --version
+kora check main.ko
+kora test main.ko
+```
+
+If the checker names a tool parameter, pass the structured value as a JSON
+string and decode it inside the tool:
+
+```kora
+tool pick(items_json: str) -> str:
+    "Pick one item."
+    items = json.parse(items_json)
+    return items[0]["name"]
+```
+
+Nothing else requires a source change. A program that handles `Exhausted` on a
+tool-using `analyze` will now reach that arm where it previously crashed,
+which is the behaviour the arm was written for.
+
+## Compatibility
+
+Kora remains pre-alpha. This release uses the minor version while the project
+is below `1.0.0`. There is no stable language or package compatibility promise
+yet.
