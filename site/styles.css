@@ -1,4 +1,7 @@
 :root {
+  /* Nextra reads `rgb(var(--nextra-bg))` for the navbar blur and the mobile menu.
+     It is normally set by Nextra's <Head>, which this layout does not render. */
+  --nextra-bg: 245, 247, 242;
   --kora-ink: #102820;
   --kora-muted: #60756d;
   --kora-teal: #159a7c;
@@ -8,6 +11,7 @@
 
 body { background: var(--kora-paper); }
 .dark body { background: #101916; }
+.dark { --nextra-bg: 18, 18, 18; }
 .brand { display: inline-flex; align-items: center; gap: .55rem; letter-spacing: -.04em; font-size: 1.15rem; font-weight: 760; }
 .brand-mark { width: 1.7rem; height: 1.7rem; display: grid; place-items: center; border-radius: 7px; background: var(--kora-lime); color: #102820; font-size: 1.15rem; font-weight: 850; }
 .version-selector { display: inline-flex; align-items: center; margin-right: .85rem; }
@@ -264,6 +268,7 @@ body:has(.figma-landing) { overflow:hidden; }
 body:has(.nextra-sidebar) { --docs-accent:#5f7000; --docs-ink:#12231c; --docs-muted:#53645d; --docs-paper:#f5f7f2; --docs-line:#d5ddd6; background:var(--docs-paper); color:var(--docs-ink); font-family:'Figma Geist',Arial,sans-serif; }
 body:has(.nextra-sidebar) .nextra-navbar { border-color:var(--docs-line); background:rgba(255,255,255,.88); backdrop-filter:blur(14px); }
 body:has(.nextra-sidebar) .nextra-sidebar { border-color:var(--docs-line); background:#eef1ed; }
+body:has(.nextra-sidebar) .nextra-mobile-nav { border-color:var(--docs-line); background:var(--docs-paper); }
 body:has(.nextra-sidebar) .nextra-toc { color:var(--docs-muted); }
 body:has(.nextra-sidebar) article h1,body:has(.nextra-sidebar) article h2,body:has(.nextra-sidebar) article h3 { color:var(--docs-ink); letter-spacing:-.025em; }
 body:has(.nextra-sidebar) article p,body:has(.nextra-sidebar) article li { color:var(--docs-muted); }
@@ -273,6 +278,7 @@ body:has(.nextra-sidebar) article :not(pre)>code { border:1px solid #dce5dc; bac
 html.dark body:has(.nextra-sidebar) { --docs-accent:#c2d708; --docs-ink:#f3f2ee; --docs-muted:#a9aaa5; --docs-paper:#121212; --docs-line:#2d3530; background:var(--docs-paper); color:var(--docs-ink); }
 html.dark body:has(.nextra-sidebar) .nextra-navbar { border-color:#1f1f2e; background:rgba(11,11,15,.9); }
 html.dark body:has(.nextra-sidebar) .nextra-sidebar { border-color:#2d3530; background:#171a18; }
+html.dark body:has(.nextra-sidebar) .nextra-mobile-nav { border-color:#2d3530; background:var(--docs-paper); }
 html.dark body:has(.nextra-sidebar) article h1,html.dark body:has(.nextra-sidebar) article h2,html.dark body:has(.nextra-sidebar) article h3 { color:var(--docs-ink); }
 html.dark body:has(.nextra-sidebar) article p,html.dark body:has(.nextra-sidebar) article li { color:var(--docs-muted); }
 html.dark body:has(.nextra-sidebar) article a { color:#c2d708; }
