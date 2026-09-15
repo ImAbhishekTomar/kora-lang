@@ -25,6 +25,9 @@
       "include": "#kora-keywords"
     },
     {
+      "include": "#parallel-first"
+    },
+    {
       "include": "#type-def"
     },
     {
@@ -204,6 +207,10 @@
           "name": "entity.name.namespace.kora"
         }
       }
+    },
+    "parallel-first": {
+      "match": "\\b(first)\\b(?=\\s*:)",
+      "name": "keyword.other.agent.kora"
     }
   }
 }
