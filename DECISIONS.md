@@ -35,7 +35,10 @@ itself. Everything derives from this:
 4. **Budgets are native.** Token-denominated (`max_tokens`, `max_calls`,
    `max_steps`, `max_time`), lexically scoped, nested (child may tighten,
    never loosen), shared across `parallel for`. Exhaustion is a value
-   (`Exhausted`), not an exception; partial work survives. Money is an
+   (`Exhausted`), not an exception; partial work survives. This holds inside a
+   tool loop too: a meter that trips between turns returns `Exhausted(meter)`
+   rather than raising, because a call that spends its budget answering tool
+   requests is no different from one that had nothing left to begin with. Money is an
    optional display layer via `[budget.pricing]` in config — never enforcement.
 5. **Context is a separate, lexical policy.** `with context(...)` governs the
    request material sent to an `analyze` call; it is not a second way to spend

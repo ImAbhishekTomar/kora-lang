@@ -321,6 +321,20 @@ pub enum AnalyzeOutcome {
         tokens_in: u64,
         tokens_out: u64,
     },
+    /// A budget meter ran out partway through a tool loop.
+    ///
+    /// Exhaustion is a value everywhere else in the language, and a call that
+    /// spends its budget answering tool requests is no different from one that
+    /// had nothing left before it started. The meter that tripped is named so
+    /// the program can say which limit to raise.
+    ///
+    /// Token counts are what the loop had already spent across its completed
+    /// turns. That spend is real and stays visible.
+    Exhausted {
+        meter: String,
+        tokens_in: u64,
+        tokens_out: u64,
+    },
 }
 
 #[derive(Debug)]

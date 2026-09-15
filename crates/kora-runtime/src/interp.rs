@@ -3281,6 +3281,23 @@ impl Interpreter {
                     payload: vec![Value::Str(Rc::new(reason))],
                 })
             }
+            AnalyzeOutcome::Exhausted {
+                meter,
+                tokens_in,
+                tokens_out,
+            } => {
+                // Zero when the loop stopped live -- each turn was charged as
+                // it happened -- and non-zero only when replayed from a
+                // journal that recorded what the original attempt spent.
+                self.tokens_in += tokens_in;
+                self.tokens_out += tokens_out;
+                self.budget.charge_call(tokens_in, tokens_out);
+                self.trace_refused_call(type_name, &meter);
+                Ok(Value::Variant {
+                    tag: Rc::new("Exhausted".to_string()),
+                    payload: vec![Value::Str(Rc::new(meter))],
+                })
+            }
             AnalyzeOutcome::Failed {
                 reason,
                 tokens_in,
@@ -3376,6 +3393,11 @@ fn usage_of(outcome: &AnalyzeOutcome) -> (u64, u64) {
             tokens_in,
             tokens_out,
             ..
+        }
+        | AnalyzeOutcome::Exhausted {
+            tokens_in,
+            tokens_out,
+            ..
         } => (*tokens_in, *tokens_out),
     }
 }
@@ -3413,6 +3435,11 @@ fn record_from_outcome_with(outcome: &AnalyzeOutcome, chunks: &[String]) -> Reco
             tokens_out: *tokens_out,
             chunks: chunks.to_vec(),
         },
+        // The turns a tool loop completed before the meter tripped were
+        // charged as they happened, so there is no separate spend to record.
+        AnalyzeOutcome::Exhausted { meter, .. } => RecordedOutcome::Exhausted {
+            meter: meter.clone(),
+        },
         AnalyzeOutcome::Failed {
             reason,
             tokens_in,
@@ -3429,9 +3456,9 @@ fn record_from_outcome_with(outcome: &AnalyzeOutcome, chunks: &[String]) -> Reco
 /// A recorded outcome as the provider-shaped value the rest of the call
 /// path expects.
 ///
-/// `Exhausted` has no provider-shaped form -- nothing was sent -- so it is
-/// handled before this is reached, and reaching it here would mean the
-/// journal lookup dropped the distinction.
+/// `Exhausted` is handled before this is reached -- the journal lookup turns
+/// it back into a refusal that carries its meter -- and reaching it here would
+/// mean that lookup dropped the distinction.
 fn outcome_from_record(record: RecordedOutcome) -> AnalyzeOutcome {
     match record {
         RecordedOutcome::Exhausted { meter } => AnalyzeOutcome::Failed {
@@ -4337,10 +4364,14 @@ impl Interpreter {
 
         for _ in 0..MAX_TURNS {
             if let Some(meter) = self.budget.check() {
-                return Err(RuntimeError::new(
-                    format!("budget exhausted ({}) during tool loop", meter.name()),
-                    span,
-                ));
+                // Exhaustion is a value here for the same reason it is before
+                // the first call: the turns already paid for are real work,
+                // and the program decides what a spent budget is worth.
+                return Ok(AnalyzeOutcome::Exhausted {
+                    meter: meter.name().to_string(),
+                    tokens_in: 0,
+                    tokens_out: 0,
+                });
             }
             let mut request = AnalyzeRequest {
                 prompt: prompt.to_string(),
@@ -4403,10 +4434,11 @@ impl Interpreter {
                     self.tokens_out += tokens_out;
                     self.budget.charge_call(tokens_in, tokens_out);
                     if let Some(meter) = self.budget.charge_step() {
-                        return Err(RuntimeError::new(
-                            format!("budget exhausted ({}) during tool loop", meter.name()),
-                            span,
-                        ));
+                        return Ok(AnalyzeOutcome::Exhausted {
+                            meter: meter.name().to_string(),
+                            tokens_in: 0,
+                            tokens_out: 0,
+                        });
                     }
                     // The handler runs before the tool does, so it can log
                     // the call, rewrite `args` in place, or -- by returning a

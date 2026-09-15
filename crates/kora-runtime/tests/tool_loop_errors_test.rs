@@ -93,6 +93,21 @@ fn run_err(config_text: &str, src: &str) -> String {
     }
 }
 
+/// The lines a program printed, for the paths that end in a value rather than
+/// an error.
+fn run_out(config_text: &str, src: &str) -> Vec<String> {
+    let program = kora_syntax::parse(src).unwrap_or_else(|e| panic!("parse error: {e}\n{src}"));
+    let mut i = kora_runtime::Interpreter::new();
+    let config = kora_runtime::Config::parse(config_text).unwrap();
+    i.sinks = config.sinks.clone();
+    i.config = config;
+    i.program_name = "test.ko".into();
+    match i.run(&program) {
+        Ok(_) => i.output,
+        Err(e) => panic!("expected the program to finish, got: {}\n{src}", e.message),
+    }
+}
+
 const TOOL: &str = r#"type Answer:
     body: str
 
@@ -128,27 +143,60 @@ def main():
 }
 
 #[test]
-fn a_budget_that_runs_out_mid_loop_says_which_meter_stopped_it() {
-    // The loop charges every turn against the enclosing budget. A run that
-    // hits the ceiling inside the loop must say so by name, not report the
-    // turn limit above, which would name the wrong cause.
+fn a_budget_that_runs_out_mid_loop_is_an_exhausted_value_naming_the_meter() {
+    // Exhaustion is a value everywhere else in the language, and a call that
+    // spends its budget answering tool requests is no different from one that
+    // had nothing left before it started. Crashing here instead made every
+    // `case Exhausted(meter)` arm on a tool-using call unreachable, so the
+    // programs that handled a spent budget correctly were the ones that died.
     let endpoint = spawn_insatiable_provider("ping", serde_json::json!({"id": "a"}));
-    let err = run_err(
+    let out = run_out(
         &config(&endpoint),
         &format!(
             r#"{TOOL}
 def main():
     with budget(max_calls = 2):
         a: Answer = analyze("data", "ping it", tools=[ping])
-        print(a)
+        match a:
+            case Exhausted(meter):
+                print(f"exhausted: {{meter}}")
+            case Ok(value):
+                print(f"ok: {{value.body}}")
+            case Uncertain(why) | Failed(why):
+                print(f"other: {{why}}")
 "#
         ),
     );
-    assert!(
-        err.contains("budget exhausted") && err.contains("during tool loop"),
-        "got: {err}"
+    assert_eq!(
+        out,
+        vec!["exhausted: calls".to_string()],
+        "the meter that tripped must be the one named"
     );
-    assert!(err.contains("calls"), "the meter must be named: {err}");
+}
+
+#[test]
+fn a_tool_loop_that_runs_out_of_steps_names_the_step_meter() {
+    // The second exhaustion site: the step charged for the tool call itself,
+    // rather than the check before the next request.
+    let endpoint = spawn_insatiable_provider("ping", serde_json::json!({"id": "a"}));
+    let out = run_out(
+        &config(&endpoint),
+        &format!(
+            r#"{TOOL}
+def main():
+    with budget(max_steps = 1):
+        a: Answer = analyze("data", "ping it", tools=[ping])
+        match a:
+            case Exhausted(meter):
+                print(f"exhausted: {{meter}}")
+            case Ok(value):
+                print(f"ok: {{value.body}}")
+            case Uncertain(why) | Failed(why):
+                print(f"other: {{why}}")
+"#
+        ),
+    );
+    assert_eq!(out, vec!["exhausted: steps".to_string()]);
 }
 
 // --- what the model sends ---

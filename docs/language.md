@@ -666,6 +666,11 @@ with budget(max_tokens = 500_000):
 Budgets nest, and a child may only **tighten**. A `parallel for` shares one
 pot, so concurrent agents stop collectively.
 
+Running out is a value wherever it happens. A meter that trips partway through
+a tool loop reaches the program as `Exhausted(meter)`, exactly as one that
+refused the call before it was sent — the turns already paid for stay charged,
+and the program decides what a spent budget is worth.
+
 ### Bounding by time
 
 `max_seconds` is a fourth meter, and the only one not counted from the
