@@ -108,7 +108,7 @@ again at runtime.
 - Static checking is conservative, not whole-program verification across
   Python, MCP, helpers, or network responses.
 
-These are release gates, not footnotes. See the [roadmap](https://koralang.dev/roadmap)
+These are release gates, not footnotes. See the [roadmap](https://kora-lang.vercel.app/roadmap)
 for the validation plan.
 
 ## Install
@@ -145,12 +145,12 @@ effects, so run it in a disposable working directory when evaluating it.
 
 | Resource | Purpose |
 | --- | --- |
-| [Start here](https://koralang.dev/start-here) | Install and run the first checked program |
+| [Start here](https://kora-lang.vercel.app/start-here) | Install and run the first checked program |
 | [Language reference](docs/language.md) | Syntax and semantics |
 | [Standard library](docs/stdlib.md) | Built-in modules and safety behavior |
 | [CLI reference](docs/cli.md) | Commands, config, replay, and durability |
 | [Decisions](DECISIONS.md) | Design choices and accepted trade-offs |
-| [Comparison](https://koralang.dev/comparison) | When Kora is and is not a sensible choice |
+| [Comparison](https://kora-lang.vercel.app/comparison) | When Kora is and is not a sensible choice |
 | [Examples](examples) | Runnable workflows and tests |
 
 ## Contributing
