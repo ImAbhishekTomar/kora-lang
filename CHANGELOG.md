@@ -1,5 +1,17 @@
 # Changelog
 
+## [0.3.1](https://github.com/ImAbhishekTomar/kora-lang/compare/v0.3.0...v0.3.1) (2026-09-15)
+
+
+### Fixes
+
+* **ci:** publish kora-helper before the crates that depend on it ([3ea1db5](https://github.com/ImAbhishekTomar/kora-lang/commit/3ea1db531bb1eec998e70ba11d7e7749cbcdf808))
+
+
+### Documentation
+
+* add the 0.3.1 release page and promote the 0.3.0 links ([d9075e9](https://github.com/ImAbhishekTomar/kora-lang/commit/d9075e91b1d7b931eee08f9eec8c24d41df7d089))
+
 ## [0.3.0](https://github.com/ImAbhishekTomar/kora-lang/compare/v0.2.0...v0.3.0) (2026-09-15)
 
 

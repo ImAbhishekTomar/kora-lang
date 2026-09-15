@@ -1,6 +1,6 @@
 {
   "name": "@abhishektomar/kora-cli",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "kora: CLI for the Kora agent-first programming language",
   "homepage": "https://github.com/ImAbhishekTomar/kora-lang",
   "repository": {
