@@ -231,7 +231,10 @@ jobs:
             fi
             sleep 15
           }
-          for crate in kora-syntax kora-models kora-mcp kora-python kora-pkg kora-types kora-runtime kora-lsp kora-dap kora-cli; do
+          # kora-helper first: kora-runtime depends on it, and a dependency
+          # missing from crates.io stops `cargo publish` at "no matching
+          # package named `kora-helper` found" before anything is uploaded.
+          for crate in kora-helper kora-syntax kora-models kora-mcp kora-python kora-pkg kora-types kora-runtime kora-lsp kora-dap kora-cli; do
             publish_or_skip "$crate"
           done
 
