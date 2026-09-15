@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Check out Homebrew tap
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           repository: ImAbhishekTomar/homebrew-tap
           token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
