@@ -93,8 +93,8 @@ pub struct ModelConfig {
     pub provider: Provider,
     /// e.g. "gpt-4o" or "llama3.1:8b"
     pub model: String,
-    /// Base URL override. Ollama defaults to http://localhost:11434; an
-    /// OpenAI-provider model defaults to https://api.openai.com/v1, and
+    /// Base URL override. Ollama defaults to `http://localhost:11434`; an
+    /// OpenAI-provider model defaults to `https://api.openai.com/v1`, and
     /// pointing it elsewhere is how any OpenAI-compatible gateway
     /// (OpenRouter, Groq, Together, a local vLLM) is reached.
     pub endpoint: Option<String>,
