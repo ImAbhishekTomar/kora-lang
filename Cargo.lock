@@ -744,6 +744,7 @@ version = "0.2.0"
 dependencies = [
  "kora-runtime",
  "kora-syntax",
+ "kora-types",
  "serde_json",
 ]
 

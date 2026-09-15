@@ -534,11 +534,10 @@ impl<W: Write> Adapter<W> {
         let source = match std::fs::read_to_string(&launch.program) {
             Ok(source) => source,
             Err(e) => {
-                self.output(
-                    &format!("cannot read `{}`: {e}\n", launch.program),
-                    "stderr",
-                );
-                self.handle(Incoming::Exited(None));
+                self.handle(Incoming::Exited(Some(format!(
+                    "cannot read `{}`: {e}\n",
+                    launch.program
+                ))));
                 self.done = true;
                 return;
             }
@@ -546,12 +545,24 @@ impl<W: Write> Adapter<W> {
         let program = match kora_syntax::parse(&source) {
             Ok(program) => program,
             Err(e) => {
-                self.output(&e.render(&source, &launch.program), "stderr");
-                self.handle(Incoming::Exited(None));
+                self.handle(Incoming::Exited(Some(e.render(&source, &launch.program))));
                 self.done = true;
                 return;
             }
         };
+        let analysis = kora_types::analyze_file(&program, Path::new(&launch.program));
+        if !analysis.diagnostics.is_empty() {
+            let mut report = String::new();
+            for diagnostic in analysis.diagnostics {
+                report.push_str(&format!(
+                    "{}:{}:{}: {}\n",
+                    launch.program, diagnostic.span.line, diagnostic.span.col, diagnostic.message
+                ));
+            }
+            self.handle(Incoming::Exited(Some(report)));
+            self.done = true;
+            return;
+        }
 
         self.event("thread", json!({ "reason": "started", "threadId": THREAD }));
 
@@ -561,7 +572,13 @@ impl<W: Write> Adapter<W> {
         let controls = self.controls.clone();
 
         self.running = Some(std::thread::spawn(move || {
-            let mut interp = build(&launch);
+            let mut interp = match build(&launch) {
+                Ok(interp) => interp,
+                Err(error) => {
+                    let _ = to_main.send(Incoming::Exited(Some(error)));
+                    return;
+                }
+            };
             if !launch.no_debug {
                 interp.attach_debugger(
                     Box::new(Bridge {
@@ -628,21 +645,21 @@ impl<W: Write> Adapter<W> {
 const THREAD: i64 = 1;
 
 /// An interpreter configured the way `kora run` configures one.
-fn build(launch: &Launch) -> Interpreter {
+fn build(launch: &Launch) -> Result<Interpreter, String> {
     let path = Path::new(&launch.program);
     let mut interp = Interpreter::new();
     // Printed lines travel as `output` events, so nothing may also go to the
     // adapter's stdout: that is the protocol channel.
     interp.direct_stdout = false;
     interp.program_name = launch.program.clone();
-    interp.config = Config::discover(path);
+    interp.config = Config::discover(path).map_err(|error| error.to_string())?;
     interp.sinks = interp.config.sinks.clone();
     interp.allow_private_hosts = interp.config.http_allow_private;
     interp.http_timeout_secs = interp.config.http_timeout_secs;
     if let Some(mode) = launch.mode {
         interp.cassette = Some(Arc::new(Mutex::new(Cassette::open(mode, path))));
     }
-    interp
+    Ok(interp)
 }
 
 fn file_name(path: &str) -> String {

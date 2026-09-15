@@ -12,7 +12,13 @@ implemented in the current codebase from the work that remains.
 
 The current codebase includes:
 
-- Python-like syntax, static types, modules, imports, and source diagnostics.
+- Python-like syntax, a conservative static checker, modules, imports, and
+  source diagnostics. The checker covers local declared assignments and
+  returns, calls, constructors, fields, loop control, and direct classified
+  flow into `analyze`; dynamic integrations remain runtime-checked.
+- `kora run`, `kora test`, and the debugger run the checker before starting
+  effects. An invalid `kora.toml` or corrupt durable journal stops execution
+  instead of selecting defaults or starting a run again.
 - `kora run`, `check`, `test`, `audit`, `trace`, and durable run commands.
 - Typed `analyze` calls with OpenAI and Ollama providers, including images
   and per-call model selection.
@@ -74,11 +80,28 @@ The current codebase includes:
 
 ## Coming next
 
+### Prove the product wedge
+
+The product thesis is now deliberately narrow: policy-safe, replayable AI
+workflows over sensitive claims, invoices, compliance records, and internal
+documents. The next release gate is evidence, not more syntax:
+
+- work with three design partners on one repeated document workflow;
+- publish one end-to-end case study with correctness, cost, and replay data;
+- benchmark that workflow against an established Python or TypeScript stack;
+- publish a conformance suite for checking, label flow, and journal recovery;
+- commission an independent security review before any production claim.
+
+If teams do not keep using the workflow after a 90-day trial, Kora should
+shrink into a DSL or library instead of expanding as a general-purpose
+language.
+
 ### Finish cancellation
 
-`parallel for ... first` has shipped: a fan-out now stops the moment one
-branch answers, and the winner is journaled so a resumed run keeps the
-decision the live run made rather than racing again.
+`parallel for ... first` has shipped: a candidate answer stops later work from
+starting while lower input indexes already in flight are allowed to finish.
+The earliest successful input wins, and that result is journaled so a resumed
+run keeps the live run's decision rather than racing again.
 
 What remains is the half that is genuinely hard — interrupting a branch
 already running. Today no *further* work is started, but a request already

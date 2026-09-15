@@ -1,9 +1,10 @@
-//! kora-types: name resolution and the checks an editor can run on every
+//! kora-types: conservative static checks that an editor can run on every
 //! keystroke.
 //!
-//! This is deliberately not a full type checker. It answers the questions that
-//! make an editor useful — what is defined, where, and is this name real —
-//! fast enough to run on every change, and without executing anything.
+//! The checker rejects mistakes it can prove, including incompatible declared
+//! types, bad calls, missing fields, invalid control flow, and direct flows of
+//! classified data into a model. Values from dynamic boundaries stay unknown
+//! until runtime rather than producing speculative errors.
 //!
 //! The same index powers hover and go-to-definition, so the editor's answers
 //! and its squiggles can never disagree.
@@ -162,6 +163,7 @@ fn analyze_inner(program: &Program, base: Option<PathBuf>, loading: &mut Vec<Pat
     };
     checker.collect_definitions(&program.items);
     checker.check_block(&program.items);
+    StaticChecker::new(&mut analysis).check_program(program);
     analysis
 }
 
@@ -775,8 +777,17 @@ impl Checker<'_> {
                 self.check_expr(value);
                 // The binding is scoped at runtime, but anything assigned
                 // inside the block is not, so only the binding is temporary.
+                let existed = self
+                    .scopes
+                    .last()
+                    .is_some_and(|scope| scope.contains(binding));
                 self.declare(binding);
                 self.nested(body);
+                if !existed {
+                    if let Some(scope) = self.scopes.last_mut() {
+                        scope.remove(binding);
+                    }
+                }
             }
             StmtKind::WithBudget { body, .. } | StmtKind::WithContext { body, .. } => {
                 self.nested(body)
@@ -1144,6 +1155,917 @@ impl Checker<'_> {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum StaticTy {
+    Unknown,
+    None,
+    Bool,
+    Int,
+    Float,
+    Str,
+    Bytes,
+    Image,
+    List(Box<StaticTy>),
+    Dict,
+    Named(String),
+    Outcome(Box<StaticTy>),
+}
+
+impl StaticTy {
+    fn from_annotation(ty: &TypeExpr) -> StaticTy {
+        match ty {
+            TypeExpr::Name(name) => match name.as_str() {
+                "None" => StaticTy::None,
+                "bool" => StaticTy::Bool,
+                "int" => StaticTy::Int,
+                "float" => StaticTy::Float,
+                "str" => StaticTy::Str,
+                "bytes" => StaticTy::Bytes,
+                "image" => StaticTy::Image,
+                "list" => StaticTy::List(Box::new(StaticTy::Unknown)),
+                "dict" => StaticTy::Dict,
+                other => StaticTy::Named(other.to_string()),
+            },
+            TypeExpr::Generic(name, args) if name == "list" => StaticTy::List(Box::new(
+                args.first()
+                    .map(StaticTy::from_annotation)
+                    .unwrap_or(StaticTy::Unknown),
+            )),
+            TypeExpr::Generic(name, _) if name == "dict" => StaticTy::Dict,
+            TypeExpr::Generic(name, _) => StaticTy::Named(name.clone()),
+        }
+    }
+
+    fn display(&self) -> String {
+        match self {
+            StaticTy::Unknown => "unknown".to_string(),
+            StaticTy::None => "None".to_string(),
+            StaticTy::Bool => "bool".to_string(),
+            StaticTy::Int => "int".to_string(),
+            StaticTy::Float => "float".to_string(),
+            StaticTy::Str => "str".to_string(),
+            StaticTy::Bytes => "bytes".to_string(),
+            StaticTy::Image => "image".to_string(),
+            StaticTy::List(inner) => format!("list[{}]", inner.display()),
+            StaticTy::Dict => "dict".to_string(),
+            StaticTy::Named(name) => name.clone(),
+            StaticTy::Outcome(inner) => format!("outcome[{}]", inner.display()),
+        }
+    }
+
+    fn compatible_with(&self, expected: &StaticTy) -> bool {
+        matches!(self, StaticTy::Unknown)
+            || matches!(expected, StaticTy::Unknown)
+            || self == expected
+            || matches!((self, expected), (StaticTy::Int, StaticTy::Float))
+            || matches!(
+                (self, expected),
+                (StaticTy::List(actual), StaticTy::List(wanted))
+                    if actual.compatible_with(wanted)
+            )
+    }
+}
+
+#[derive(Debug, Clone)]
+struct ValueFacts {
+    ty: StaticTy,
+    classified: bool,
+    released: bool,
+}
+
+impl ValueFacts {
+    fn new(ty: StaticTy) -> ValueFacts {
+        ValueFacts {
+            ty,
+            classified: false,
+            released: false,
+        }
+    }
+
+    fn unknown() -> ValueFacts {
+        ValueFacts::new(StaticTy::Unknown)
+    }
+}
+
+#[derive(Debug, Clone)]
+struct FieldFacts {
+    ty: StaticTy,
+    classified: bool,
+}
+
+#[derive(Debug, Clone)]
+struct FunctionFacts {
+    params: Vec<StaticTy>,
+    return_ty: StaticTy,
+}
+
+/// The type pass is intentionally conservative. It follows only facts stated
+/// in this file. Imported modules, sidecars, MCP servers, and values returned
+/// by untyped functions remain unknown and are validated by the runtime.
+struct StaticChecker<'a> {
+    analysis: &'a mut Analysis,
+    types: HashMap<String, Vec<(String, FieldFacts)>>,
+    functions: HashMap<String, FunctionFacts>,
+    scopes: Vec<HashMap<String, ValueFacts>>,
+    function_depth: usize,
+    expected_return: Option<StaticTy>,
+    loop_depth: usize,
+    parallel_depth: usize,
+}
+
+impl<'a> StaticChecker<'a> {
+    fn new(analysis: &'a mut Analysis) -> StaticChecker<'a> {
+        StaticChecker {
+            analysis,
+            types: HashMap::new(),
+            functions: HashMap::new(),
+            scopes: vec![HashMap::new()],
+            function_depth: 0,
+            expected_return: None,
+            loop_depth: 0,
+            parallel_depth: 0,
+        }
+    }
+
+    fn check_program(&mut self, program: &Program) {
+        self.collect_facts(&program.items);
+        self.check_stmts(&program.items);
+    }
+
+    fn collect_facts(&mut self, stmts: &[Stmt]) {
+        let mut definitions: HashMap<String, Span> = HashMap::new();
+        for stmt in stmts {
+            match &stmt.kind {
+                StmtKind::FuncDef(function) => {
+                    self.report_duplicate(&mut definitions, &function.name, stmt.span);
+                    self.functions.insert(
+                        function.name.clone(),
+                        FunctionFacts {
+                            params: function
+                                .params
+                                .iter()
+                                .map(|p| {
+                                    p.ty.as_ref()
+                                        .map(StaticTy::from_annotation)
+                                        .unwrap_or(StaticTy::Unknown)
+                                })
+                                .collect(),
+                            return_ty: function
+                                .return_ty
+                                .as_ref()
+                                .map(StaticTy::from_annotation)
+                                .unwrap_or(StaticTy::Unknown),
+                        },
+                    );
+                }
+                StmtKind::TypeDef { name, fields } => {
+                    self.report_duplicate(&mut definitions, name, stmt.span);
+                    let mut seen = HashSet::new();
+                    let mut facts = Vec::new();
+                    for field in fields {
+                        if !seen.insert(field.name.clone()) {
+                            self.analysis.diagnostics.push(
+                                Diagnostic::error(
+                                    field.span,
+                                    format!("field `{}` is declared more than once", field.name),
+                                )
+                                .with_hint("keep one declaration for each field"),
+                            );
+                        }
+                        facts.push((
+                            field.name.clone(),
+                            FieldFacts {
+                                ty: StaticTy::from_annotation(&field.ty),
+                                classified: field.classified,
+                            },
+                        ));
+                    }
+                    self.types.insert(name.clone(), facts);
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn report_duplicate(
+        &mut self,
+        definitions: &mut HashMap<String, Span>,
+        name: &str,
+        span: Span,
+    ) {
+        if definitions.insert(name.to_string(), span).is_some() {
+            self.analysis.diagnostics.push(
+                Diagnostic::error(span, format!("`{name}` is defined more than once"))
+                    .with_hint("rename or remove one of the definitions"),
+            );
+        }
+    }
+
+    fn check_stmts(&mut self, stmts: &[Stmt]) {
+        for stmt in stmts {
+            self.check_static_stmt(stmt);
+        }
+    }
+
+    fn check_static_stmt(&mut self, stmt: &Stmt) {
+        match &stmt.kind {
+            StmtKind::Assign {
+                target,
+                ty,
+                value,
+                classified,
+                on_token,
+                on_tool_call,
+                ..
+            } => {
+                let mut actual = self.infer(value);
+                let declared = ty.as_ref().map(StaticTy::from_annotation);
+                let is_analyze = matches!(
+                    &value.kind,
+                    ExprKind::Call { callee, .. }
+                        if matches!(&callee.kind, ExprKind::Name(name) if name == "analyze")
+                );
+                if is_analyze && declared.is_none() {
+                    self.analysis.diagnostics.push(
+                        Diagnostic::error(
+                            stmt.span,
+                            "an `analyze` result needs a declared payload type",
+                        )
+                        .with_hint("write `result: YourType = analyze(data, prompt)`"),
+                    );
+                }
+                if let Some(expected) = &declared {
+                    if !is_analyze {
+                        self.require_type(&actual.ty, expected, value.span, "assignment");
+                        actual.ty = expected.clone();
+                    } else {
+                        actual.ty = StaticTy::Outcome(Box::new(expected.clone()));
+                    }
+                }
+                actual.classified |= *classified;
+                if let ExprKind::Name(name) = &target.kind {
+                    self.bind(name, actual);
+                } else {
+                    self.infer(target);
+                }
+                if let Some(handler) = on_token {
+                    self.bind(&handler.var, ValueFacts::new(StaticTy::Str));
+                    self.check_stmts(&handler.body);
+                }
+                if let Some(handler) = on_tool_call {
+                    self.bind(&handler.name_var, ValueFacts::new(StaticTy::Str));
+                    self.bind(&handler.args_var, ValueFacts::new(StaticTy::Dict));
+                    self.check_stmts(&handler.body);
+                }
+            }
+            StmtKind::AugAssign { target, value, .. } => {
+                let target_ty = self.infer(target);
+                let value_ty = self.infer(value);
+                self.require_type(
+                    &value_ty.ty,
+                    &target_ty.ty,
+                    value.span,
+                    "augmented assignment",
+                );
+            }
+            StmtKind::Expr(expr) => {
+                self.infer(expr);
+            }
+            StmtKind::If {
+                branches,
+                else_body,
+            } => {
+                for (condition, body) in branches {
+                    self.infer(condition);
+                    self.check_stmts(body);
+                }
+                if let Some(body) = else_body {
+                    self.check_stmts(body);
+                }
+            }
+            StmtKind::While { cond, body } => {
+                self.infer(cond);
+                self.loop_depth += 1;
+                self.check_stmts(body);
+                self.loop_depth -= 1;
+            }
+            StmtKind::For { var, iter, body } => {
+                let iter = self.infer(iter);
+                let item = self.iter_item(iter);
+                self.bind(var, item);
+                self.loop_depth += 1;
+                self.check_stmts(body);
+                self.loop_depth -= 1;
+            }
+            StmtKind::ParallelFor {
+                var,
+                iter,
+                body,
+                collect_into,
+                ..
+            } => {
+                let iter = self.infer(iter);
+                let item = self.iter_item(iter);
+                self.bind(var, item);
+                self.loop_depth += 1;
+                self.parallel_depth += 1;
+                self.check_stmts(body);
+                self.parallel_depth -= 1;
+                self.loop_depth -= 1;
+                if let Some(name) = collect_into {
+                    self.bind(
+                        name,
+                        ValueFacts::new(StaticTy::List(Box::new(StaticTy::Unknown))),
+                    );
+                }
+            }
+            StmtKind::FuncDef(function) => {
+                let old_return = self.expected_return.take();
+                let old_loops = std::mem::take(&mut self.loop_depth);
+                let old_parallel = std::mem::take(&mut self.parallel_depth);
+                self.function_depth += 1;
+                self.expected_return = function.return_ty.as_ref().map(StaticTy::from_annotation);
+                self.scopes.push(HashMap::new());
+                for param in &function.params {
+                    self.bind(
+                        &param.name,
+                        ValueFacts::new(
+                            param
+                                .ty
+                                .as_ref()
+                                .map(StaticTy::from_annotation)
+                                .unwrap_or(StaticTy::Unknown),
+                        ),
+                    );
+                }
+                self.check_stmts(&function.body);
+                self.scopes.pop();
+                self.function_depth -= 1;
+                self.expected_return = old_return;
+                self.loop_depth = old_loops;
+                self.parallel_depth = old_parallel;
+            }
+            StmtKind::TypeDef { .. }
+            | StmtKind::Use { .. }
+            | StmtKind::UseFile { .. }
+            | StmtKind::UsePython { .. }
+            | StmtKind::UseHelper { .. }
+            | StmtKind::UsePkg { .. }
+            | StmtKind::UseMcp { .. }
+            | StmtKind::Pass => {}
+            StmtKind::Return(value) => {
+                if self.function_depth == 0 && self.parallel_depth == 0 {
+                    self.analysis.diagnostics.push(
+                        Diagnostic::error(stmt.span, "`return` is only valid inside a function")
+                            .with_hint("move this statement into `def`, `agent`, or `tool`"),
+                    );
+                }
+                let actual = value
+                    .as_ref()
+                    .map(|expr| self.infer(expr).ty)
+                    .unwrap_or(StaticTy::None);
+                if self.parallel_depth == 0 {
+                    if let Some(expected) = self.expected_return.clone() {
+                        self.require_type(&actual, &expected, stmt.span, "return value");
+                    }
+                }
+            }
+            StmtKind::Match { subject, arms } => {
+                let subject = self.infer(subject);
+                for arm in arms {
+                    self.bind_pattern(&arm.pattern, &subject);
+                    if let Some(guard) = &arm.guard {
+                        self.infer(guard);
+                    }
+                    self.check_stmts(&arm.body);
+                }
+            }
+            StmtKind::BindOrElse {
+                name,
+                ty,
+                value,
+                classified,
+                reason,
+                status,
+                else_body,
+                ..
+            } => {
+                let outcome = self.infer(value);
+                let is_analyze = matches!(
+                    &value.kind,
+                    ExprKind::Call { callee, .. }
+                        if matches!(&callee.kind, ExprKind::Name(name) if name == "analyze")
+                );
+                if is_analyze && ty.is_none() {
+                    self.analysis.diagnostics.push(
+                        Diagnostic::error(
+                            stmt.span,
+                            "an `analyze` result needs a declared payload type",
+                        )
+                        .with_hint("write `result: YourType = analyze(data, prompt) else:`"),
+                    );
+                }
+                let payload = match outcome.ty {
+                    StaticTy::Outcome(inner) => *inner,
+                    _ => StaticTy::Unknown,
+                };
+                let declared = ty.as_ref().map(StaticTy::from_annotation);
+                if let Some(expected) = &declared {
+                    self.require_type(&payload, expected, value.span, "outcome payload");
+                }
+                if let Some(reason) = reason {
+                    self.bind(reason, ValueFacts::new(StaticTy::Str));
+                }
+                if let Some(status) = status {
+                    self.bind(status, ValueFacts::new(StaticTy::Str));
+                }
+                self.check_stmts(else_body);
+                self.bind(
+                    name,
+                    ValueFacts {
+                        ty: declared.unwrap_or(payload),
+                        classified: outcome.classified || *classified,
+                        released: outcome.released,
+                    },
+                );
+            }
+            StmtKind::Declassify {
+                value,
+                binding,
+                body,
+                ..
+            } => {
+                let mut facts = self.infer(value);
+                facts.released = true;
+                let old = self.current_scope_mut().insert(binding.clone(), facts);
+                self.check_stmts(body);
+                if let Some(old) = old {
+                    self.current_scope_mut().insert(binding.clone(), old);
+                } else {
+                    self.current_scope_mut().remove(binding);
+                }
+            }
+            StmtKind::WithBudget { body, .. } | StmtKind::WithContext { body, .. } => {
+                self.check_stmts(body);
+            }
+            StmtKind::WithMock { result, body, .. } => {
+                self.infer(result);
+                self.check_stmts(body);
+            }
+            StmtKind::Test { body, .. } => self.check_stmts(body),
+            StmtKind::Assert { condition, message } => {
+                self.infer(condition);
+                if let Some(message) = message {
+                    self.infer(message);
+                }
+            }
+            StmtKind::Break(value) => {
+                if let Some(value) = value {
+                    self.infer(value);
+                }
+                if self.loop_depth == 0 {
+                    self.analysis.diagnostics.push(
+                        Diagnostic::error(stmt.span, "`break` is only valid inside a loop")
+                            .with_hint("move it into `for`, `while`, or `parallel for`"),
+                    );
+                }
+            }
+            StmtKind::Continue => {
+                if self.loop_depth == 0 {
+                    self.analysis.diagnostics.push(
+                        Diagnostic::error(stmt.span, "`continue` is only valid inside a loop")
+                            .with_hint("move it into `for`, `while`, or `parallel for`"),
+                    );
+                }
+            }
+        }
+    }
+
+    fn infer(&mut self, expr: &Expr) -> ValueFacts {
+        match &expr.kind {
+            ExprKind::Int(_) => ValueFacts::new(StaticTy::Int),
+            ExprKind::Float(_) => ValueFacts::new(StaticTy::Float),
+            ExprKind::Str(_) => ValueFacts::new(StaticTy::Str),
+            ExprKind::Bool(_) => ValueFacts::new(StaticTy::Bool),
+            ExprKind::None => ValueFacts::new(StaticTy::None),
+            ExprKind::Name(name) => self.lookup(name).unwrap_or_else(ValueFacts::unknown),
+            ExprKind::List(items) => {
+                let facts: Vec<ValueFacts> = items.iter().map(|item| self.infer(item)).collect();
+                let first = facts.first().cloned().unwrap_or_else(ValueFacts::unknown);
+                let mut classified = self.is_sensitive(&first);
+                let mut released = first.released;
+                for item in facts.iter().skip(1) {
+                    classified |= self.is_sensitive(item);
+                    released &= item.released;
+                }
+                ValueFacts {
+                    ty: StaticTy::List(Box::new(first.ty)),
+                    classified,
+                    released,
+                }
+            }
+            ExprKind::Dict(pairs) => {
+                let classified = pairs.iter().any(|(key, value)| {
+                    let key = self.infer(key);
+                    let value = self.infer(value);
+                    self.is_sensitive(&key) || self.is_sensitive(&value)
+                });
+                ValueFacts {
+                    ty: StaticTy::Dict,
+                    classified,
+                    released: false,
+                }
+            }
+            ExprKind::FString { exprs, .. } => {
+                let classified = exprs.iter().any(|part| {
+                    let facts = self.infer(part);
+                    self.is_sensitive(&facts)
+                });
+                ValueFacts {
+                    ty: StaticTy::Str,
+                    classified,
+                    released: false,
+                }
+            }
+            ExprKind::Binary { op, left, right } => {
+                let left = self.infer(left);
+                let right = self.infer(right);
+                let ty = match op {
+                    BinOp::Eq
+                    | BinOp::NotEq
+                    | BinOp::Lt
+                    | BinOp::Gt
+                    | BinOp::LtEq
+                    | BinOp::GtEq
+                    | BinOp::In
+                    | BinOp::NotIn
+                    | BinOp::And
+                    | BinOp::Or => StaticTy::Bool,
+                    BinOp::Div => StaticTy::Float,
+                    _ if left.ty == right.ty => left.ty.clone(),
+                    _ if matches!(left.ty, StaticTy::Float)
+                        && matches!(right.ty, StaticTy::Int) =>
+                    {
+                        StaticTy::Float
+                    }
+                    _ if matches!(left.ty, StaticTy::Int)
+                        && matches!(right.ty, StaticTy::Float) =>
+                    {
+                        StaticTy::Float
+                    }
+                    _ => StaticTy::Unknown,
+                };
+                ValueFacts {
+                    ty,
+                    classified: self.is_sensitive(&left) || self.is_sensitive(&right),
+                    released: left.released && right.released,
+                }
+            }
+            ExprKind::Unary { op, operand } => {
+                let operand = self.infer(operand);
+                ValueFacts {
+                    ty: if matches!(op, UnaryOp::Not) {
+                        StaticTy::Bool
+                    } else {
+                        operand.ty.clone()
+                    },
+                    classified: self.is_sensitive(&operand),
+                    released: operand.released,
+                }
+            }
+            ExprKind::Call {
+                callee,
+                args,
+                kwargs,
+            } => self.infer_call(expr.span, callee, args, kwargs),
+            ExprKind::Attr { object, name } => {
+                let object = self.infer(object);
+                if let StaticTy::Named(type_name) = &object.ty {
+                    if let Some(fields) = self.types.get(type_name) {
+                        if let Some((_, field)) = fields.iter().find(|(field, _)| field == name) {
+                            return ValueFacts {
+                                ty: field.ty.clone(),
+                                classified: object.classified || field.classified,
+                                released: object.released,
+                            };
+                        }
+                        let available = fields
+                            .iter()
+                            .map(|(field, _)| field.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ");
+                        self.analysis.diagnostics.push(
+                            Diagnostic::error(
+                                expr.span,
+                                format!("`{type_name}` has no field `{name}`"),
+                            )
+                            .with_hint(format!("available fields: {available}")),
+                        );
+                    }
+                }
+                ValueFacts::unknown()
+            }
+            ExprKind::Index { object, index } => {
+                let object = self.infer(object);
+                self.infer(index);
+                let ty = match &object.ty {
+                    StaticTy::List(inner) => (**inner).clone(),
+                    StaticTy::Str => StaticTy::Str,
+                    _ => StaticTy::Unknown,
+                };
+                ValueFacts {
+                    ty,
+                    classified: self.is_sensitive(&object),
+                    released: object.released,
+                }
+            }
+            ExprKind::Slice {
+                object,
+                start,
+                stop,
+            } => {
+                let object = self.infer(object);
+                if let Some(start) = start {
+                    self.infer(start);
+                }
+                if let Some(stop) = stop {
+                    self.infer(stop);
+                }
+                object
+            }
+        }
+    }
+
+    fn infer_call(
+        &mut self,
+        span: Span,
+        callee: &Expr,
+        args: &[Expr],
+        kwargs: &[(String, Expr)],
+    ) -> ValueFacts {
+        let arg_facts: Vec<ValueFacts> = args.iter().map(|arg| self.infer(arg)).collect();
+        let kwarg_facts: Vec<ValueFacts> =
+            kwargs.iter().map(|(_, value)| self.infer(value)).collect();
+        let any_classified = arg_facts
+            .iter()
+            .chain(kwarg_facts.iter())
+            .any(|facts| self.is_sensitive(facts));
+
+        let ExprKind::Name(name) = &callee.kind else {
+            self.infer(callee);
+            // An external or computed callable may sanitize, preserve, or
+            // replace its input. Do not invent a data-flow fact here; the
+            // runtime checks the value that actually reaches a sink.
+            return ValueFacts::unknown();
+        };
+
+        if name == "analyze" {
+            if args.len() != 2 {
+                self.analysis.diagnostics.push(
+                    Diagnostic::error(
+                        span,
+                        format!(
+                            "`analyze` expects 2 arguments (data and prompt), but {} provided",
+                            args.len()
+                        ),
+                    )
+                    .with_hint("write `analyze(data, \"what to do\")`"),
+                );
+            }
+            if let Some(prompt) = arg_facts.get(1) {
+                self.require_type(&prompt.ty, &StaticTy::Str, args[1].span, "model prompt");
+            }
+            for (keyword, value) in kwargs {
+                if keyword != "model" && keyword != "tools" {
+                    self.analysis.diagnostics.push(
+                        Diagnostic::error(
+                            value.span,
+                            format!("`analyze` has no keyword argument `{keyword}`"),
+                        )
+                        .with_hint("the keyword arguments are `model` and `tools`"),
+                    );
+                }
+            }
+            for (arg, facts) in args.iter().zip(arg_facts.iter()).chain(
+                kwargs
+                    .iter()
+                    .map(|(_, value)| value)
+                    .zip(kwarg_facts.iter()),
+            ) {
+                if self.is_sensitive(facts) {
+                    self.analysis.diagnostics.push(
+                        Diagnostic::error(
+                            arg.span,
+                            "classified data cannot be sent to `analyze` directly",
+                        )
+                        .with_hint(
+                            "bind it inside `declassify <value> as <name> for <sink>:` and pass that binding; the runtime will also enforce the named sink policy",
+                        ),
+                    );
+                }
+            }
+            return ValueFacts::new(StaticTy::Outcome(Box::new(StaticTy::Unknown)));
+        }
+
+        if let Some(function) = self.functions.get(name).cloned() {
+            if args.len() != function.params.len() {
+                self.analysis.diagnostics.push(
+                    Diagnostic::error(
+                        span,
+                        format!(
+                            "`{name}` expects {} argument{}, but {} provided",
+                            function.params.len(),
+                            if function.params.len() == 1 { "" } else { "s" },
+                            args.len()
+                        ),
+                    )
+                    .with_hint("pass one value for each declared parameter"),
+                );
+            }
+            for ((arg, actual), expected) in args
+                .iter()
+                .zip(arg_facts.iter())
+                .zip(function.params.iter())
+            {
+                self.require_type(&actual.ty, expected, arg.span, "function argument");
+            }
+            return ValueFacts {
+                ty: function.return_ty,
+                // This pass is not interprocedural. The function may return a
+                // constant or a transformed input, so only its declared type
+                // is known here. Runtime labels remain authoritative.
+                classified: false,
+                released: false,
+            };
+        }
+
+        if let Some(fields) = self.types.get(name).cloned() {
+            if args.len() != fields.len() {
+                self.analysis.diagnostics.push(
+                    Diagnostic::error(
+                        span,
+                        format!(
+                            "`{name}` expects {} field value{}, but {} provided",
+                            fields.len(),
+                            if fields.len() == 1 { "" } else { "s" },
+                            args.len()
+                        ),
+                    )
+                    .with_hint(format!(
+                        "provide fields in this order: {}",
+                        fields
+                            .iter()
+                            .map(|(field, _)| field.as_str())
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    )),
+                );
+            }
+            for ((arg, actual), (_, field)) in args.iter().zip(arg_facts.iter()).zip(fields.iter())
+            {
+                self.require_type(&actual.ty, &field.ty, arg.span, "field value");
+            }
+            return ValueFacts {
+                ty: StaticTy::Named(name.clone()),
+                classified: any_classified,
+                released: false,
+            };
+        }
+
+        match name.as_str() {
+            "Ok" => ValueFacts {
+                ty: StaticTy::Outcome(Box::new(
+                    arg_facts
+                        .first()
+                        .map(|facts| facts.ty.clone())
+                        .unwrap_or(StaticTy::Unknown),
+                )),
+                classified: any_classified,
+                released: false,
+            },
+            "Err" | "Uncertain" | "Exhausted" | "Failed" => {
+                ValueFacts::new(StaticTy::Outcome(Box::new(StaticTy::Unknown)))
+            }
+            "str" => ValueFacts::new(StaticTy::Str),
+            "int" => ValueFacts::new(StaticTy::Int),
+            "float" => ValueFacts::new(StaticTy::Float),
+            "bool" => ValueFacts::new(StaticTy::Bool),
+            "len" | "tokens_spent" | "tokens_remaining" | "calls_spent" => {
+                ValueFacts::new(StaticTy::Int)
+            }
+            "input" => ValueFacts::new(StaticTy::Str),
+            "redact" => ValueFacts::new(StaticTy::Str),
+            _ => ValueFacts {
+                ty: StaticTy::Unknown,
+                classified: any_classified,
+                released: false,
+            },
+        }
+    }
+
+    fn require_type(&mut self, actual: &StaticTy, expected: &StaticTy, span: Span, use_: &str) {
+        if !actual.compatible_with(expected) {
+            self.analysis.diagnostics.push(
+                Diagnostic::error(
+                    span,
+                    format!(
+                        "{use_} has type `{}`, but `{}` is required",
+                        actual.display(),
+                        expected.display()
+                    ),
+                )
+                .with_hint(format!("produce a `{}` value here", expected.display())),
+            );
+        }
+    }
+
+    fn bind_pattern(&mut self, pattern: &Pattern, subject: &ValueFacts) {
+        match pattern {
+            Pattern::Bind(name) => self.bind(name, subject.clone()),
+            Pattern::Ctor(tag, binders) => {
+                let payload = if tag == "Ok" {
+                    match &subject.ty {
+                        StaticTy::Outcome(inner) => (**inner).clone(),
+                        _ => StaticTy::Unknown,
+                    }
+                } else {
+                    StaticTy::Str
+                };
+                for binder in binders {
+                    self.bind(
+                        binder,
+                        ValueFacts {
+                            ty: payload.clone(),
+                            classified: subject.classified,
+                            released: subject.released,
+                        },
+                    );
+                }
+            }
+            Pattern::Or(alternatives) => {
+                if let Some(first) = alternatives.first() {
+                    self.bind_pattern(first, subject);
+                }
+            }
+            Pattern::Wildcard
+            | Pattern::LiteralInt(_)
+            | Pattern::LiteralStr(_)
+            | Pattern::LiteralBool(_) => {}
+        }
+    }
+
+    fn iter_item(&self, iter: ValueFacts) -> ValueFacts {
+        let ty = match iter.ty {
+            StaticTy::List(inner) => *inner,
+            StaticTy::Str => StaticTy::Str,
+            _ => StaticTy::Unknown,
+        };
+        ValueFacts {
+            ty,
+            classified: iter.classified,
+            released: iter.released,
+        }
+    }
+
+    fn bind(&mut self, name: &str, facts: ValueFacts) {
+        self.current_scope_mut().insert(name.to_string(), facts);
+    }
+
+    fn current_scope_mut(&mut self) -> &mut HashMap<String, ValueFacts> {
+        self.scopes
+            .last_mut()
+            .expect("the root scope always exists")
+    }
+
+    fn lookup(&self, name: &str) -> Option<ValueFacts> {
+        self.scopes
+            .iter()
+            .rev()
+            .find_map(|scope| scope.get(name).cloned())
+    }
+
+    fn is_sensitive(&self, facts: &ValueFacts) -> bool {
+        !facts.released
+            && (facts.classified || self.type_contains_classified(&facts.ty, &mut HashSet::new()))
+    }
+
+    fn type_contains_classified(&self, ty: &StaticTy, visiting: &mut HashSet<String>) -> bool {
+        match ty {
+            StaticTy::Named(name) if visiting.insert(name.clone()) => {
+                self.types.get(name).is_some_and(|fields| {
+                    fields.iter().any(|(_, field)| {
+                        field.classified || self.type_contains_classified(&field.ty, visiting)
+                    })
+                })
+            }
+            StaticTy::List(inner) | StaticTy::Outcome(inner) => {
+                self.type_contains_classified(inner, visiting)
+            }
+            _ => false,
+        }
+    }
+}
+
 fn close_enough(a: &str, b: &str) -> bool {
     if a.eq_ignore_ascii_case(b) {
         return true;
@@ -1362,6 +2284,19 @@ def main():
         print(plain)
 "#;
         assert!(messages(src).is_empty(), "{:?}", messages(src));
+    }
+
+    #[test]
+    fn declassify_binding_does_not_escape_the_block() {
+        let src = r#"def main():
+    classified s = "x"
+    declassify s as plain for local_model:
+        print(plain)
+    print(plain)
+"#;
+        assert!(messages(src)
+            .iter()
+            .any(|message| message.contains("`plain` is not defined")));
     }
 
     #[test]

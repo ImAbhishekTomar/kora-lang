@@ -49,8 +49,20 @@ def review(customer: Customer) -> str:
             {"account": account},
             "Check whether this account is valid"
         )
-    return result
+    match result:
+        case Ok(answer):
+            return answer
+        case Uncertain(reason):
+            return f"human review: {reason}"
+        case Exhausted(meter):
+            return f"budget exhausted: {meter}"
+        case Failed(why):
+            return f"provider failed: {why}"
 ```
+
+Direct classified flow into `analyze` is caught before execution. The runtime
+checks the deep label and configured sink again when the model call is made,
+which covers values whose labels are only known dynamically.
 
 The release is scoped to the block and the sink. It does not make the value
 safe for other sinks. Check every release before shipping:

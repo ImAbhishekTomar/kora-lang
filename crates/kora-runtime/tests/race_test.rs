@@ -1,4 +1,4 @@
-//! `parallel for x in xs first:` — stopping a fan-out as soon as one branch
+//! `parallel for x in xs first:` - choosing the earliest successful input
 //! answers.
 //!
 //! The half of cancellation a deadline does not cover. `budget: max_seconds`

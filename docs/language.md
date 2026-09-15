@@ -44,7 +44,9 @@ items = [1, 2, 3]           # list
 lookup = {"a": 1, "b": 2}   # dict, string keys only
 ```
 
-Annotations are optional on assignment and checked at runtime:
+Annotations are optional on assignment. When both sides are known locally,
+`kora check` verifies them before execution; the runtime validates values that
+arrive from dynamic boundaries:
 
 ```python
 total: int = 0
@@ -70,6 +72,13 @@ e.salary = 170
 
 Field types may be `str`, `int`, `float`, `bool`, `list[str]`, or another
 declared type.
+
+The static checker also verifies declared return values, function and
+constructor arity, field access, duplicate definitions, and loop-control
+placement. It is deliberately conservative: imported sidecars, MCP servers,
+helpers, and untyped functions produce unknown values until runtime. `kora
+run`, `kora test`, and the debugger refuse static errors before starting
+effects.
 
 ### Field metadata and constraints
 
@@ -487,7 +496,7 @@ guard on its result.
 
 ## Chaining outcomes with `else`
 
-Every model call returns a three-way outcome, so handling each one with a full
+Every model call returns a four-way outcome, so handling each one with a full
 `match` costs a level of indentation per call. Four calls in a row and the code
 that matters is buried.
 
@@ -565,20 +574,22 @@ like a sequential one.
 
 Mutating a captured value inside a branch changes only that branch's copy.
 
-### `first`: stop as soon as one branch answers
+### `first`: select the earliest successful input
 
-`budget: max_seconds` stops a scope when time runs out. `first` stops one when
-the work is *done*:
+`budget: max_seconds` stops a scope when time runs out. `first` stops starting
+later work once it has a candidate answer:
 
 ```python
 answer = parallel for mirror in mirrors first:
     return fetch(mirror)
 ```
 
-The loop yields **one value** instead of a list, and once a branch has
-returned one, no further branches are started. A branch that falls off the end
-of its body has not answered the question, so it does not stop the race; a
-race nobody wins is `None`, exactly what such a branch produces.
+The loop yields **one value** instead of a list. Once index N has returned a
+candidate, no work at or after N is started. Lower indexes already in flight
+finish because one of them may become the deterministic winner. A branch that
+falls off the end of its body has not answered the question, so it does not
+stop the race; a race nobody wins is `None`, exactly what such a branch
+produces.
 
 The winner is the earliest in **input** order, not the earliest to finish.
 Two runs on the same inputs must not disagree about who won because one
@@ -625,10 +636,10 @@ result list is *not* replay-stable: which branches finished before the stop
 depends on how the threads were scheduled, so `len(results)` differs between
 two runs on the same input. Do not build a durable run's logic on that number.
 
-> A branch is let go of at a statement boundary, not mid-statement, whichever
-> of the two stopped it. A thread cannot be killed, and a half-written effect
-> is worse than a branch that runs a moment too long. A request already sent
-> runs to its own deadline — which is what `budget(max_seconds = N)` bounds.
+> With `break`, a branch is let go at a statement boundary, not mid-statement.
+> With `first`, work already in flight finishes so input-order selection stays
+> deterministic. A request already sent runs to its own deadline, which is
+> what `budget(max_seconds = N)` bounds.
 
 
 > Running many branches against one local model is slower than it looks:
@@ -744,6 +755,11 @@ containers, function returns, and the copy between agents:
 disguised = f"the value is {ssn}"
 analyze(disguised, "...")   # still refused
 ```
+
+Direct classified flow into `analyze` is caught by `kora check`. The runtime
+then applies deep labels and the configured sink policy at the actual model,
+file, serializer, database, Python, MCP, or helper boundary. This second check
+is authoritative for values whose labels are only known at runtime.
 
 `redact()` is the easy path when the model needs shape, not values. It
 replaces sensitive leaves with placeholders (`<NUM_1>`), so nothing sensitive

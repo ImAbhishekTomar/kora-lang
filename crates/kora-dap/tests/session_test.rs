@@ -304,6 +304,46 @@ fn a_program_that_fails_reports_the_error_and_exits_non_zero() {
 }
 
 #[test]
+fn a_static_error_stops_the_debuggee_before_effects() {
+    let scratch = Scratch::new("static-error");
+    let path = scratch.write(
+        "prog.ko",
+        "def main() -> int:\n    print(\"effect ran\")\n    return \"wrong\"\n",
+    );
+    let messages = session(&path, &[], false, |_, _| {});
+
+    let output: String = messages
+        .iter()
+        .filter(|message| message["event"] == "output")
+        .map(|message| message["body"]["output"].as_str().unwrap_or(""))
+        .collect();
+    assert!(output.contains("return value has type `str`"), "{output}");
+    assert!(!output.contains("effect ran\n"), "{output}");
+    assert!(messages.iter().any(|message| {
+        message["event"] == "exited" && message["body"]["exitCode"] == json!(1)
+    }));
+}
+
+#[test]
+fn an_invalid_config_stops_the_debuggee_before_effects() {
+    let scratch = Scratch::new("invalid-config");
+    let path = scratch.write("prog.ko", "def main():\n    print(\"effect ran\")\n");
+    scratch.write("kora.toml", "[models\n");
+    let messages = session(&path, &[], false, |_, _| {});
+
+    let output: String = messages
+        .iter()
+        .filter(|message| message["event"] == "output")
+        .map(|message| message["body"]["output"].as_str().unwrap_or(""))
+        .collect();
+    assert!(output.contains("not valid TOML"), "{output}");
+    assert!(!output.contains("effect ran\n"), "{output}");
+    assert!(messages.iter().any(|message| {
+        message["event"] == "exited" && message["body"]["exitCode"] == json!(1)
+    }));
+}
+
+#[test]
 fn a_breakpoint_on_a_blank_line_moves_to_the_next_statement() {
     let scratch = Scratch::new("snap");
     let path = scratch.write("prog.ko", PROGRAM);

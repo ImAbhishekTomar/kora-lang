@@ -8,6 +8,9 @@ description: Install Kora and run your first program.
 This path gets a Kora program running in three minutes. It uses the
 deterministic core, so no API key, model, or extra dependency is required.
 
+> Kora is pre-alpha. Use this guide to evaluate the language, not to deploy a
+> production workload.
+
 ## 1. Install Kora
 
 Choose one:
@@ -60,14 +63,15 @@ Expected output:
 Hello, Ada!
 ```
 
-## Try a real example
+## Try a policy workflow
 
-The repository includes a larger program with records, loops, conditions, and
-f-strings:
+The repository includes a salary review workflow with a classified field,
+scoped declassification, model outcomes, budgets, parallel work, and a
+committed replay cassette:
 
 ```bash
-kora check examples/00_basics.ko
-kora run examples/00_basics.ko
+kora check examples/03_salary_review.ko
+kora run --replay examples/03_salary_review.ko
 ```
 
 ## Where to go next

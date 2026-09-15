@@ -1,11 +1,11 @@
-# Stopping a fan-out as soon as one branch answers.
+# Selecting the earliest successful input while skipping later work.
 #
-# `budget: max_seconds` stops a scope when time runs out. This stops one when
-# the work is *done* -- the other half of cancellation, and the shape every
-# "race these providers" and "search until you find it" program wants.
+# `budget: max_seconds` stops a scope when time runs out. `first` stops
+# starting later work after a candidate answer, while lower input indexes
+# already in flight finish so the winner stays deterministic.
 #
 # Write `first` after the iterable. The loop then yields one value instead of
-# a list, and no further branches are started once one has answered.
+# a list. Once index N answers, no work at or after N is started.
 #
 #   kora run examples/25_race.ko
 
@@ -13,7 +13,7 @@ MIRRORS = ["eu-west", "us-east", "ap-south"]
 CORPUS = ["notes.txt", "contract.txt", "receipt.txt", "invoice.txt"]
 
 # A stand-in for a real lookup. Two of the three mirrors have nothing.
-def fetch(mirror: str) -> str:
+def fetch(mirror: str):
     if mirror == "us-east":
         return "the document"
     return None

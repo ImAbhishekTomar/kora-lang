@@ -65,19 +65,11 @@ fn an_undefined_name_is_reported_and_a_near_miss_is_suggested() {
     );
 }
 
-/// What the checker deliberately leaves to the runtime.
-///
-/// `kora check` is name resolution and shape-of-call checking, not a type
-/// checker: arity against a declared type, a field that does not exist, and
-/// a `match` missing an arm are all caught when the line runs, with a message
-/// naming the fix. That boundary is a choice, and it is worth a test — if it
-/// moves, it should move because someone decided to move it, and these are
-/// the cases to convert rather than delete.
 #[test]
-fn arity_and_fields_are_left_to_the_runtime() {
-    for src in [
-        // A declared type built with too few fields.
-        r#"type User:
+fn declared_shapes_and_control_flow_are_checked_before_runtime() {
+    let cases = [
+        (
+            r#"type User:
     name: str
     age: int
 
@@ -85,23 +77,29 @@ def main():
     u = User("Ada")
     print(u.name)
 "#,
-        // A field that does not exist.
-        r#"type User:
+            "expects 2 field values",
+        ),
+        (
+            r#"type User:
     name: str
 
 def main():
     u = User("Ada")
     print(u.nam)
 "#,
-        // A function called with the wrong number of arguments.
-        r#"def add(a: int, b: int) -> int:
+            "has no field `nam`",
+        ),
+        (
+            r#"def add(a: int, b: int) -> int:
     return a + b
 
 def main():
     print(f"{add(1)}")
 "#,
-        // The same name defined twice.
-        r#"def thing() -> int:
+            "expects 2 arguments",
+        ),
+        (
+            r#"def thing() -> int:
     return 1
 
 def thing() -> int:
@@ -110,18 +108,108 @@ def thing() -> int:
 def main():
     print(f"{thing()}")
 "#,
-        // `return` outside a function, and `break` outside a loop.
-        "return 1\n",
-        r#"def main():
+            "defined more than once",
+        ),
+        ("return 1\n", "only valid inside a function"),
+        (
+            r#"def main():
     break
 "#,
-    ] {
+            "only valid inside a loop",
+        ),
+    ];
+
+    for (src, expected) in cases {
+        let errors = errors(src);
         assert!(
-            errors(src).is_empty(),
-            "the checker is not a type checker; this is the runtime's job:\n{src}\ngot: {:?}",
-            errors(src)
+            errors.iter().any(|error| error.contains(expected)),
+            "expected `{expected}` for:\n{src}\ngot: {errors:?}",
         );
     }
+}
+
+#[test]
+fn declared_types_and_classified_model_flow_are_checked() {
+    let wrong_return = errors(
+        r#"def wrong() -> int:
+    return "not an int"
+"#,
+    );
+    assert!(wrong_return.iter().any(|error| {
+        error.contains("return value") && error.contains("str") && error.contains("int")
+    }));
+
+    let unsafe_flow = errors(
+        r#"type Employee:
+    name: str
+    classified salary: int
+
+def main():
+    employee = Employee("Ada", 100)
+    result: str = analyze(employee, "summarize")
+"#,
+    );
+    assert!(unsafe_flow
+        .iter()
+        .any(|error| error.contains("classified data cannot be sent")));
+
+    let safe_flow = errors(
+        r#"type Employee:
+    classified salary: int
+
+def main():
+    employee = Employee(100)
+    declassify employee.salary as pay for local_model:
+        result: str = analyze(pay, "summarize")
+"#,
+    );
+    assert!(safe_flow.is_empty(), "declassified binding: {safe_flow:?}");
+
+    let non_interprocedural_flow = errors(
+        r#"def public_constant(value: str) -> str:
+    return "public"
+
+def main():
+    classified secret = "private"
+    result: str = analyze(public_constant(secret), "summarize")
+"#,
+    );
+    assert!(
+        non_interprocedural_flow.is_empty(),
+        "a caller cannot assume a function preserves its argument label: {non_interprocedural_flow:?}"
+    );
+}
+
+#[test]
+fn declared_assignments_and_arguments_are_checked() {
+    let assignment = errors("def main():\n    count: int = \"three\"\n");
+    assert!(assignment
+        .iter()
+        .any(|error| error.contains("assignment") && error.contains("`int`")));
+
+    let argument = errors(
+        r#"def double(value: int) -> int:
+    return value * 2
+
+def main():
+    print(double("two"))
+"#,
+    );
+    assert!(argument
+        .iter()
+        .any(|error| error.contains("function argument") && error.contains("`int`")));
+}
+
+#[test]
+fn a_parallel_branch_return_is_not_the_enclosing_functions_return() {
+    let checked = errors(
+        r#"def collect() -> list[int]:
+    values = parallel for n in [1, 2]:
+        return n
+    return values
+"#,
+    );
+    assert!(checked.is_empty(), "parallel branch return: {checked:?}");
 }
 
 #[test]

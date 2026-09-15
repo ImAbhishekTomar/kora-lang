@@ -396,7 +396,10 @@ fn update_dependency(path: &str, name: &str, args: &[String]) -> ExitCode {
         return ExitCode::from(1);
     }
 
-    let config = Config::discover(program);
+    let config = match load_config(program) {
+        Ok(config) => config,
+        Err(code) => return code,
+    };
     let outcome = kora_pkg::install(program, config.install_jobs, true);
     for (failed_url, why) in &outcome.failed {
         eprintln!("{} cannot fetch {failed_url}", ui::err());
@@ -484,7 +487,10 @@ fn install_packages(path: &str, jobs: Option<usize>) -> ExitCode {
         eprintln!("{} cannot read `{path}`", ui::err());
         return ExitCode::from(1);
     }
-    let config = Config::discover(program_path);
+    let config = match load_config(program_path) {
+        Ok(config) => config,
+        Err(code) => return code,
+    };
     let jobs = jobs.unwrap_or(config.install_jobs);
 
     let outcome = kora_pkg::install(program_path, jobs, true);
@@ -820,19 +826,11 @@ fn check_files(paths: &[String], syntax_only: bool) -> ExitCode {
             Ok(program) => {
                 // Checking follows `use "./lib.ko"`, so a name that only
                 // exists in an imported file resolves here too.
-                for d in kora_types::analyze_file(&program, Path::new(path)).diagnostics {
-                    let line = d.span.line as usize;
-                    let src_line = source.lines().nth(line.saturating_sub(1)).unwrap_or("");
-                    eprintln!("{} {}", ui::err(), d.message);
-                    eprintln!("  --> {path}:{line}:{}", d.span.col);
-                    eprintln!("   |");
-                    eprintln!(" {line} | {src_line}");
-                    if let Some(hint) = &d.hint {
-                        eprintln!("   {}", ui::dim(&format!("= hint: {hint}")));
-                    }
-                    eprintln!();
-                    problems += 1;
-                }
+                problems += report_analysis(
+                    kora_types::analyze_file(&program, Path::new(path)),
+                    &source,
+                    path,
+                );
                 // Whether a dependency is used is a question about the whole
                 // program, not about one file: checking fifteen files of a
                 // project must not accuse it of never importing what a
@@ -916,6 +914,24 @@ fn check_files(paths: &[String], syntax_only: bool) -> ExitCode {
     }
 }
 
+fn report_analysis(analysis: kora_types::Analysis, source: &str, path: &str) -> usize {
+    let mut problems = 0;
+    for diagnostic in analysis.diagnostics {
+        let line = diagnostic.span.line as usize;
+        let src_line = source.lines().nth(line.saturating_sub(1)).unwrap_or("");
+        eprintln!("{} {}", ui::err(), diagnostic.message);
+        eprintln!("  --> {path}:{line}:{}", diagnostic.span.col);
+        eprintln!("   |");
+        eprintln!(" {line} | {src_line}");
+        if let Some(hint) = &diagnostic.hint {
+            eprintln!("   {}", ui::dim(&format!("= hint: {hint}")));
+        }
+        eprintln!();
+        problems += 1;
+    }
+    problems
+}
+
 /// `kora test` — run the `test` blocks in a file.
 ///
 /// Model calls replay from the cassette, so a suite costs nothing and gives
@@ -938,7 +954,19 @@ fn test_file(path: &str) -> ExitCode {
     };
 
     let program_path = Path::new(path);
-    let config = Config::discover(program_path);
+    if report_analysis(
+        kora_types::analyze_file(&program, program_path),
+        &source,
+        path,
+    ) > 0
+    {
+        eprintln!("tests stopped before any effects were started");
+        return ExitCode::from(1);
+    }
+    let config = match load_config(program_path) {
+        Ok(config) => config,
+        Err(code) => return code,
+    };
     let resolution = kora_pkg::resolve(program_path);
     if report_package_problems(&resolution) {
         return ExitCode::from(1);
@@ -1052,10 +1080,11 @@ fn audit_file(path: &str, by_package: bool) -> ExitCode {
 /// Honours `[telemetry] path` when the project configures one, so `kora trace`
 /// and the run itself never disagree about where the file is.
 fn trace_path(program: &Path) -> String {
-    if let kora_runtime::telemetry::Exporter::File(path) =
-        &Config::discover(program).telemetry.exporter
+    if let Some(kora_runtime::telemetry::Exporter::File(path)) = Config::discover(program)
+        .ok()
+        .map(|config| config.telemetry.exporter)
     {
-        return path.clone();
+        return path;
     }
     program
         .parent()
@@ -1064,6 +1093,17 @@ fn trace_path(program: &Path) -> String {
         .join("last.trace.json")
         .to_string_lossy()
         .to_string()
+}
+
+fn load_config(program: &Path) -> Result<Config, ExitCode> {
+    Config::discover(program).map_err(|error| {
+        eprintln!("{} {error}", ui::err());
+        eprintln!(
+            "   {}",
+            ui::dim("= hint: fix or remove the nearest kora.toml; Kora will not run with an ambiguous policy")
+        );
+        ExitCode::from(1)
+    })
 }
 
 /// `kora trace` — show the spans from the most recent traced run.
@@ -1209,6 +1249,15 @@ fn run_file(
     };
 
     let program_path = Path::new(path);
+    if report_analysis(
+        kora_types::analyze_file(&program, program_path),
+        &source,
+        path,
+    ) > 0
+    {
+        eprintln!("run stopped before any effects were started");
+        return ExitCode::from(1);
+    }
     let mut interp = Interpreter::new();
     interp.direct_stdout = true;
     interp.program_name = path.to_string();
@@ -1220,7 +1269,10 @@ fn run_file(
         return ExitCode::from(1);
     }
     interp.packages = std::sync::Arc::new(packages);
-    interp.config = Config::discover(program_path);
+    interp.config = match load_config(program_path) {
+        Ok(config) => config,
+        Err(code) => return code,
+    };
     interp.sinks = interp.config.sinks.clone();
     interp.allow_private_hosts = interp.config.http_allow_private;
     interp.http_timeout_secs = interp.config.http_timeout_secs;
@@ -1272,8 +1324,21 @@ fn run_file(
             );
             return ExitCode::from(1);
         }
-        let run = kora_runtime::journal::load_run(&run_path)
-            .unwrap_or_else(|_| kora_runtime::Run::new(run_id.clone(), path.to_string()));
+        let run = if run_path.exists() {
+            match kora_runtime::journal::load_run(&run_path) {
+                Ok(run) => run,
+                Err(e) => {
+                    eprintln!("{} cannot read run `{run_id}`: {e}", ui::err());
+                    eprintln!(
+                        "   {}",
+                        ui::dim("= hint: repair or archive the journal before resuming; Kora will not restart completed effects")
+                    );
+                    return ExitCode::from(1);
+                }
+            }
+        } else {
+            kora_runtime::Run::new(run_id.clone(), path.to_string())
+        };
         match kora_runtime::Journal::open(run, run_path) {
             Ok(journal) => {
                 interp.journal = std::sync::Arc::new(std::sync::Mutex::new(journal));

@@ -257,7 +257,7 @@ fn discovery_finds_nothing_gracefully() {
     // for a scratch script, and must not fail.
     let dir = std::env::temp_dir().join(format!("kora-config-none-{}", std::process::id()));
     std::fs::create_dir_all(&dir).unwrap();
-    let config = Config::discover(&dir.join("scratch.ko"));
+    let config = Config::discover(&dir.join("scratch.ko")).unwrap();
     assert!(config.default_model().is_err());
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -271,7 +271,7 @@ fn discovery_reads_the_file_beside_the_program() {
         "[models]\ndefault = \"local:found-it\"\n",
     )
     .unwrap();
-    let config = Config::discover(&dir.join("program.ko"));
+    let config = Config::discover(&dir.join("program.ko")).unwrap();
     assert_eq!(config.default_model().unwrap().model, "found-it");
     std::fs::remove_dir_all(&dir).ok();
 }
@@ -289,7 +289,19 @@ fn discovery_climbs_to_a_parent_directory() {
         "[models]\ndefault = \"local:from-the-root\"\n",
     )
     .unwrap();
-    let config = Config::discover(&nested.join("program.ko"));
+    let config = Config::discover(&nested.join("program.ko")).unwrap();
     assert_eq!(config.default_model().unwrap().model, "from-the-root");
+    std::fs::remove_dir_all(&dir).ok();
+}
+
+#[test]
+fn discovery_refuses_the_nearest_invalid_config() {
+    let dir = std::env::temp_dir().join(format!("kora-config-invalid-{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("kora.toml"), "[models this is not valid TOML\n").unwrap();
+
+    let error = Config::discover(&dir.join("program.ko"))
+        .expect_err("an existing invalid config must not become defaults");
+    assert!(error.to_string().contains("kora.toml is not valid TOML"));
     std::fs::remove_dir_all(&dir).ok();
 }

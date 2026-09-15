@@ -5,6 +5,22 @@ principle in [AGENTS.md](AGENTS.md).
 
 ## Current
 
+- [x] **Credibility pass: make the product claims true.** Freeze new language
+      surface while the existing contract is tightened. Add pre-run static
+      checks for declared types, calls, fields, model-call requirements, and
+      classified flow;
+      fail closed when durable journals or `kora.toml` cannot be read; replace
+      the README and homepage examples with one real checked workflow; and
+      position Kora narrowly around policy-safe, replayable document work.
+      Tracked in the `Kora Lang` project as **Done** after the compiler,
+      runtime, debugger, examples, docs, site, and release-facing claims
+      passed together.
+      During full verification, a flaky `parallel for ... first` test exposed
+      that the fastest completed branch could cancel an earlier input before
+      it returned. The scheduler now stops starting later indexes but lets
+      earlier in-flight indexes finish, so the promised input-order winner is
+      deterministic.
+
 - [x] **A model is named the way its provider names it.** `[models]` entries
       are written out — `{ name = "openrouter/free", endpoint = "...",
       api_key_env = "..." }` — so the name is copied from the provider's docs
@@ -119,7 +135,7 @@ principle in [AGENTS.md](AGENTS.md).
       *parallel* pipeline (the sequential one could not have caught this),
       and three journal tests for the syncer itself including one under real
       threads.
-- [x] **`parallel for ... first`: a fan-out that stops when the work is done.**
+- [x] **`parallel for ... first`: select the earliest successful input.**
       The half of cancellation a deadline does not cover. `budget:
       max_seconds` stops a scope when time runs out; `first` stops one when a
       branch has answered, which is what every "race these providers" and
@@ -492,13 +508,13 @@ remain; **Build** means it is not implemented yet.
 
 | Priority | Capability | Status | Current coverage | What remains to build or improve |
 |---|---|---|---|---|
-| P0 | Agent primitive | **Have** | `agent` functions, isolated heaps, budgets, tools, and durable runs | Add explicit agent lifecycle, cancellation, handoff, and supervision semantics |
+| P0 | Agent primitive | **Have** | `agent` functions, budgets, tools, and durable runs | Add explicit agent lifecycle, cancellation, handoff, and supervision semantics |
 | P0 | Model abstraction | **Have** | Provider abstraction for OpenAI and Ollama, named models, schema requests | Add provider capability negotiation, richer provider errors, and fallback policy |
 | P0 | Typed tools | **Have** | Typed Kora tools and typed MCP tool schemas | Add richer parameter types, result schemas, validation, and tool cancellation |
 | P0 | Structured output | **Have** | Declared Kora types become validated model JSON schemas | Add schema evolution/versioning and better provider compatibility diagnostics |
 | P0 | Async/concurrency | **Partial** | Real OS-thread `parallel for` with isolated worker heaps | Add explicit cancellation, backpressure, bounded queues, fair scheduling, and a clear async/event model |
 | P0 | Streaming | **Partial** | `str` streaming with `on token`, replay chunks, `write`, crash-safe durable resume, budget accounting, and retry state, all covered by live-transport tests | Tool streaming, parallel streaming, and per-token in-flight enforcement |
-| P0 | Timeouts + cancellation | **Partial** | Model, HTTP, MCP, and helper timeouts, each cut short by an enclosing `budget: max_seconds` so a request already sent ends with the scope; `parallel for ... first` stopping a fan-out the moment one branch answers, journaled so a resume keeps the same winner; `break` stopping one that is still collecting; a stopped branch leaving at its next statement; handler can stop reading | Define cleanup guarantees, and make a `break` loop's results replay-stable or keep steering durable programs to `first` |
+| P0 | Timeouts + cancellation | **Partial** | Model, HTTP, MCP, and helper timeouts, each cut short by an enclosing `budget: max_seconds` so a request already sent ends with the scope; `parallel for ... first` stopping later work after a candidate answer while earlier input indexes finish, journaled so a resume keeps the same winner; `break` stopping one that is still collecting; a stopped branch leaving at its next statement; handler can stop reading | Define cleanup guarantees, and make a `break` loop's results replay-stable or keep steering durable programs to `first` |
 | P0 | Retry/backoff | **Have** | Jittered model retries and HTTP retries; MCP handshake retries | Add shared retry policy, observability for attempts, and cancellation-aware backoff |
 | P1 | Durable execution | **Partial** | Append-only replay journal for model calls, tools, writes, human input, output, time, and Python; per-effect fsync with group commit across `parallel for` workers, run locking, torn-tail recovery, interrupted-stream semantics | Retention and compaction |
 | P1 | Checkpoint/resume | **Partial** | Replay-based resume, `ask_human` suspension, exactly-once writes, and crash-injection tests against the real binary | Add explicit checkpoints, resumable in-flight effects, and versioned state migration |
@@ -508,7 +524,7 @@ remain; **Build** means it is not implemented yet.
 | P1 | Context management | **Partial** | Prompt construction and tool history within one model call | Add token-aware context windows, truncation, summarization, retention policy, and typed context objects |
 | P1 | Sessions/memory | **Build** (designed, see below) | No persistent user-facing session or memory abstraction | Build durable session IDs, scoped memory, retrieval/update rules, privacy labels, eviction, and replay semantics |
 | P1 | MCP | **Have** | Server discovery, typed tools, timeouts, failure values, capability checks | Add richer MCP schemas, cancellation, reconnect policy, server health, and protocol-version negotiation |
-| P2 | Multi-agent/handoffs | **Partial** | Agents and parallel workers exist as isolated execution units | Build first-class messages, handoff contracts, ownership transfer, supervision, and failure semantics |
+| P2 | Multi-agent/handoffs | **Partial** | Agent functions and isolated parallel workers exist, but first-class multi-agent execution does not | Build first-class messages, handoff contracts, ownership transfer, supervision, and failure semantics |
 | P2 | Sandboxed execution | **Partial** | Package grants, process boundaries, Python sidecar, no native shared libraries, and OS-level helper confinement (seccomp / `sandbox-exec`, denylist) | Windows confinement, an allowlist rather than a denylist, and WASM components with capability enforcement |
 | P2 | Model routing/fallback | **Partial** | Named model roles and per-call model selection | Build policy-based routing, health-aware fallback, cost/latency rules, and deterministic replay of route decisions |
 | P2 | RAG/embeddings | **Build** (designed, see below) | No embeddings, chunking, retrieval, or vector index | Build embedding effects, document ingestion, chunk identity, retrieval APIs, labels, and cassette/journal behavior |
@@ -770,15 +786,13 @@ not and why:
       Exit code 0, no output -- indistinguishable from a program whose output
       was swallowed. It now says so, unless the file has top-level statements
       to execute, which is a real (if rare) way to write a script.
-- [ ] **Arity, unknown fields, and duplicate definitions are runtime errors,
-      not check-time ones.** `kora check` passes a program that builds a
-      2-field type with 1 argument; the message only arrives when the line
-      runs, which in an agent program can be minutes and several model calls
-      in. The messages themselves are good -- this is about *when* they
-      arrive. All three are statically decidable for declared types and
-      top-level functions. Pinned as the current boundary by
-      `kora-types/tests/diagnostics_test.rs::arity_and_fields_are_left_to_the_runtime`,
-      which is the test to convert when this moves.
+- [x] **Arity, unknown fields, duplicate definitions, and declared type
+      mismatches are check-time errors.** `kora check` now rejects the local
+      cases before a model call or file effect can start, and `kora run`,
+      `kora test`, and the debugger invoke that analysis before execution.
+      Dynamic integration values remain runtime-checked. Covered by
+      `kora-types/tests/diagnostics_test.rs` and an end-to-end CLI test that
+      proves a rejected program does not write its output file.
 
 - [x] **Structural operation ids.** Done. An effect is identified by which
       call it is -- enclosing function, plus position among that function's
@@ -817,6 +831,13 @@ not and why:
       not raw agent history.
 
 ## Queue
+
+- [ ] **Market validation gate.** Run one sensitive-document workflow with
+      three design partners for 90 days, publish an end-to-end case study and
+      comparison against an established stack, release a checker and journal
+      conformance suite, and complete an independent security review. If
+      repeated use does not materialize, shrink Kora into a DSL or library
+      instead of expanding the language surface.
 
 - [ ] **Language-surface stabilization.** Tighten compatibility guarantees,
       diagnostics, and configuration behavior before calling Kora

@@ -1167,6 +1167,12 @@ pub fn load_run(path: &Path) -> Result<Run, JournalError> {
             }
         }
     }
+    if run.id.is_empty() {
+        return Err(JournalError::Io(std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            "journal has no valid header",
+        )));
+    }
     Ok(run)
 }
 

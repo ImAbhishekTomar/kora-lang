@@ -3,7 +3,7 @@
 # `salary` is classified, so it cannot reach a model at all unless a
 # `declassify ... for <sink>:` block releases it to a sink the project
 # policy allows. Policy lives in kora.toml: local_model accepts classified
-# data, openai does not.
+# data, openai does not. Direct unsafe model flow is rejected before execution.
 
 type Employee:
     name: str
@@ -33,7 +33,7 @@ agent review(emp: Employee) -> str:
 
     match a:
         case Ok(assessment):
-            return f"{emp.name}: {assessment.band} — {assessment.rationale}"
+            return f"{emp.name}: {assessment.band} - {assessment.rationale}"
         case Uncertain(reason):
             return f"{emp.name}: needs a human ({reason})"
         case Exhausted(meter):

@@ -149,6 +149,67 @@ fn check_syntax_stops_before_name_resolution() {
 }
 
 #[test]
+fn run_checks_the_whole_program_before_starting_effects() {
+    let scratch = Scratch::new("run-checks-first");
+    let output = scratch.0.join("must-not-exist.txt");
+    let program = scratch.write(
+        "wrong.ko",
+        &format!(
+            r#"use fs
+
+def wrong() -> int:
+    return "not an int"
+
+def main():
+    fs.write({:?}, "effect happened")
+"#,
+            output.to_string_lossy()
+        ),
+    );
+
+    let out = kora(&["run", program.to_str().unwrap()]);
+    assert!(!out.status.success(), "a bad program must not run");
+    assert!(said(&out).contains("return value"), "got: {}", said(&out));
+    assert!(
+        !output.exists(),
+        "static failure must stop before the file write"
+    );
+}
+
+#[test]
+fn run_refuses_an_invalid_project_config() {
+    let scratch = Scratch::new("bad-config");
+    scratch.write(
+        "kora.toml",
+        "[models]\ndefault = { name = \"m\", api = \"typo\" }\n",
+    );
+    let program = scratch.write("hello.ko", HELLO);
+
+    let out = kora(&["run", program.to_str().unwrap()]);
+    assert!(!out.status.success(), "invalid policy must stop the run");
+    assert!(said(&out).contains("expected `openai` or `ollama`"));
+    assert!(!stdout(&out).contains("hello"));
+}
+
+#[test]
+fn resume_refuses_a_corrupt_journal_instead_of_restarting() {
+    let scratch = Scratch::new("corrupt-journal");
+    let program = scratch.write("hello.ko", HELLO);
+    scratch.write(".kora/runs/broken.jsonl", "this is not a journal\n");
+
+    let out = kora(&[
+        "run",
+        "--durable",
+        "--resume",
+        "broken",
+        program.to_str().unwrap(),
+    ]);
+    assert!(!out.status.success(), "a corrupt journal must stop");
+    assert!(said(&out).contains("cannot read run `broken`"));
+    assert!(!stdout(&out).contains("hello"));
+}
+
+#[test]
 fn test_runs_the_test_blocks() {
     let scratch = Scratch::new("test");
     let program = scratch.write(

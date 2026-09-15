@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { useRef, useState, type ReactNode } from 'react'
 
 function ArrowRight({ dark = false }: { dark?: boolean }) {
   return <svg className="figma-small-icon" viewBox="0 0 14 14" aria-hidden="true"><path d="M3 7h8M8 4l3 3-3 3" stroke={dark ? '#121212' : '#c2d708'} strokeLinecap="round" strokeWidth="2" /></svg>
@@ -30,10 +30,10 @@ function Navbar({ lightTheme, onToggleTheme, starCount }: { lightTheme: boolean;
 
 function HeroInfo() {
   return <div className="figma-hero-info">
-    <div className="figma-badge"><i />KORA IS A LANGUAGE, NOT A WRAPPER</div>
-    <h1>Build AI agents<br />that finish what<br />they start.</h1>
-    <p>Kora is a language for defining reliable AI workflows. Strongly typed, replayable, and safe by design — from prototype to production.</p>
-    <div className="figma-hero-actions"><Link className="figma-get-started" href="/start-here">Get Started <ArrowRight dark /></Link><Link className="figma-explore" href="/language">Explore Guides</Link></div>
+    <div className="figma-badge"><i />PRE-ALPHA POLICY-SAFE WORKFLOWS</div>
+    <h1>Keep sensitive AI<br />workflows inside<br />policy.</h1>
+    <p>Kora is an experimental language for checked, replayable document workflows with explicit data boundaries.</p>
+    <div className="figma-hero-actions"><Link className="figma-get-started" href="/start-here">Try a recorded workflow <ArrowRight dark /></Link><Link className="figma-explore" href="/comparison">Is Kora a fit?</Link></div>
   </div>
 }
 
@@ -42,83 +42,51 @@ function TerminalHeader({ colored = false }: { colored?: boolean }) {
 }
 
 function Terminal({ command = false, output = '', running = false }: { command?: boolean; output?: string; running?: boolean }) {
-  return <div className="figma-terminal"><TerminalHeader />{command ? <><div className="figma-terminal-command"><span>$</span> kora run agent_classify_receipt.ko{running && <i className="figma-terminal-caret" aria-hidden="true" />}</div>{output && <pre className="figma-terminal-output" aria-live="polite">{output}</pre>}</> : <div className="figma-terminal-body"><div><span>$</span> brew tap ImAbhishekTomar/tap</div><div><span>$</span> brew install imabhishektomar/tap/kora</div></div>}</div>
+  return <div className="figma-terminal"><TerminalHeader />{command ? <><div className="figma-terminal-command"><span>$</span> kora run --replay examples/03_salary_review.ko{running && <i className="figma-terminal-caret" aria-hidden="true" />}</div>{output && <pre className="figma-terminal-output" aria-live="polite">{output}</pre>}</> : <div className="figma-terminal-body"><div><span>$</span> brew install ImAbhishekTomar/tap/kora</div><div><span>$</span> kora check examples/03_salary_review.ko</div></div>}</div>
 }
 
 const editorLines: ReactNode[] = [
-  <><b>use</b> fs</>,
+  <><b>type </b><strong>Employee</strong>:</>,
+  <>    <em>name</em>: <strong className="blue">str</strong></>,
+  <>    <em>role</em>: <strong className="blue">str</strong></>,
+  <>    <b>classified </b><em>salary</em>: <strong className="blue">int</strong></>,
   <>&nbsp;</>,
-  <><b>type </b><strong>Receipt</strong>:</>,
-  <>    <em>merchant</em>: <strong className="blue">str</strong> <span className="blue">@description</span>(<span className="orange">"This is a seller name"</span>)</>,
-  <>    <b>classified </b><em>amount</em>: <strong className="blue">float</strong> <span className="comment"># Protected by the compiler: cannot be read directly</span></>,
-  <>    <em>currency</em>: <strong className="blue">str</strong></>,
-  <>    <em>review_reason</em>: <strong className="blue">str</strong></>,
+  <><b>type </b><strong>Assessment</strong>:</>,
+  <>    <em>band</em>: <strong className="blue">str</strong></>,
+  <>    <em>rationale</em>: <strong className="blue">str</strong></>,
   <>&nbsp;</>,
-  <><b>def </b><span className="green">agent_classify_receipt</span>(<em>text</em>: <strong className="blue">str</strong>) -&gt; <strong className="blue">str</strong>:</>,
-  <>    <em>receipt</em>: <strong>Receipt</strong> = <span className="green">analyze</span>(<em>text</em>, <span className="orange">"Extract receipt fields. Dates as YYYY-MM-DD."</span>)</>,
+  <><b>agent </b><span className="green">review</span>(<em>emp</em>: <strong>Employee</strong>) -&gt; <strong className="blue">str</strong>:</>,
+  <>    <b>budget</b>: max_tokens = <span className="blue">4000</span></>,
+  <>    <b>declassify </b><em>emp</em>.salary <b>as </b><em>pay</em> <b>for </b>local_model:</>,
+  <>        <em>result</em>: <strong>Assessment</strong> = <span className="green">analyze</span>(</>,
+  <>            {'{'}<span className="orange">"role"</span>: <em>emp</em>.role, <span className="orange">"pay"</span>: <em>pay</em>, <span className="orange">"market"</span>: <span className="green">market_rate</span>(<em>emp</em>.role){'}'},</>,
+  <>            <span className="orange">"assess whether pay is below, at, or above market; band must be one of below/at/above"</span></>,
+  <>        )</>,
   <>&nbsp;</>,
-  <>    <b>match </b><em>receipt</em>:</>,
-  <>        <b>case </b><strong>Ok</strong>(<em>r</em>):</>,
-  <>            <b>if </b><em>r</em>.needs_review:</>,
-  <>                <b>return </b><span className="orange">f"REVIEW {'{'}r.merchant{'}'}: {'{'}r.amount{'}'} {'{'}r.currency{'}'}"</span></>,
-  <>            <b>return </b><span className="orange">f"OK {'{'}r.merchant{'}'}: {'{'}r.amount{'}'} on {'{'}r.purchase_date{'}'}"</span></>,
-  <>        <b>case </b><strong>Uncertain</strong>(<em>reason</em>):</>,
-  <>            <b>return </b><span className="orange">f"SKIP could not classify receipt: {'{'}reason{'}'}"</span></>,
+  <>    <b>match </b><em>result</em>:</>,
+  <>        <b>case </b><strong>Ok</strong>(<em>a</em>):</>,
+  <>            <b>return </b><span className="orange">f"{'{'}emp.name{'}'}: {'{'}a.band{'}'} - {'{'}a.rationale{'}'}"</span></>,
+  <>        <b>case </b><strong>Uncertain</strong>(<em>why</em>):</>,
+  <>            <b>return </b><span className="orange">f"human review: {'{'}why{'}'}"</span></>,
   <>        <b>case </b><strong>Exhausted</strong>(<em>meter</em>):</>,
-  <>            <b>return </b><span className="orange">f"SKIP budget exhausted: {'{'}meter{'}'}"</span></>,
+  <>            <b>return </b><span className="orange">f"budget exhausted: {'{'}meter{'}'}"</span></>,
   <>        <b>case </b><strong>Failed</strong>(<em>why</em>):</>,
-  <>            <b>return </b><span className="orange">f"RETRY provider did not answer: {'{'}why{'}'}"</span></>,
-  <>&nbsp;</>,
-  <><b>def </b><span className="green">main</span>():</>,
-  <>    <b>match </b><em>fs</em>.<span className="green">read</span>(<span className="orange">"examples/receipts/sample.txt"</span>):</>,
-  <>        <b>case </b><strong>Ok</strong>(<em>text</em>):</>,
-  <>            <span className="green">print</span>(<span className="green">agent_classify_receipt</span>(<em>text</em>))</>,
-  <>        <b>case </b><strong>Err</strong>(<em>reason</em>):</>,
-  <>            <span className="green">print</span>(<span className="orange">f"Could not read receipt: {'{'}reason{'}'}"</span>)</>,
+  <>            <b>return </b><span className="orange">f"provider failed: {'{'}why{'}'}"</span></>,
 ]
 
 function CodeEditor() {
-  return <div className="figma-code-editor"><div className="figma-editor-header"><div className="figma-window-controls"><i className="red" /><i className="yellow" /><i className="green" /></div><div><strong>K</strong> agent_classify_receipt.ko</div><span /></div><pre>{editorLines.map((line, index) => <code key={index}><small>{index + 1}</small><span>{line}</span></code>)}</pre></div>
+  return <div className="figma-code-editor"><div className="figma-editor-header"><div className="figma-window-controls"><i className="red" /><i className="yellow" /><i className="green" /></div><div><strong>K</strong> 03_salary_review.ko (excerpt)</div><span /></div><pre>{editorLines.map((line, index) => <code key={index}><small>{index + 1}</small><span>{line}</span></code>)}</pre></div>
 }
 
-const mockRunOutput = `✓ Loaded agent_classify_receipt.ko
-→ Reading examples/receipts/sample.txt
-→ Running analyze: Extract receipt fields
-✓ merchant: Kora Coffee
-✓ amount: classified (protected)
-✓ currency: USD
-✓ Run complete in 812ms`
+const recordedRunOutput = `Ada: below - The pay of 165 is less than the market rate of 210.
+Grace: above - The pay of 180 is higher than the market rate of 175.`
 
 function InteractivePanel() {
-  const [runState, setRunState] = useState<'idle' | 'running' | 'complete'>('idle')
-  const [output, setOutput] = useState('')
-
-  useEffect(() => {
-    if (runState !== 'running') return
-    let cursor = 0
-    setOutput('')
-    const timer = window.setInterval(() => {
-      cursor += 1
-      setOutput(mockRunOutput.slice(0, cursor))
-      if (cursor >= mockRunOutput.length) {
-        window.clearInterval(timer)
-        setRunState('complete')
-      }
-    }, 22)
-    return () => window.clearInterval(timer)
-  }, [runState])
-
-  const runKora = () => {
-    if (runState === 'running') return
-    setOutput('')
-    setRunState('running')
-  }
-
   return <div className="figma-interactive">
-    <Terminal /><CodeEditor /><Terminal command output={output} running={runState === 'running'} />
-    <div className="figma-eval-row"><button type="button" disabled={runState === 'running'} onClick={runKora}><span className={runState === 'running' ? 'figma-run-spinner' : ''}>{runState === 'running' ? '◌' : '▷'}</span> {runState === 'running' ? 'Running...' : runState === 'complete' ? 'Run Again' : 'Run Kora'}</button><small>{runState === 'running' ? 'Streaming output...' : runState === 'complete' ? 'Run completed successfully' : 'Click to run this example'}</small></div>
+    <Terminal /><CodeEditor /><Terminal command output={recordedRunOutput} />
+    <div className="figma-eval-row"><button type="button" onClick={() => { window.location.href = '/start-here' }}>Run it locally</button><small>Output replayed from the committed cassette</small></div>
     <section className="figma-legacy-content" aria-label="Why Kora">
-      <article><strong>01</strong><h2>Typed model calls</h2><p>Define inputs and outputs. Catch issues at compile time, not at runtime.</p></article>
+      <article><strong>01</strong><h2>Checked model calls</h2><p>Catch local type, call, field, and direct classified-flow mistakes before effects start.</p></article>
       <article><strong>02</strong><h2>Replayable runs</h2><p>Deterministic execution you can inspect, share, and replay.</p></article>
       <article><strong>03</strong><h2>Safe data flow</h2><p>Explicit data boundaries and policies to protect what matters.</p></article>
     </section>
@@ -131,13 +99,13 @@ function InteractivePanel() {
       </article>
       <article>
         <small>RUNTIME / 02</small>
-        <h2>Trace every step. Resume without losing the run.</h2>
+        <h2>Trace every step. Opt into durable execution.</h2>
         <div className="figma-trace-list"><div><i />plan <em>812ms</em></div><div><i />tool.web <em>1.23s</em></div><div><i className="warning" />provider.retry <em>replayed</em></div><div><i />return <em>complete</em></div></div>
       </article>
       <article>
         <small>SAFETY / 03</small>
         <h2>Classified data stays inside its boundary.</h2>
-        <p>The compiler tracks sensitive values through the workflow and requires an explicit declassification before they reach a protected sink.</p>
+        <p>The checker catches direct unsafe model flow, and the runtime enforces the configured sink policy again when the call executes.</p>
         <div className="figma-policy-card"><span>classified</span><b>→</b><span>declassify</span><b>→</b><span>approved sink</span></div>
       </article>
     </section>

@@ -3633,7 +3633,7 @@ impl Interpreter {
 
     /// Run a `parallel for` body across worker threads.
     ///
-    /// Each worker is its own agent: a fresh interpreter with a private heap,
+    /// Each worker has a fresh interpreter with a private heap,
     /// seeded by copying the values it needs. Nothing is shared except the
     /// budget (an atomic pot) and the cassette (read-mostly, behind a lock),
     /// so there is no data race to reason about and no lock in user code.
@@ -3715,30 +3715,31 @@ impl Interpreter {
         let packages = self.packages.clone();
 
         let portable_items: Vec<Portable> = items.iter().map(Portable::from_value).collect();
-        // Set when the loop has stopped being worth running: by the first
-        // branch to produce a value under `first`, or by the first branch to
-        // `break`. One flag for both, because both mean the same thing to
-        // every other worker.
+        // Set by `break`, which cancels every sibling. A `first` race is more
+        // precise: once index N answers, lower indexes already in flight must
+        // be allowed to finish so the winner is deterministic. Its cutoff is
+        // tracked separately below.
         //
-        // Checked before a worker takes its next item, so no further work is
-        // started -- which is the bulk of what stopping saves. The branches
-        // already running see it too, and leave at their next statement
-        // boundary; a statement is as fine-grained as this can safely be,
-        // since a thread cannot be killed and a half-written effect is worse
-        // than a branch that runs a moment too long. A request already sent
-        // still runs to its own deadline: that is the "did it happen"
-        // problem that makes a tool call unretryable, and `budget(
-        // max_seconds = N)` is what bounds it.
+        // Checked before a worker takes its next item, so `break` starts no
+        // further work. Branches already running see it too and leave at
+        // their next statement boundary. A `first` race uses the separate
+        // cutoff below and lets in-flight work finish so lower input indexes
+        // can still become the deterministic winner. A request already sent
+        // runs to its own deadline; `budget(max_seconds = N)` bounds it.
         //
         // Shared behind an `Arc` so each branch's interpreter can hold it.
         let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let total = portable_items.len();
+        // No branch at or above this input index needs to start. Lower
+        // branches may still replace it, which is how "first" means input
+        // order rather than whichever core happened to finish first.
+        let first_cutoff = std::sync::atomic::AtomicUsize::new(total);
         // A fan-out nested inside another one gets its own flag, so its
         // branches see their own siblings. It must still notice the outer
         // loop stopping, or an outer stop would wait for this whole inner
         // loop to finish before anything unwound.
         let parent_stop = self.stop.clone();
         let next = std::sync::atomic::AtomicUsize::new(0);
-        let total = portable_items.len();
         let slots: Vec<std::sync::Mutex<Option<WorkerResult>>> =
             (0..total).map(|_| std::sync::Mutex::new(None)).collect();
 
@@ -3762,6 +3763,9 @@ impl Interpreter {
                     }
                     let index = next.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     if index >= total {
+                        break;
+                    }
+                    if first && index >= first_cutoff.load(std::sync::atomic::Ordering::Acquire) {
                         break;
                     }
                     let outcome = run_one(
@@ -3797,7 +3801,7 @@ impl Interpreter {
                     if first
                         && matches!(&outcome.value, Some(Ok(v)) if !matches!(v, Portable::None))
                     {
-                        stop.store(true, std::sync::atomic::Ordering::Relaxed);
+                        first_cutoff.fetch_min(index, std::sync::atomic::Ordering::AcqRel);
                     }
                     *slots[index].lock().unwrap() = Some(outcome);
                 });

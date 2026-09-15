@@ -65,6 +65,12 @@ Type annotations go on the left side of an assignment:
 score: float = 9.5
 ```
 
+`kora check` verifies local declared assignments and returns, call and
+constructor arity, field access, duplicate definitions, loop-control
+placement, and direct classified flow into `analyze`. Dynamic integration
+values remain runtime-checked. `kora run`, `kora test`, and the debugger stop
+on these diagnostics before starting effects.
+
 ## Functions
 
 ```kora
@@ -304,9 +310,18 @@ decision = ask_human("Approve this refund?", refund.reason)
 Declares a model-using, suspendable unit of work.
 
 ```kora
-agent triage(raw: str) -> Ticket:
+agent triage(raw: str) -> str:
     budget: max_tokens = 20_000, max_steps = 5
-    return analyze(raw, "classify this ticket")
+    result: str = analyze(raw, "summarize this ticket")
+    match result:
+        case Ok(summary):
+            return summary
+        case Uncertain(why):
+            return f"human review: {why}"
+        case Exhausted(meter):
+            return f"budget exhausted: {meter}"
+        case Failed(why):
+            return f"provider failed: {why}"
 ```
 
 ### `tool`
@@ -324,7 +339,16 @@ An `agent` may be passed as a tool too, for a supervisor delegating to specialis
 ```kora
 agent billing(question: str) -> str:
     budget: max_tokens = 4000
-    return analyze(question, "answer this billing question")
+    result: str = analyze(question, "answer this billing question")
+    match result:
+        case Ok(answer):
+            return answer
+        case Uncertain(why):
+            return f"human review: {why}"
+        case Exhausted(meter):
+            return f"budget exhausted: {meter}"
+        case Failed(why):
+            return f"provider failed: {why}"
 
 a: Answer = analyze(question, "route this and answer it", tools=[billing])
 ```
@@ -338,7 +362,7 @@ results = parallel for ticket in tickets:
     triage(ticket)
 ```
 
-Add `first` after the iterable to stop as soon as one branch returns a value. The loop then yields that one value rather than a list, and no further branches are started.
+Add `first` after the iterable to select the earliest input that returns a value. The loop yields that value rather than a list. Once a candidate answers, no work at or after that input index is started; lower indexes already in flight finish because one of them may become the deterministic winner.
 
 ```kora
 answer = parallel for mirror in mirrors first:
@@ -358,7 +382,7 @@ found = parallel for candidate in candidates:
 
 Branches that never started keep no slot, and neither do branches let go of part way through. `break` with a value is only legal here; anywhere else it is a check-time error. Prefer `first` when the loop is asking a question: a `break` loop's result length depends on scheduling and is not replay-stable.
 
-Either way, a branch already running is let go of at its next statement, not mid-statement. A request already sent runs to its own deadline, which `budget(max_seconds = N)` bounds.
+With `break`, a branch already running is let go at its next statement, not mid-statement. With `first`, work already in flight finishes so input-order selection stays deterministic. A request already sent runs to its own deadline, which `budget(max_seconds = N)` bounds.
 
 ### `with budget(...)`
 
@@ -402,6 +426,10 @@ declassify employee.salary as pay for local_model:
 ```
 
 The block ends the permission. There is no permanent “safe now” copy.
+
+Direct unsafe flow into `analyze` is reported statically. The runtime remains
+the authoritative boundary check because it can see deep labels and the
+configured sink selected by a live call.
 
 ## Modules
 

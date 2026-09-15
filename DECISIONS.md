@@ -13,25 +13,25 @@ design changes and should be deliberate.
 
 ## Thesis
 
-**The agent is the unit of execution.** Everything derives from this:
+**The checked workflow is the unit of execution.** An `agent` is a callable
+budget and tool boundary inside that workflow, not a separate process by
+itself. Everything derives from this:
 
-1. **Agents are isolated, durable, resumable processes.** Per-agent private
-   heaps, share-nothing, message passing. Durability is **replay-based**, not
-   stack-snapshot based: a tree-walking interpreter keeps its state in the
-   Rust call stack, which cannot be serialized, so every effect (model call,
-   tool result, human answer, output line) is journaled and a resumed run
-   re-executes from the top with those effects served from the journal. This
-   is Temporal's and Restate's approach, and it works here precisely because
-   agents share nothing — each replays independently, with no interleaving to
-   reproduce. The contract: code between effects must be deterministic.
+1. **Runs can be durable and resumable.** With `--durable`, replay is based on
+   an append-only effect journal, not a stack snapshot. A resumed run executes
+   from the top with completed effects served from the journal. Without
+   `--durable`, execution is intentionally ordinary and no resume promise is
+   made. The contract is that code between effects must be deterministic.
    Output is journaled too, so a resumed run continues rather than retells.
 2. **Real parallelism.** OS threads + work-stealing scheduler, no GIL, no
-   async/await coloring. `parallel for` for fan-out. Safe because heaps are
-   isolated.
+   async/await coloring. `parallel for` is the isolation boundary: each worker
+   receives portable copies, while a normal function or agent call stays in
+   the caller's interpreter.
 3. **Information flow control.** `classified` values cannot reach a model
-   without a scoped `declassify ... for <sink>:` block. Checked at compile
-   time; sinks and policies declared in `kora.toml`. `kora audit` lists every
-   declassify site.
+   without a scoped `declassify ... for <sink>:` block. Direct model flow is
+   checked statically; the runtime is authoritative for deep labels, dynamic
+   values, and the sink policy declared in `kora.toml`. `kora audit` lists
+   every declassify site.
 4. **Budgets are native.** Token-denominated (`max_tokens`, `max_calls`,
    `max_steps`, `max_time`), lexically scoped, nested (child may tighten,
    never loosen), shared across `parallel for`. Exhaustion is a value
@@ -49,7 +49,9 @@ design changes and should be deliberate.
 
 - Python-like: indentation blocks, `def`, `if/elif/else`, `for x in xs`,
   f-strings, list/dict literals, comprehensions. Zero learning curve is a goal.
-- Static types, checked. Type declarations on the left: `e: Expense = ...`.
+- Conservative static types, checked before effects when facts are local.
+  Type declarations go on the left: `e: Expense = ...`. Dynamic integration
+  boundaries remain runtime-validated.
 - New words (whole list): `analyze`, `tool`, `agent`, `budget`, `context`, `parallel for`,
   `classified` / `declassify`, `ask_human`, `test`, `mock`. `use` covers
   stdlib modules, Python, MCP servers, and other `.ko` files. Guards and the
@@ -123,7 +125,7 @@ design changes and should be deliberate.
   arm matched". They have different fixes, and sending the reader to the wrong
   half of the `match` costs more than the branch that tells them apart.
 - **`x: T = <outcome> else:` binds the payload or leaves.** Every model call
-  returns three ways, so chaining them with `match` costs one indentation level
+  returns four ways, so chaining them with `match` costs one indentation level
   per call and buries the path that matters. The `else` form keeps the
   successful path at its own level and makes failure the exception.
   - The block **must** diverge (`return` / `break` / `continue`), checked, so
@@ -228,8 +230,9 @@ design changes and should be deliberate.
 
 ## Memory model
 
-- Per-agent isolated heaps (Erlang-style). Whole-heap free on agent exit.
-- Within-agent: small per-agent GC for v1 (swappable implementation detail).
+- Per-worker isolated heaps across `parallel for`. Whole-heap free on worker
+  exit.
+- Within a worker: a small GC for v1 (swappable implementation detail).
 - No user-facing memory syntax at all. No Rust-style ownership for users.
 - Message passing: copy-only for v1; immutable shared buffers for big
   read-only data later if needed.
@@ -802,7 +805,8 @@ security boundary.
   cannot be regenerated without the model that recorded it, and breaking
   every committed one to change a hash would be a worse trade than carrying
   sixty lines that only ever answer "is this an old file".
-- `mock analyze -> ...` is a typed language construct, checked at compile time.
+- `mock analyze -> ...` is a typed language construct, validated when the test
+  runs. Local type facts around the call are also checked before effects.
 - Runtime is an OTel producer: agents and model calls are spans following the
   GenAI semantic conventions, declassifications are spans of their own, and
   budget spend rides on the agent span. Zero-config: a local file plus
@@ -1090,18 +1094,17 @@ won" is what makes a trace readable. A race with no winner is journaled too:
 otherwise a resume would find the slot empty, race again, and diverge by the
 other door.
 
-**A branch already running does now leave.** This paragraph used to say the
-opposite, and the honest limit it described has moved rather than gone. A
-branch sees the stop at its next statement boundary and unwinds from there, so
-a race no longer pays for the branches that lost to finish their work. What is
-still true is the smaller claim: a *request already sent* runs to its own
-deadline, because interrupting one is the "did it happen" problem that makes a
-tool call unretryable. That deadline is what `budget(max_seconds = N)` now
-bounds — see "Time is a budget meter" above — so the two halves meet.
+**A candidate stops later starts, not work already in flight.** Once input N
+answers, workers do not start N or any later index. Lower indexes already in
+flight must finish because one of them can still become the input-order
+winner. Higher indexes already in flight also finish because killing a thread
+mid-statement could leave a half-written effect. This is the honest cost of a
+deterministic winner.
 
-A statement is as fine-grained as this can safely be. A thread cannot be
-killed, and a branch abandoned mid-statement would leave a half-written effect
-behind, which is worse than a branch that runs a moment too long.
+`break` has different semantics: it sets a stop flag that running siblings see
+at their next statement boundary. A request already sent still runs to its own
+deadline because interrupting one is the "did it happen" problem that makes a
+tool call unretryable. That deadline is what `budget(max_seconds = N)` bounds.
 
 **`first` is contextual, and stays out of the grammar file.** Like `stream`
 and `on`, it is a keyword only in that one position, so a program that already
@@ -1647,15 +1650,19 @@ friction, which one `.wasm` would remove.
 - GPU tensor compiler (that is Mojo's war, not ours)
 - Native/JIT compilation, semantic-assert judging, label lattice beyond
   binary, `unverified` labels (designed, waiting)
-- Public release: personal-use first; polish/marketing gloss lowest priority
+- Production-readiness claims before design-partner evidence and an independent
+  security review
 
 ## Status
 
-Phases 0 through 6 are complete, as are the standard library, MCP
+The implementation covers phases 0 through 6, the standard library, MCP
 integration, the Python sidecar, and images as values. Packages have begun
 with path and git dependencies, capability grants, and a content-hashed
 lockfile, a checksum log, and the packaging commands; what remains is a
-hosted checksum log and WASM components — see the ecosystem strategy above.
+hosted checksum log and WASM components. This is implementation status, not
+market validation: Kora is pre-alpha, has no compatibility promise, and still
+needs design-partner evidence plus independent security review before a
+production claim.
 
 Reference documentation lives in [docs/](docs): the
 [language](docs/language.md), the [standard library](docs/stdlib.md), and the

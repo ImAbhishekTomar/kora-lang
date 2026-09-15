@@ -30,7 +30,7 @@ pipeline from source text to a running agent, then the runtime mechanisms behind
   <div className="internals-stage">
     <div className="tag">crates/kora-types</div>
     <div className="name">typecheck</div>
-    <div className="desc">AST → checked AST + labels</div>
+    <div className="desc">AST → diagnostics + symbol and local type facts</div>
   </div>
   <div className="internals-arrow">→</div>
   <div className="internals-stage">
@@ -50,7 +50,7 @@ pipeline from source text to a running agent, then the runtime mechanisms behind
 
 <div className="internals-crates">
   <div className="internals-crate"><b>kora-syntax</b>lex + parse + AST</div>
-  <div className="internals-crate"><b>kora-types</b>type / label checking</div>
+  <div className="internals-crate"><b>kora-types</b>name, local type, and direct model-flow checking</div>
   <div className="internals-crate"><b>kora-runtime</b>interpreter, budgets, journal, labels, telemetry</div>
   <div className="internals-crate"><b>kora-cli</b>run / repl / driver</div>
   <div className="internals-crate"><b>kora-lsp</b>editor language server</div>
@@ -97,7 +97,7 @@ pipeline from source text to a running agent, then the runtime mechanisms behind
 <div className="internals-card">
   <h3>Portable values — the agent isolation boundary</h3>
   <p>Runtime values use <code>Rc</code> for cheap in-agent sharing, so they can't cross threads as-is. <code>Portable</code> is an explicit deep, Send-safe copy used only when values move between agents.</p>
-  <div className="internals-why">Why: agents share nothing — isolation is paid for explicitly at the boundary, not assumed.</div>
+  <div className="internals-why">Why: parallel workers share no live values. Isolation is paid for explicitly at the thread boundary, not assumed for every agent call.</div>
 </div>
 
 <div className="internals-card">
@@ -131,9 +131,9 @@ pipeline from source text to a running agent, then the runtime mechanisms behind
 </div>
 
 <div className="internals-card">
-  <h3>Config — unknown keys are not an error</h3>
-  <p><code>kora.toml</code> sections for budgets, sinks, and telemetry parse today even though only model settings are used — Phase 2 ignores keys it doesn't need yet instead of rejecting them.</p>
-  <div className="internals-why">Why: a config written now keeps working as later phases start reading more of it.</div>
+  <h3>Config - present files fail closed</h3>
+  <p><code>kora.toml</code> actively configures models, sinks, HTTP, telemetry, MCP, Python, output redaction, and installs. An unreadable file, invalid TOML, or malformed model entry stops execution; unknown top-level sections remain forward-compatible.</p>
+  <div className="internals-why">Why: a typo cannot silently change a model or data policy, while later versions can still add top-level sections.</div>
 </div>
 
 </div>

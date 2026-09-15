@@ -12,6 +12,11 @@ cargo install --path crates/kora-cli
 
 Run a program. `kora <file.ko>` is the same thing.
 
+Before any effect starts, `run` performs the same static analysis as `kora
+check`. A parse, type, call, field, control-flow, or direct classified-flow
+error stops the program. An invalid `kora.toml` also stops the command instead
+of silently selecting default policy.
+
 | Flag | Effect |
 |---|---|
 | `--record` | call models, then save every call to a cassette |
@@ -67,6 +72,12 @@ It also catches Python habits that would otherwise only surface when the file
 runs: `xs.append(v)` (Kora has no methods) and keyword arguments on a
 user-defined function (only `analyze()` takes them) are both reported here,
 not just at `kora run`.
+
+Declared assignments and returns, function and constructor arity, declared
+fields, duplicate definitions, loop-control placement, and direct classified
+flow into `analyze` are checked too. Values from dynamic sidecars, MCP,
+helpers, untyped functions, and other dynamic boundaries remain runtime
+checks.
 
 Exits non-zero if anything fails to parse or resolve.
 
@@ -236,6 +247,8 @@ system when the process ends, so a killed run is immediately resumable.
 `--resume` with an id that names no run fails rather than starting a new one
 under that name — a typo must not turn "continue where it stopped" into
 "do the whole thing again". `kora runs <file.ko>` lists the ids there are.
+An unreadable, corrupt, retired, or newer-format journal also stops. Kora never
+turns journal uncertainty into a fresh run because that could repeat effects.
 
 Effects that cost money or change the world — model calls, tool calls, writes,
 a person's answer — are `fsync`ed before the program continues, so a power cut
@@ -323,6 +336,10 @@ over a variable is not inspecting the program, it is changing it.
 
 `kora.toml`, found by walking up from the program file. Every section is
 optional.
+
+If a `kora.toml` exists but cannot be read or parsed, commands that execute or
+install work fail closed. A malformed declared model or unknown model API is
+an error, not an omitted entry.
 
 ```toml
 [models]                            # a role names a model, never a vendor

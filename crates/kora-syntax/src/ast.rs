@@ -80,7 +80,7 @@ pub enum StmtKind {
         /// Name bound to the result list, when written as
         /// `results = parallel for ...`.
         collect_into: Option<String>,
-        /// `parallel for x in xs first:` — stop as soon as a branch returns
+        /// `parallel for x in xs first:` - choose the earliest input that returns
         /// a value, and yield that one value rather than a list.
         ///
         /// A modifier on the loop rather than a `stop()` a branch calls:

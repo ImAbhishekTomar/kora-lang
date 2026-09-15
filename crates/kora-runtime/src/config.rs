@@ -1,8 +1,7 @@
 //! `kora.toml` loading.
 //!
-//! Only the parts Phase 2 needs: model definitions and their settings.
-//! Budgets, sinks, and telemetry sections are parsed but unused until their
-//! phases (see DECISIONS.md) — unknown keys are ignored, never an error.
+//! Unknown top-level keys remain forward-compatible, but a configuration file
+//! that exists and cannot be read or parsed is never treated as no config.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -117,7 +116,9 @@ impl Default for Config {
 
 impl Config {
     /// Look next to the program file, then walk up to the filesystem root.
-    pub fn discover(start: &Path) -> Config {
+    /// An unreadable or invalid file is an error, never the empty default, so
+    /// a typo cannot silently change the model or sink policy.
+    pub fn discover(start: &Path) -> Result<Config, ModelError> {
         let mut dir = if start.is_dir() {
             Some(start.to_path_buf())
         } else {
@@ -126,15 +127,15 @@ impl Config {
         while let Some(d) = dir {
             let candidate = d.join("kora.toml");
             if candidate.is_file() {
-                if let Ok(text) = std::fs::read_to_string(&candidate) {
-                    if let Ok(cfg) = Config::parse(&text) {
-                        return cfg;
-                    }
-                }
+                let text = std::fs::read_to_string(&candidate).map_err(|error| {
+                    ModelError::new(format!("cannot read {}: {error}", candidate.display()))
+                })?;
+                return Config::parse(&text)
+                    .map_err(|error| ModelError::new(format!("{}: {error}", candidate.display())));
             }
             dir = d.parent().map(PathBuf::from);
         }
-        Config::default()
+        Ok(Config::default())
     }
 
     pub fn parse(text: &str) -> Result<Config, ModelError> {
@@ -315,11 +316,10 @@ impl Config {
                     // rather than on a list of reserved words is what lets a
                     // role be called `openai` if a project wants it to be.
                     toml::Value::Table(table) if table.contains_key("name") => {
-                        if let Some(model) = declared_model(table) {
-                            config
-                                .models
-                                .insert(key.clone(), ModelEntry::Declared(model));
-                        }
+                        let model = declared_model(key, table)?;
+                        config
+                            .models
+                            .insert(key.clone(), ModelEntry::Declared(model));
                     }
                     // `[models.openai]` / `[models.local]` sub-tables
                     toml::Value::Table(table) => {
@@ -341,9 +341,17 @@ impl Config {
                                 .get("endpoint")
                                 .and_then(|v| v.as_str())
                                 .map(str::to_string);
+                        } else {
+                            return Err(ModelError::new(format!(
+                                "[models.{key}] must declare a non-empty string `name`"
+                            )));
                         }
                     }
-                    _ => {}
+                    _ => {
+                        return Err(ModelError::new(format!(
+                            "models.{key} must be a model string, a declared model table, or a supported numeric setting"
+                        )));
+                    }
                 }
             }
         }
@@ -419,45 +427,61 @@ impl Config {
     }
 }
 
-/// Read one `[models]` entry written out in full. A table without a usable
-/// `name` is skipped rather than rejected, matching how every other unknown
-/// key in `kora.toml` is treated.
-fn declared_model(table: &toml::value::Table) -> Option<DeclaredModel> {
-    let name = table.get("name").and_then(|v| v.as_str())?.trim();
+/// Read one `[models]` entry written out in full. Once a table declares itself
+/// as a model, malformed fields are errors rather than missing configuration.
+fn declared_model(role: &str, table: &toml::value::Table) -> Result<DeclaredModel, ModelError> {
+    let name = table
+        .get("name")
+        .and_then(|v| v.as_str())
+        .ok_or_else(|| ModelError::new(format!("models.{role}.name must be a string")))?;
+    let name = name.trim();
     if name.is_empty() {
-        return None;
+        return Err(ModelError::new(format!(
+            "models.{role}.name must not be empty"
+        )));
     }
     // Two request shapes exist, so an unrecognised one is a mistake worth
     // failing on rather than a silent fall back to the other.
-    let api = match table.get("api").and_then(|v| v.as_str()) {
-        Some("ollama") => Provider::Ollama,
+    let api = match table.get("api") {
+        Some(toml::Value::String(api)) if api == "ollama" => Provider::Ollama,
+        Some(toml::Value::String(api)) if api == "openai" => Provider::OpenAI,
+        None => Provider::OpenAI,
         // The OpenAI wire format is what nearly every hosted provider and
         // gateway speaks, so it is what an entry gets when it says nothing.
-        _ => Provider::OpenAI,
+        Some(toml::Value::String(other)) => {
+            return Err(ModelError::new(format!(
+                "models.{role}.api is `{other}`; expected `openai` or `ollama`"
+            )));
+        }
+        Some(_) => {
+            return Err(ModelError::new(format!(
+                "models.{role}.api must be the string `openai` or `ollama`"
+            )));
+        }
     };
-    Some(DeclaredModel {
+    let optional_string = |field: &str| match table.get(field) {
+        Some(toml::Value::String(value)) => Ok(Some(value.clone())),
+        None => Ok(None),
+        Some(_) => Err(ModelError::new(format!(
+            "models.{role}.{field} must be a string"
+        ))),
+    };
+    let optional_integer = |field: &str| match table.get(field) {
+        Some(toml::Value::Integer(value)) => Ok(Some(*value)),
+        None => Ok(None),
+        Some(_) => Err(ModelError::new(format!(
+            "models.{role}.{field} must be an integer"
+        ))),
+    };
+    Ok(DeclaredModel {
         name: name.to_string(),
-        endpoint: table
-            .get("endpoint")
-            .and_then(|v| v.as_str())
-            .map(str::to_string),
-        api_key_env: table
-            .get("api_key_env")
-            .and_then(|v| v.as_str())
-            .map(str::to_string),
+        endpoint: optional_string("endpoint")?,
+        api_key_env: optional_string("api_key_env")?,
         api,
-        max_output_tokens: table
-            .get("max_output_tokens")
-            .and_then(|v| v.as_integer())
+        max_output_tokens: optional_integer("max_output_tokens")?
             .map(|v| v.clamp(1, u32::MAX as i64) as u32),
-        timeout_secs: table
-            .get("timeout_secs")
-            .and_then(|v| v.as_integer())
-            .map(|v| v.clamp(1, 3600) as u64),
-        max_retries: table
-            .get("max_retries")
-            .and_then(|v| v.as_integer())
-            .map(|v| v.clamp(0, 10) as u32),
+        timeout_secs: optional_integer("timeout_secs")?.map(|v| v.clamp(1, 3600) as u64),
+        max_retries: optional_integer("max_retries")?.map(|v| v.clamp(0, 10) as u32),
     })
 }
 
@@ -587,6 +611,20 @@ vision  = { name = "qwen2.5vl:3b", endpoint = "http://localhost:11434", api = "o
         assert_eq!(v.model, "qwen2.5vl:3b");
         assert_eq!(v.provider, Provider::Ollama);
         assert_eq!(v.endpoint.as_deref(), Some("http://localhost:11434"));
+    }
+
+    #[test]
+    fn a_declared_model_with_an_unknown_api_is_refused() {
+        let error = Config::parse("[models]\ndefault = { name = \"m\", api = \"opneai\" }\n")
+            .expect_err("a provider typo must not choose a different wire format");
+        assert!(error.to_string().contains("expected `openai` or `ollama`"));
+    }
+
+    #[test]
+    fn a_declared_model_with_a_malformed_field_is_refused() {
+        let error = Config::parse("[models]\ndefault = { name = \"m\", endpoint = 3 }\n")
+            .expect_err("a malformed endpoint must not be treated as absent");
+        assert!(error.to_string().contains("endpoint must be a string"));
     }
 
     #[test]
