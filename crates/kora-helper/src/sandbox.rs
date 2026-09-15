@@ -180,9 +180,26 @@ mod platform {
 
     // The handful of BPF opcodes this filter needs, spelled out rather than
     // pulled in as a dependency: the whole program is fifteen instructions.
-    const LD_W_ABS: u16 = 0x00 | 0x00 | 0x20; // BPF_LD | BPF_W | BPF_ABS
-    const JMP_JEQ_K: u16 = 0x05 | 0x10 | 0x00; // BPF_JMP | BPF_JEQ | BPF_K
-    const RET_K: u16 = 0x06; // BPF_RET | BPF_K
+    //
+    // The kernel's class, size, and mode bits are written as their own
+    // constants and combined, because that is how the kernel's headers define
+    // them and how anyone checking this filter against `linux/bpf_common.h`
+    // will read it. Several are zero, so the combination looks like a no-op to
+    // clippy; collapsing them to the final number instead would save nothing
+    // and hide which bits are set.
+    const BPF_LD: u16 = 0x00;
+    const BPF_W: u16 = 0x00;
+    const BPF_ABS: u16 = 0x20;
+    const BPF_JMP: u16 = 0x05;
+    const BPF_JEQ: u16 = 0x10;
+    const BPF_K: u16 = 0x00;
+    const BPF_RET: u16 = 0x06;
+
+    #[allow(clippy::identity_op, clippy::eq_op)]
+    const LD_W_ABS: u16 = BPF_LD | BPF_W | BPF_ABS;
+    #[allow(clippy::identity_op)]
+    const JMP_JEQ_K: u16 = BPF_JMP | BPF_JEQ | BPF_K;
+    const RET_K: u16 = BPF_RET | BPF_K;
 
     // Offsets into `struct seccomp_data`.
     const OFFSET_NR: u32 = 0;
