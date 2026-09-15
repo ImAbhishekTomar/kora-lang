@@ -1256,6 +1256,9 @@ struct FieldFacts {
 #[derive(Debug, Clone)]
 struct FunctionFacts {
     params: Vec<StaticTy>,
+    /// Parameter names and spans, kept so a diagnostic about one parameter can
+    /// name it and point at it.
+    param_sites: Vec<(String, Span)>,
     return_ty: StaticTy,
 }
 
@@ -1292,6 +1295,60 @@ impl<'a> StaticChecker<'a> {
         self.check_stmts(&program.items);
     }
 
+    /// Parameter types a model can actually be handed.
+    ///
+    /// A tool's signature becomes a JSON schema in the request, and the
+    /// runtime refuses anything outside this set when it builds one. Checking
+    /// it here means a program whose tool cannot be described to a provider is
+    /// rejected before the run starts, rather than partway through — after
+    /// earlier calls in the same program have already been paid for.
+    ///
+    /// Conservative on purpose: an unannotated parameter is `Unknown` and is
+    /// left to the runtime, and a tool reached through anything other than a
+    /// plain name (an MCP server's `.tools`, a computed list) is not resolved
+    /// here at all.
+    fn check_model_tool_params(&mut self, tools: &Expr) {
+        fn model_representable(ty: &StaticTy) -> bool {
+            match ty {
+                StaticTy::Str | StaticTy::Int | StaticTy::Float | StaticTy::Bool => true,
+                StaticTy::List(inner) => matches!(**inner, StaticTy::Str),
+                // Not stated in this file, so not this pass's to refuse.
+                StaticTy::Unknown => true,
+                _ => false,
+            }
+        }
+
+        let ExprKind::List(items) = &tools.kind else {
+            return;
+        };
+        for item in items {
+            let ExprKind::Name(tool_name) = &item.kind else {
+                continue;
+            };
+            let Some(facts) = self.functions.get(tool_name).cloned() else {
+                continue;
+            };
+            for (ty, (param_name, param_span)) in facts.params.iter().zip(facts.param_sites.iter())
+            {
+                if model_representable(ty) {
+                    continue;
+                }
+                self.analysis.diagnostics.push(
+                    Diagnostic::error(
+                        *param_span,
+                        format!(
+                            "`{tool_name}` takes `{param_name}: {}`, which a model cannot be given",
+                            ty.display()
+                        ),
+                    )
+                    .with_hint(
+                        "a tool parameter must be `str`, `int`, `float`, `bool`, or `list[str]`; pass structured data as a JSON string and decode it inside the tool",
+                    ),
+                );
+            }
+        }
+    }
+
     fn collect_facts(&mut self, stmts: &[Stmt]) {
         let mut definitions: HashMap<String, Span> = HashMap::new();
         for stmt in stmts {
@@ -1309,6 +1366,11 @@ impl<'a> StaticChecker<'a> {
                                         .map(StaticTy::from_annotation)
                                         .unwrap_or(StaticTy::Unknown)
                                 })
+                                .collect(),
+                            param_sites: function
+                                .params
+                                .iter()
+                                .map(|p| (p.name.clone(), p.span))
                                 .collect(),
                             return_ty: function
                                 .return_ty
@@ -1851,6 +1913,9 @@ impl<'a> StaticChecker<'a> {
                         )
                         .with_hint("the keyword arguments are `model` and `tools`"),
                     );
+                }
+                if keyword == "tools" {
+                    self.check_model_tool_params(value);
                 }
             }
             for (arg, facts) in args.iter().zip(arg_facts.iter()).chain(

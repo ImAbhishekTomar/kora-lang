@@ -379,3 +379,81 @@ fn break_carries_a_value_only_inside_a_parallel_for() {
         "{in_function}"
     );
 }
+
+// --- tool signatures a model has to be able to read ---
+
+#[test]
+fn a_tool_given_to_a_model_cannot_take_a_declared_type() {
+    // The runtime refuses this when it builds the request, so without the
+    // check the program is accepted, starts, spends whatever the calls before
+    // it cost, and only then stops for a reason visible in the source all
+    // along.
+    let found = errors(
+        r#"type Item:
+    name: str
+
+type Answer:
+    body: str
+
+tool pick(items: list[Item]) -> str:
+    "Pick one."
+    return "first"
+
+def main():
+    a: Answer = analyze("data", "pick one", tools=[pick])
+    print(a)
+"#,
+    );
+    assert_eq!(found.len(), 1, "got: {found:?}");
+    assert!(
+        found[0].contains("`pick` takes `items: list[Item]`, which a model cannot be given"),
+        "the tool and the parameter must both be named: {found:?}"
+    );
+    assert!(
+        found[0].contains("`list[str]`"),
+        "the hint must say what is allowed: {found:?}"
+    );
+}
+
+#[test]
+fn a_tool_with_a_shape_no_model_reads_is_fine_until_a_model_is_given_it() {
+    // A `tool` is an ordinary callable too. Refusing the declaration would
+    // reject working programs that never hand it to a provider.
+    assert!(
+        errors(
+            r#"type Item:
+    name: str
+
+tool pick(items: list[Item]) -> str:
+    "Pick one."
+    return "first"
+
+def main():
+    print(pick([Item("a")]))
+"#
+        )
+        .is_empty(),
+        "a tool never given to a model must not be refused"
+    );
+}
+
+#[test]
+fn the_allowed_tool_parameter_shapes_are_accepted() {
+    assert!(
+        errors(
+            r#"type Answer:
+    body: str
+
+tool score(name: str, count: int, ratio: float, ok: bool, tags: list[str]) -> str:
+    "Every shape a model can be handed."
+    return name
+
+def main():
+    a: Answer = analyze("data", "score it", tools=[score])
+    print(a)
+"#
+        )
+        .is_empty(),
+        "str, int, float, bool and list[str] are all model-representable"
+    );
+}
