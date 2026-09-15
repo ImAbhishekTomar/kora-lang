@@ -219,6 +219,16 @@ shipped.
   complains. Run `python3 scripts/bench.py --against main` before claiming a
   change is free; see `benches/README.md`
 
+**Packaging**
+
+- `.github/workflows/release.yml` — a new crate under `crates/` must be added
+  to the `for crate in ...` publish list, ahead of anything that depends on
+  it. Nothing else enforces this: the workspace builds, CI passes, and the
+  omission surfaces only when `cargo publish` reaches the dependent crate and
+  stops at "no matching package named `<crate>` found" -- during a release,
+  after the tag exists. `kora-helper` shipped this way in 0.3.0 and took
+  `kora-runtime`, `kora-lsp`, and `kora-dap` off crates.io with it.
+
 A change to the *debugger* rather than the language touches
 `crates/kora-runtime/src/debug.rs`, `crates/kora-dap/`, the `debuggers`
 contribution in `editors/vscode/package.json`, `editors/vscode/src/extension.js`,
@@ -235,6 +245,17 @@ python3 scripts/sync_decisions.py    # only if DECISIONS.md changed
 cargo build && python3 scripts/check_docs.py --kora ./target/debug/kora
 ./target/debug/kora check examples/*.ko examples/lib/*.ko
 ```
+
+Clippy on one machine does not see code the other platform compiles.
+`crates/kora-helper/src/sandbox.rs` is behind `#[cfg(target_os = "linux")]`,
+so a macOS run never type-checks it and CI rejects what looked clean:
+
+```bash
+cargo clippy -p kora-helper --target x86_64-unknown-linux-gnu --all-targets -- -D warnings
+```
+
+CI also runs `cargo doc` with `-D warnings`, which rejects a bare URL in a doc
+comment. Wrap example URLs in backticks.
 
 And, if anything under `site/` changed:
 
@@ -324,6 +345,18 @@ without which the `--locked` build fails *after* the tag exists.
 
 A release PR is a pull request like any other: if the version or the notes
 look wrong, say so there rather than tagging by hand.
+
+**`kora-cli` cannot be published to crates.io.** The name is owned by another
+project (a Solana relayer CLI, first published June 2025), so the last entry
+in the publish list always ends the job with `403 Forbidden: this crate exists
+but you don't seem to be an owner`. Everything before it publishes normally.
+Until the crate is renamed or dropped from the list, a red crates.io job at
+that one crate is the expected outcome, not a regression -- check *which*
+crate failed before treating a red release as one.
+
+A tag-triggered workflow runs the workflow file **as of the tag**, so fixing
+`release.yml` on `main` does not change what a re-run of an existing tag does.
+A packaging fix reaches a real release only through a new version.
 
 ### Release documentation
 
