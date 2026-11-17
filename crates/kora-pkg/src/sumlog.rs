@@ -303,9 +303,7 @@ mod tests {
 
     #[test]
     fn appending_keeps_what_was_already_there() {
-        let dir = std::env::temp_dir().join("kora-sumlog-append");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::scratch::dir("kora-sumlog-append");
 
         let mut first = SumLog::default();
         first.record("a/b", "c1", "sha256:one");
@@ -324,9 +322,7 @@ mod tests {
 
     #[test]
     fn appending_nothing_does_not_create_a_file() {
-        let dir = std::env::temp_dir().join("kora-sumlog-empty");
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = crate::scratch::dir("kora-sumlog-empty");
         SumLog::default().append(&dir).unwrap();
         assert!(!SumLog::path(&dir).is_file());
         let _ = std::fs::remove_dir_all(&dir);

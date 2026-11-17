@@ -251,8 +251,7 @@ mod tests {
 
     impl Tree {
         fn new(label: &str, files: &[(&str, &str)]) -> Tree {
-            let root = std::env::temp_dir().join(format!("kora-cmd-{label}"));
-            let _ = std::fs::remove_dir_all(&root);
+            let root = crate::scratch::path(&format!("kora-cmd-{label}"));
             for (path, contents) in files {
                 let full = root.join(path);
                 std::fs::create_dir_all(full.parent().unwrap()).unwrap();
@@ -479,12 +478,9 @@ mod tests {
 
     #[test]
     fn copy_tree_creates_directory_structure() {
-        let src = std::env::temp_dir().join("copy-src");
-        let dst = std::env::temp_dir().join("copy-dst");
-        let _ = std::fs::remove_dir_all(&src);
-        let _ = std::fs::remove_dir_all(&dst);
+        let src = crate::scratch::dir("kora-copy-src");
+        let dst = crate::scratch::path("kora-copy-dst");
 
-        std::fs::create_dir_all(&src).unwrap();
         std::fs::write(src.join("file.txt"), "content").unwrap();
         std::fs::create_dir_all(src.join("sub")).unwrap();
         std::fs::write(src.join("sub").join("nested.txt"), "nested").unwrap();
@@ -501,12 +497,9 @@ mod tests {
 
     #[test]
     fn copy_tree_skips_git_directory() {
-        let src = std::env::temp_dir().join("copy-git-src");
-        let dst = std::env::temp_dir().join("copy-git-dst");
-        let _ = std::fs::remove_dir_all(&src);
-        let _ = std::fs::remove_dir_all(&dst);
+        let src = crate::scratch::dir("kora-copy-git-src");
+        let dst = crate::scratch::path("kora-copy-git-dst");
 
-        std::fs::create_dir_all(&src).unwrap();
         std::fs::create_dir_all(src.join(".git")).unwrap();
         std::fs::write(src.join(".git").join("config"), "git").unwrap();
         std::fs::write(src.join("file.txt"), "keep").unwrap();
@@ -522,12 +515,9 @@ mod tests {
 
     #[test]
     fn copy_tree_skips_kora_cache() {
-        let src = std::env::temp_dir().join("copy-kora-src");
-        let dst = std::env::temp_dir().join("copy-kora-dst");
-        let _ = std::fs::remove_dir_all(&src);
-        let _ = std::fs::remove_dir_all(&dst);
+        let src = crate::scratch::dir("kora-copy-kora-src");
+        let dst = crate::scratch::path("kora-copy-kora-dst");
 
-        std::fs::create_dir_all(&src).unwrap();
         std::fs::create_dir_all(src.join(".kora")).unwrap();
         std::fs::write(src.join(".kora").join("cache"), "cache").unwrap();
         std::fs::write(src.join("file.txt"), "keep").unwrap();

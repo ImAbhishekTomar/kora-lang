@@ -76,8 +76,7 @@ mod tests {
 
     impl Tree {
         fn new(label: &str, files: &[(&str, &str)]) -> Tree {
-            let root = std::env::temp_dir().join(format!("kora-hash-{label}"));
-            let _ = std::fs::remove_dir_all(&root);
+            let root = crate::scratch::path(&format!("kora-hash-{label}"));
             for (path, contents) in files {
                 let full = root.join(path);
                 std::fs::create_dir_all(full.parent().unwrap()).unwrap();
