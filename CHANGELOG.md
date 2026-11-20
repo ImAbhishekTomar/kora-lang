@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.3.2](https://github.com/ImAbhishekTomar/kora-lang/compare/v0.3.1...v0.3.2) (2026-09-15)
+
+
+### Documentation
+
+* **agents:** record what the 0.3.0 release found out the hard way ([cfc2da2](https://github.com/ImAbhishekTomar/kora-lang/commit/cfc2da2550f6ec51d807221c04a50fb02d1888c0))
+
 ## [0.3.1](https://github.com/ImAbhishekTomar/kora-lang/compare/v0.3.0...v0.3.1) (2026-09-15)
 
 
